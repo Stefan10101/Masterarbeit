@@ -1,0 +1,87 @@
+# config.yaml - RFSI Master Thesis Pipeline
+# Aligned with BSS and IDW structure
+
+paths:
+  input_root: "Kombiniert"
+  dem: "DEM_Source/COP30_mosaic_EPSG31287.tif"
+  output_root: "RFSI/Output"
+
+domain:
+  preset: "full"
+  custom_bbox: [100000, 275000, 395000, 400000]
+  buffer_m: 15000
+
+predefined_bboxes:
+  # Full extent of the available DEM (recommended)
+  full:            [-60000, 200000, 460000, 620000]
+
+  # Major regions (more generous and better aligned)
+  central_alps:    [120000, 260000, 340000, 420000]
+  inn_valley:      [150000, 300000, 290000, 390000]
+  rhine_valley:    [40000,  280000, 130000, 380000]
+  etsch_valley:    [200000, 220000, 300000, 320000]
+  northern_edge:   [80000,  350000, 380000, 480000]
+  alpine_foreland: [80000,  380000, 400000, 500000]
+  
+time_resolution: "monthly"
+start_date: "2020-01-01"
+end_date:   "2024-12-31"
+
+resolutions_to_process: [ 2000, 1000, 500, 100]
+
+rfsi:
+  n_obs_list: [8, 10, 12]             # safe & effective range for dense networks
+  rf_fixed:
+    n_estimators: 300
+    random_state: 31
+    n_jobs: -1
+  rf_tunable:
+    max_depth: [null, 20]
+    min_samples_leaf: [1, 2]
+    max_features: ["sqrt", 0.5]
+  use_elevation: true
+  use_landcover: true
+  landcover_path: ""
+  landcover_encoding: "onehot"
+  primary_metric: "rmse"
+
+aggregation:
+  weekly:
+    freq: "W"
+    time_col: "year_week"
+  daily:
+    freq: "D"
+    time_col: "date"
+  monthly:
+    freq: "ME"
+    time_col: "year_month"
+  half_hourly:
+    freq: "30min"
+    time_col: "timestamp"
+    add_is_daylight: true
+targets:
+  precipitation:
+    raw_col: "precipitation"
+    stats: ["sum"]
+    output_names: ["precip_sum"]
+  temperature:
+    raw_col: "temperature"
+    stats: ["mean", "min", "max"]
+    output_names: ["temp_mean", "temp_min", "temp_max"]
+  wind_speed:
+    raw_col: "wind_speed"
+    stats: ["mean", "max"]
+    output_names: ["wind_mean", "wind_max"]
+  relative_humidity:
+    raw_col: "relative_humidity"
+    stats: ["mean"]
+    output_names: ["rh_mean"]
+  snow_height:
+    raw_col: "snow_height"
+    stats: ["mean", "max", "min"]
+    output_names: ["snow_mean", "snow_max", "snow_min"]
+
+min_stations_per_field: 10
+random_seed: 31
+verbose: true
+n_jobs: -1

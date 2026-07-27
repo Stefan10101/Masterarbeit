@@ -1,0 +1,44 @@
+plotting:
+  mode: "config"                    # "config" or "folder_loop"
+  input_nc_folder: ""
+  method: "RFSI"                     # ← change this to the method you want to plot (IDW / BSS / RFSI)
+  domain: "full"
+  resolutions: [2000, 500]
+  variables: null
+  output_root: null
+  dpi: 250
+  scatter_dpi: 300
+  default_variables:
+    - precip_sum
+    - temp_mean
+    - temp_min
+    - temp_max
+    - wind_mean
+    - wind_max
+    - rh_mean
+    - snow_mean
+    - snow_max
+    - snow_min
+
+# ====================== NEW SECTION FOR MAPS ======================
+maps:
+  show_stations: true
+  show_provider_symbols: true      # only has effect if 'provider' column exists
+  show_topo: true
+  show_extra_info: true            # shows parameters + RMSE/MAE when available
+  dpi: 250
+  timestep_step: 1                 # 1 = all timesteps, 12 = every 12th, etc.
+  n_jobs: -1
+
+  colormaps:
+    temp_mean: "RdBu_r"
+    temp_min: "RdBu_r"
+    temp_max: "RdBu_r"
+    precip_sum: "Blues"
+    snow_mean: "BuPu"
+    snow_max: "BuPu"
+    snow_min: "BuPu"
+    rh_mean: "viridis"
+    wind_mean: "viridis"
+    wind_max: "viridis"
+    default: "viridis"

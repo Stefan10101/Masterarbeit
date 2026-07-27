@@ -1,0 +1,93 @@
+# config.yaml - BSS / BSSE Master Thesis Pipeline
+# Clean, standalone configuration
+
+paths:
+  input_root: "Kombiniert"                    # location of raw/30min data and metadata (if needed)
+  dem: "DEM_Source/COP30_mosaic_EPSG31287.tif"
+  output_root: "BSS/Output"                   # all BSS results go here
+
+domain:
+  preset: "full"
+  custom_bbox: [100000, 275000, 395000, 400000]
+  buffer_m: 15000
+
+predefined_bboxes:
+  # Full extent of the available DEM (recommended)
+  full:            [-60000, 200000, 460000, 620000]
+
+  # Major regions (more generous and better aligned)
+  central_alps:    [120000, 260000, 340000, 420000]
+  inn_valley:      [150000, 300000, 290000, 390000]
+  rhine_valley:    [40000,  280000, 130000, 380000]
+  etsch_valley:    [200000, 220000, 300000, 320000]
+  northern_edge:   [80000,  350000, 380000, 480000]
+  alpine_foreland: [80000,  380000, 400000, 500000]
+time_resolution: "monthly"                      # weekly | daily | half_hourly | day | night
+start_date: "2021-01-01"
+end_date:   "2021-02-01"
+
+resolutions_to_process: [100]
+
+bss:
+  method: "bsse"                              # "bss" or "bsse"
+  segment_min: 4
+  segment_max: 18
+  segment_step: 2
+  tau_d_search: [0.0, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8]
+  tau_e_search: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
+  non_negative_vars:
+    - precip_sum
+    - snow_mean
+    - snow_max
+    - snow_min
+    - rh_mean
+    - wind_mean
+    - wind_max
+  gcv_diagnostic: "gcv"
+
+primary_validation: "gcv"
+loocv:
+  enable: false
+  sample_n: 5
+  half_hourly_sample_n: 5
+
+aggregation:
+  weekly:
+    freq: "W"
+    time_col: "year_week"
+  daily:
+    freq: "D"
+    time_col: "date"
+  half_hourly:
+    freq: "30min"
+    time_col: "timestamp"
+    add_is_daylight: true
+  monthly:
+    freq: "MS"           # Month Start
+    time_col: "date"
+targets:
+  precipitation:
+    raw_col: "precipitation"
+    stats: ["sum"]
+    output_names: ["precip_sum"]
+  temperature:
+    raw_col: "temperature"
+    stats: ["mean", "min", "max"]
+    output_names: ["temp_mean", "temp_min", "temp_max"]
+  wind_speed:
+    raw_col: "wind_speed"
+    stats: ["mean", "max"]
+    output_names: ["wind_mean", "wind_max"]
+  relative_humidity:
+    raw_col: "relative_humidity"
+    stats: ["mean"]
+    output_names: ["rh_mean"]
+  snow_height:
+    raw_col: "snow_height"
+    stats: ["mean", "max", "min"]
+    output_names: ["snow_mean", "snow_max", "snow_min"]
+
+min_stations_per_field: 10
+random_seed: 31
+verbose: true
+n_jobs: -1

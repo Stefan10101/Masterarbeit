@@ -1,0 +1,5 @@
+dash>=2.17
+dash-bootstrap-components>=1.6
+pandas>=2.0
+pyarrow>=14.0
+plotly>=5.20
