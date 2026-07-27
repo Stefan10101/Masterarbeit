@@ -25,9 +25,8 @@ from paths import (
     get_domain_stations_path,
     get_master_grid_path,
     get_landcover_path,
-    get_method_output_dir,
+    get_interpolated_map_path,
 )
-
 from rfsi_core import RFSI
 from rfsi_optimizer import optimize_rfsi_params_loocv, compute_metrics
 
@@ -262,12 +261,16 @@ def main():
             })
 
             # === Consistent output path (same structure as IDW) ===
-            maps_base = Path(get_method_output_dir("RFSI")) / "interpolated_maps" / DOMAIN / f"res_{res}m" / var
-            maps_base.mkdir(parents=True, exist_ok=True)
-            out_file = maps_base / f"{var}_{TIME_RES}.nc"
+            out_file = get_interpolated_map_path(
+                "RFSI", DOMAIN, var, res,
+                start_date=str(START_DATE.date()),
+                end_date=str(END_DATE.date())
+            )
+            if out_file.exists():
+                print(f"  Skipping {var} @ {res}m (already exists)")
+                continue
             ds.to_netcdf(out_file, engine="netcdf4")
             print(f"  Saved: {out_file}")
-
     print("\nRFSI production finished.")
 
 
