@@ -28,9 +28,8 @@ from paths import (
     get_aggregated_data_path,
     get_domain_stations_path,
     get_validation_scatter_path,
-    get_maps_dir,
+    get_method_output_dir,          # ← replace get_maps_dir
 )
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
 
@@ -58,22 +57,25 @@ def get_input_nc_files():
     method = cfg.get("method")
     domain = cfg.get("domain", "full")
     resolutions = cfg.get("resolutions")
+    time_period = cfg.get("time_period")
 
     if not method:
         raise ValueError("method must be set when mode == 'config'")
 
-    maps_dir = get_maps_dir(method) / domain
-    if not maps_dir.exists():
-        raise FileNotFoundError(f"Maps directory not found: {maps_dir}")
+    base = Path(get_method_output_dir(method)) / "interpolated_maps" / domain
+    pattern = str(base / "res_*m" / "*" / "*.nc")
+    nc_files = sorted(glob.glob(pattern))
 
-    nc_files = sorted(glob.glob(str(maps_dir / "*.nc")))
-
+    # resolution filter (works with both old and new naming)
     if resolutions:
-        res_strs = [f"_{r}m.nc" for r in resolutions]
-        nc_files = [f for f in nc_files if any(r in f for r in res_strs)]
+        res_patterns = [f"_{r}m_" for r in resolutions] + [f"_{r}m." for r in resolutions]
+        nc_files = [f for f in nc_files if any(p in Path(f).name for p in res_patterns)]
+
+    # time-period filter
+    if time_period:
+        nc_files = [f for f in nc_files if time_period in Path(f).name]
 
     return nc_files
-
 
 def get_plotting_params():
     return {"dpi": cfg.get("scatter_dpi", 300)}

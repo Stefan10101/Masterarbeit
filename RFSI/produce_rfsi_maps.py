@@ -2,10 +2,17 @@
 """
 produce_rfsi_maps.py
 RFSI production script using master grids + consistent output structure.
+
+Changes vs previous version:
+1. Companion LLOCV parquet with true leave-out predictions
+2. Richer NC attributes + elev grid
+3. Configurable optimisation mode (default: single representative timestep)
+4. Memory-safe prediction (chunked) and reduced parallelism for fine grids
 """
 
 from pathlib import Path
 import sys
+import gc
 import pandas as pd
 import numpy as np
 import xarray as xr
@@ -16,7 +23,6 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 from datetime import datetime
 import warnings
-import math
 warnings.filterwarnings("ignore")
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -26,9 +32,14 @@ from paths import (
     get_master_grid_path,
     get_landcover_path,
     get_interpolated_map_path,
+    get_llocv_path,
 )
 from rfsi_core import RFSI
-from rfsi_optimizer import optimize_rfsi_params_loocv, compute_metrics
+from rfsi_optimizer import (
+    optimize_rfsi_params_loocv,
+    compute_metrics,
+    run_full_llocv,
+)
 
 
 # ================== CONFIG ==================
@@ -42,19 +53,25 @@ DOMAIN = cfg["domain"]["preset"]
 TIME_RES = cfg["time_resolution"]
 START_DATE = pd.to_datetime(cfg["start_date"])
 END_DATE = pd.to_datetime(cfg["end_date"])
-RESOLUTIONS = cfg.get("resolutions_to_process", [100])
+RESOLUTIONS = cfg.get("resolutions_to_process", [1000])
 
 rfsi_cfg = cfg.get("rfsi", {})
 N_OBS_LIST = rfsi_cfg.get("n_obs_list", [8, 10, 12])
 RF_FIXED = rfsi_cfg.get("rf_fixed", {"n_estimators": 400, "random_state": 42})
 RF_TUNABLE = rfsi_cfg.get("rf_tunable", {})
 PRIMARY_METRIC = rfsi_cfg.get("primary_metric", "rmse")
+OPTIMIZE_MODE = rfsi_cfg.get("optimize_mode", "single")   # "single" | "seasonal"
+CHUNK_SIZE = int(rfsi_cfg.get("predict_chunk_size", 250_000))
+FINE_RES_THRESHOLD = int(rfsi_cfg.get("fine_res_threshold", 200))
+N_JOBS_FINE = int(rfsi_cfg.get("n_jobs_fine", 2))
+N_JOBS_COARSE = int(rfsi_cfg.get("n_jobs_coarse", -1))
+SAVE_LLOCV = bool(rfsi_cfg.get("save_llocv", True))
 
 
 def get_time_column(time_resolution: str) -> str:
     try:
         return cfg["aggregation"][time_resolution]["time_col"]
-    except:
+    except Exception:
         return {
             "weekly": "year_week",
             "daily": "date",
@@ -114,8 +131,22 @@ def prepare_covariates(df, encoder=None, fit_encoder=False):
     return (np.hstack(X_list) if X_list else None), encoder
 
 
+def predict_in_chunks(model, grid_points, X_grid, chunk_size=CHUNK_SIZE):
+    """Memory-safe grid prediction."""
+    n = len(grid_points)
+    preds = np.empty(n, dtype=np.float32)
+    for i in range(0, n, chunk_size):
+        sl = slice(i, i + chunk_size)
+        preds[sl] = model.predict(
+            coords_pred=grid_points[sl],
+            X_cov_pred=X_grid[sl] if X_grid is not None else None,
+        )
+    return preds
+
+
 def process_one_time_step(args):
-    t, df_t, var_name, grid_ds, grid_clc, n_obs, rf_params, encoder, domain_mask = args
+    (t, df_t, var_name, grid_points, X_grid, ny, nx,
+     n_obs, rf_params, encoder, domain_mask_flat) = args
 
     if len(df_t) < 8:
         return None
@@ -128,17 +159,13 @@ def process_one_time_step(args):
     model = RFSI(n_obs=n_obs, rf_params=rf_params)
     model.fit(coords=coords, z=z, X_cov=X_cov)
 
-    grid_elev = grid_ds.elev.values.ravel()
-    grid_df = pd.DataFrame({"elev": grid_elev, "clc_code": grid_clc})
-    X_grid, _ = prepare_covariates(grid_df, encoder=encoder)
+    preds = predict_in_chunks(model, grid_points, X_grid)
+    pred_map = preds.reshape(ny, nx)
+    pred_map_flat = pred_map.ravel()
+    pred_map_flat[~domain_mask_flat] = np.nan
+    pred_map = pred_map_flat.reshape(ny, nx)
 
-    gx, gy = np.meshgrid(grid_ds.x.values, grid_ds.y.values)
-    grid_points = np.column_stack([gx.ravel(), gy.ravel()])
-
-    preds = model.predict(coords_pred=grid_points, X_cov_pred=X_grid)
-    pred_map = preds.reshape(grid_ds.sizes["y"], grid_ds.sizes["x"])
-    pred_map[~domain_mask] = np.nan
-
+    # in-sample metrics (kept for reference; true skill is in the LLOCV file)
     train_pred = model.predict(coords, X_cov_pred=X_cov)
     metrics = compute_metrics(z, train_pred)
 
@@ -148,6 +175,7 @@ def process_one_time_step(args):
 def main():
     print("=" * 80)
     print(f"RFSI Production | Master Grid + {DOMAIN} domain")
+    print(f"Optimise mode: {OPTIMIZE_MODE} | save_llocv: {SAVE_LLOCV}")
     print("=" * 80)
 
     station_data = load_aggregated_data()
@@ -157,15 +185,31 @@ def main():
     for res in RESOLUTIONS:
         print(f"\n{'='*60}\nRESOLUTION: {res} m")
 
-        grid_ds = xr.open_dataset(get_master_grid_path("RFSI", res))
-        domain_mask = get_domain_mask(grid_ds, domain_bbox)
+        n_jobs = N_JOBS_FINE if res <= FINE_RES_THRESHOLD else N_JOBS_COARSE
+        print(f"  Parallel jobs: {n_jobs}")
 
-        # Sample landcover from full file onto master grid
+        grid_ds = xr.open_dataset(get_master_grid_path("RFSI", res))
+
+        # --- crop master grid to domain early (memory) ---
+        x_sel = (grid_ds.x >= domain_bbox[0]) & (grid_ds.x <= domain_bbox[2])
+        y_sel = (grid_ds.y >= domain_bbox[1]) & (grid_ds.y <= domain_bbox[3])
+        grid_crop = grid_ds.isel(x=x_sel, y=y_sel)
+        ny = int(grid_crop.sizes["y"])
+        nx = int(grid_crop.sizes["x"])
+        print(f"  Cropped grid: {ny} x {nx} = {ny * nx:,} cells")
+
+        domain_mask = get_domain_mask(grid_crop, domain_bbox)
+        domain_mask_flat = domain_mask.ravel()
+
+        # landcover on cropped grid only
         lc_path = get_landcover_path()
+        gx, gy = np.meshgrid(grid_crop.x.values, grid_crop.y.values)
+        grid_points = np.column_stack([gx.ravel(), gy.ravel()])
         with rasterio.open(lc_path) as src:
-            gx, gy = np.meshgrid(grid_ds.x.values, grid_ds.y.values)
-            grid_points = np.column_stack([gx.ravel(), gy.ravel()])
-            grid_clc = np.array([val[0] for val in src.sample(grid_points)])
+            grid_clc = np.array([val[0] for val in src.sample(grid_points)], dtype=np.float32)
+
+        grid_elev = grid_crop.elev.values.astype(np.float32)
+        grid_df = pd.DataFrame({"elev": grid_elev.ravel(), "clc_code": grid_clc})
 
         for var in ["precip_sum", "temp_mean", "temp_min", "temp_max",
                     "wind_mean", "wind_max", "rh_mean", "snow_mean", "snow_max", "snow_min"]:
@@ -174,6 +218,15 @@ def main():
                 continue
 
             print(f"\n>>> {var}")
+
+            out_file = get_interpolated_map_path(
+                "RFSI", DOMAIN, var, res,
+                start_date=str(START_DATE.date()),
+                end_date=str(END_DATE.date()),
+            )
+            if out_file.exists():
+                print(f"  Skipping {var} @ {res}m (already exists)")
+                continue
 
             valid = station_data[["station_name", "time", var]].dropna()
             station_cols = ["station_name", "x", "y", "elev"]
@@ -190,87 +243,124 @@ def main():
 
             time_steps = sorted(valid["time"].unique())
 
-            # Hyperparameter optimization on one representative timestep
+            # --- hyper-parameter optimisation ---
             sample_t = time_steps[len(time_steps) // 2]
             df_sample = valid[valid["time"] == sample_t].drop(columns=["time"], errors="ignore")
 
-            _, encoder = prepare_covariates(valid[["elev", "clc_code"]].dropna(), fit_encoder=True)
+            _, encoder = prepare_covariates(
+                valid[["elev", "clc_code"]].dropna() if "clc_code" in valid.columns
+                else valid[["elev"]].dropna(),
+                fit_encoder=True,
+            )
 
-            print("  Optimizing hyperparameters...")
-            best_params, _ = optimize_rfsi_params_loocv(
+            # grid covariates with the same encoder
+            X_grid, _ = prepare_covariates(grid_df, encoder=encoder)
+
+            print("  Optimizing hyperparameters (single representative timestep)...")
+            best_params, best_scores = optimize_rfsi_params_loocv(
                 df_sample, var, N_OBS_LIST, RF_FIXED, RF_TUNABLE,
-                primary_metric=PRIMARY_METRIC, n_jobs=-1
+                primary_metric=PRIMARY_METRIC, n_jobs=n_jobs,
             )
 
             n_obs = int(best_params["n_obs"])
             rf_params = {**RF_FIXED}
-
             for k in ["max_depth", "min_samples_leaf", "max_features"]:
                 if k in best_params:
                     val = best_params[k]
-                    # Convert numpy scalar types (np.float64, np.int64, etc.) to native Python types
                     if isinstance(val, (np.integer, np.floating)):
                         val = val.item()
                     rf_params[k] = val
-
-            # Ensure max_depth is a valid type for RandomForestRegressor (int or None)
             if pd.isna(rf_params.get("max_depth")) or rf_params.get("max_depth") is None:
                 rf_params["max_depth"] = None
             else:
                 rf_params["max_depth"] = int(rf_params["max_depth"])
 
-            tasks = [(t, valid[valid["time"] == t], var, grid_ds, grid_clc,
-                      n_obs, rf_params, encoder, domain_mask) for t in time_steps]
-            results = Parallel(n_jobs=-1)(
+            print(f"  Best params: n_obs={n_obs}, {rf_params}")
+            print(f"  Opt scores: {best_scores}")
+
+            # --- true LLOCV predictions for the whole period ---
+            if SAVE_LLOCV:
+                print("  Running full LLOCV for validation parquet...")
+                llocv_df = run_full_llocv(
+                    valid, var, n_obs, rf_params, encoder=encoder, time_col="time"
+                )
+                llocv_path = get_llocv_path(
+                    "RFSI", DOMAIN, var, res,
+                    start_date=str(START_DATE.date()),
+                    end_date=str(END_DATE.date()),
+                )
+                llocv_df.to_parquet(llocv_path, index=False)
+                print(f"  LLOCV saved: {llocv_path.name}  ({len(llocv_df)} rows)")
+
+            # --- produce maps ---
+            tasks = [
+                (t, valid[valid["time"] == t], var, grid_points, X_grid,
+                 ny, nx, n_obs, rf_params, encoder, domain_mask_flat)
+                for t in time_steps
+            ]
+            results = Parallel(n_jobs=n_jobs)(
                 delayed(process_one_time_step)(task) for task in tqdm(tasks, desc=f"  {var}")
             )
             results = [r for r in results if r is not None]
             if not results:
                 continue
 
-            # === Fixed cropping section ===
-            x_sel = (grid_ds.x >= domain_bbox[0]) & (grid_ds.x <= domain_bbox[2])
-            y_sel = (grid_ds.y >= domain_bbox[1]) & (grid_ds.y <= domain_bbox[3])
-
-            n_y = int(y_sel.sum().item())
-            n_x = int(x_sel.sum().item())
-
-            data_3d = np.full((len(results), n_y, n_x), np.nan, dtype=np.float32)
-
+            data_3d = np.full((len(results), ny, nx), np.nan, dtype=np.float32)
             for i, r in enumerate(results):
-                data_3d[i] = r["pred_map"][y_sel.values][:, x_sel.values]
+                data_3d[i] = r["pred_map"]
 
             ds = xr.Dataset(
                 {var: (("time", "y", "x"), data_3d)},
                 coords={
                     "time": [r["time"] for r in results],
-                    "y": grid_ds.y.values[y_sel],
-                    "x": grid_ds.x.values[x_sel]
-                }
+                    "y": grid_crop.y.values,
+                    "x": grid_crop.x.values,
+                },
             )
 
+            # elev once
+            ds["elev"] = (("y", "x"), grid_elev)
+
             for key in ["n_obs", "rmse", "mae", "nse", "kge"]:
-                ds[key] = ("time", [r.get(key, np.nan) if key == "n_obs" else r["metrics"].get(key, np.nan) for r in results])
+                if key == "n_obs":
+                    ds[key] = ("time", [r["n_obs"] for r in results])
+                else:
+                    ds[key] = ("time", [r["metrics"].get(key, np.nan) for r in results])
 
             ds.attrs.update({
                 "title": f"{var} - RFSI - {TIME_RES} - {DOMAIN}",
                 "domain": DOMAIN,
-                "resolution_m": res,
-                "method": "Random Forest Spatial Interpolation (RFSI)",
+                "resolution_m": int(res),
+                "method": "RFSI",
+                "method_full": "Random Forest Spatial Interpolation (RFSI)",
+                "time_resolution": TIME_RES,
+                "variable": var,
+                "start_date": str(START_DATE.date()),
+                "end_date": str(END_DATE.date()),
+                "crs": "EPSG:31287",
+                "n_obs": int(n_obs),
+                "rf_n_estimators": int(rf_params.get("n_estimators", 0)),
+                "rf_max_depth": str(rf_params.get("max_depth")),
+                "rf_min_samples_leaf": str(rf_params.get("min_samples_leaf")),
+                "rf_max_features": str(rf_params.get("max_features")),
+                "opt_rmse": float(best_scores.get("rmse", np.nan)),
+                "opt_mae": float(best_scores.get("mae", np.nan)),
+                "opt_nse": float(best_scores.get("nse", np.nan)),
+                "opt_kge": float(best_scores.get("kge", np.nan)),
                 "created": datetime.now().isoformat(),
             })
 
-            # === Consistent output path (same structure as IDW) ===
-            out_file = get_interpolated_map_path(
-                "RFSI", DOMAIN, var, res,
-                start_date=str(START_DATE.date()),
-                end_date=str(END_DATE.date())
-            )
-            if out_file.exists():
-                print(f"  Skipping {var} @ {res}m (already exists)")
-                continue
             ds.to_netcdf(out_file, engine="netcdf4")
             print(f"  Saved: {out_file}")
+
+            # free memory before next variable / resolution
+            del data_3d, ds, results, tasks
+            gc.collect()
+
+        grid_ds.close()
+        del grid_crop, grid_points, grid_clc, grid_elev, X_grid
+        gc.collect()
+
     print("\nRFSI production finished.")
 
 

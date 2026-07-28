@@ -147,3 +147,70 @@ def optimize_rfsi_params_loocv(
         print(f"Best parameters for {var_name}: {best_params}")
 
     return best_params, best_scores
+
+
+def run_full_llocv(
+    valid_df: pd.DataFrame,
+    var_name: str,
+    n_obs: int,
+    rf_params: dict,
+    encoder=None,
+    time_col: str = "time",
+) -> pd.DataFrame:
+    """
+    Full Leave-Location-Out Cross-Validation for every (station, timestep).
+    Returns a DataFrame with columns:
+        time, station_name, x, y, observed, predicted
+    Uses the same covariate preparation as production when an encoder is supplied.
+    """
+    from rfsi_core import RFSI
+
+    records = []
+    groups = list(valid_df.groupby(time_col))
+
+    for t, df_t in groups:
+        df_t = df_t.reset_index(drop=True)
+        n = len(df_t)
+        if n < max(5, n_obs + 1):
+            continue
+
+        coords = df_t[["x", "y"]].values.astype(np.float64)
+        z_vals = df_t[var_name].values.astype(np.float32)
+
+        # covariates (elev + one-hot CLC if encoder given)
+        X_cov = None
+        if encoder is not None and "elev" in df_t.columns:
+            X_list = [df_t[["elev"]].values.astype(np.float32)]
+            if "clc_code" in df_t.columns:
+                clc = df_t[["clc_code"]].values.reshape(-1, 1)
+                X_list.append(encoder.transform(clc).astype(np.float32))
+            X_cov = np.hstack(X_list)
+        else:
+            exclude = {"station_name", time_col, var_name, "x", "y"}
+            cov_cols = [c for c in df_t.columns if c not in exclude]
+            if cov_cols:
+                X_cov = df_t[cov_cols].values.astype(np.float32)
+
+        for i in range(n):
+            mask = np.ones(n, dtype=bool)
+            mask[i] = False
+            model = RFSI(n_obs=n_obs, rf_params=rf_params)
+            model.fit(
+                coords=coords[mask],
+                z=z_vals[mask],
+                X_cov=X_cov[mask] if X_cov is not None else None,
+            )
+            pred = model.predict(
+                coords_pred=coords[[i]],
+                X_cov_pred=X_cov[[i]] if X_cov is not None else None,
+            )
+            records.append({
+                "time": t,
+                "station_name": df_t.loc[i, "station_name"],
+                "x": float(coords[i, 0]),
+                "y": float(coords[i, 1]),
+                "observed": float(z_vals[i]),
+                "predicted": float(pred[0]),
+            })
+
+    return pd.DataFrame(records)

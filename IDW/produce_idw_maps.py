@@ -1,14 +1,17 @@
-# ============================================================
-# produce_idw_maps.py  (full updated file)
-# ============================================================
 #!/usr/bin/env python3
 """
 produce_idw_maps.py
 Main production script for Modified IDW interpolation.
-Uses the central paths.py for all file locations.
+
+Improvements:
+- True LLOCV predictions saved as companion parquet
+- Richer NC attributes + elev grid
+- Explicit memory cleanup; domain mask already limits targets
 """
+
 from pathlib import Path
 import sys
+import gc
 import pandas as pd
 import numpy as np
 import yaml
@@ -22,24 +25,19 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-# ============================================================
-# IMPORT CENTRAL PATHS
-# ============================================================
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from paths import (
     get_aggregated_data_path,
     get_domain_stations_path,
     get_master_grid_path,
     get_interpolated_map_path,
+    get_llocv_path,
 )
 
 from idw_core import modified_idw, get_valid_targets
-from loocv_optimizer import optimize_idw_params_loocv
+from loocv_optimizer import optimize_idw_params_loocv, loocv_predictions
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
 
@@ -53,7 +51,8 @@ END_DATE = pd.to_datetime(cfg["end_date"])
 RESOLUTIONS = cfg["resolutions_to_process"]
 PRIMARY_METRIC = cfg.get("primary_metric", "rmse")
 N_JOBS = cfg.get("n_jobs", -1)
-HALFHOURLY_SAMPLE_N = cfg["loocv"].get("half_hourly_sample_n", 10)
+HALFHOURLY_SAMPLE_N = cfg.get("loocv", {}).get("half_hourly_sample_n", 10)
+SAVE_LLOCV = bool(cfg.get("idw", {}).get("save_llocv", cfg.get("save_llocv", True)))
 
 
 def get_param_group(res_m: int) -> str:
@@ -66,9 +65,7 @@ def get_param_group(res_m: int) -> str:
 
 
 def load_aggregated_data() -> pd.DataFrame:
-    """Load aggregated station data using central paths."""
     file_path = get_aggregated_data_path("IDW", TIME_RES)
-
     if not file_path.exists():
         raise FileNotFoundError(f"Aggregated file not found: {file_path}")
 
@@ -77,6 +74,8 @@ def load_aggregated_data() -> pd.DataFrame:
 
     if TIME_RES == "weekly":
         df["time"] = pd.to_datetime(df[time_col] + "-1", format="%Y-W%W-%w")
+    elif TIME_RES == "monthly":
+        df["time"] = pd.to_datetime(df[time_col] + "-01")
     else:
         df["time"] = pd.to_datetime(df[time_col])
 
@@ -85,30 +84,42 @@ def load_aggregated_data() -> pd.DataFrame:
 
 
 def process_one_time_step(args):
-    t, df_t, var, target_coords, target_elev, param_group = args
+    """Optimise params on this timestep, run LLOCV, interpolate full grid."""
+    t, df_t, var, target_coords, target_elev, param_group, param_grid = args
 
     if len(df_t) < 5:
         return None
 
-    # Optimization strategy
+    # --- parameter optimisation (LLOCV) ---
     if TIME_RES in ["half_hourly", "day", "night"]:
         all_times = df_t["time"].unique()
         sample_times = random.sample(list(all_times), min(HALFHOURLY_SAMPLE_N, len(all_times)))
         sample_df = df_t[df_t["time"].isin(sample_times)]
-
         best_params, best_scores = optimize_idw_params_loocv(
-            sample_df, var, cfg["param_grid"]["power"],
+            sample_df, var, param_grid,
             primary_metric=PRIMARY_METRIC, verbose=False, n_jobs=1
         )
     else:
         best_params, best_scores = optimize_idw_params_loocv(
-            df_t, var, cfg["param_grid"]["power"],
+            df_t, var, param_grid,
             primary_metric=PRIMARY_METRIC, verbose=False, n_jobs=1
         )
 
-    p, Fz, k = best_params["p"], best_params["Fz"], best_params["k"]
-    k = min(k, len(df_t))  # safety clamp: never request more neighbors than available stations
+    p = float(best_params["p"])
+    Fz = float(best_params["Fz"])
+    k = int(best_params["k"])
+    k = min(k, len(df_t))
 
+    # --- true leave-out predictions for this timestep ---
+    llocv_df = loocv_predictions(df_t, var, p, Fz, k)
+    if len(llocv_df) > 0:
+        llocv_df = llocv_df.copy()
+        llocv_df["time"] = t
+        llocv_df["p"] = p
+        llocv_df["Fz"] = Fz
+        llocv_df["k"] = k
+
+    # --- full-grid interpolation ---
     tree = KDTree(df_t[["x", "y"]].values)
     chunk_size = 1_000_000 if param_group != "coarse" else None
 
@@ -120,7 +131,7 @@ def process_one_time_step(args):
         target_elev=target_elev,
         tree=tree,
         p=p, Fz=Fz, k=k,
-        chunk_size=chunk_size
+        chunk_size=chunk_size,
     )
 
     return {
@@ -131,18 +142,25 @@ def process_one_time_step(args):
         "mae": best_scores.get("mae", np.nan),
         "nse": best_scores.get("nse", np.nan),
         "kge": best_scores.get("kge", np.nan),
+        "llocv": llocv_df,
     }
 
 
 def main():
     print("=" * 80)
     print(f"IDW Thesis Production | Domain: {DOMAIN} | {TIME_RES}")
-    print(f"Period: {START_DATE.date()} → {END_DATE.date()}")
+    print(f"Period: {START_DATE.date()} → {END_DATE.date()} | save_llocv={SAVE_LLOCV}")
     print("=" * 80)
 
     station_data = load_aggregated_data()
     stations_path = get_domain_stations_path("IDW", DOMAIN)
     stations = pd.read_parquet(stations_path)
+
+    param_grid = cfg.get("param_grid", {}).get("power", {
+        "p": [1.0, 1.5, 2.0, 2.5, 3.0],
+        "Fz": [0.0, 0.15, 0.3, 0.5],
+        "k_neighbors": [6, 8, 10, 12, 15, 20],
+    })
 
     for res in RESOLUTIONS:
         param_group = get_param_group(res)
@@ -153,8 +171,13 @@ def main():
         target_coords, target_elev, mask = get_valid_targets(grid)
 
         if len(target_coords) == 0:
-            print(f"  Master grid @ {res}m has 0 valid target cells (empty mask) — skipping resolution")
+            print(f"  Master grid @ {res}m has 0 valid target cells — skipping")
             continue
+
+        print(f"  Valid target cells: {len(target_coords):,}")
+
+        # elev on full grid (for writing into NC)
+        elev_2d = grid["elev"].values.astype(np.float32) if "elev" in grid else None
 
         for var in ["precip_sum", "temp_mean", "temp_min", "temp_max",
                     "wind_mean", "wind_max", "rh_mean", "snow_mean", "snow_max", "snow_min"]:
@@ -165,7 +188,7 @@ def main():
             out_file = get_interpolated_map_path(
                 "IDW", DOMAIN, var, res,
                 start_date=str(START_DATE.date()),
-                end_date=str(END_DATE.date())
+                end_date=str(END_DATE.date()),
             )
             if out_file.exists():
                 print(f"  Skipping {var} @ {res}m (already exists)")
@@ -174,28 +197,46 @@ def main():
             print(f"\n>>> {var}")
 
             valid = station_data[["station_name", "time", var]].dropna()
-            valid = valid.merge(stations[["station_name", "x", "y", "elev"]], on="station_name")
+            valid = valid.merge(
+                stations[["station_name", "x", "y", "elev"]], on="station_name"
+            ).dropna(subset=["x", "y", "elev", var])
 
             if len(valid) < cfg.get("min_stations_per_field", 10):
-                print(f"  Too few stations — skipping")
+                print("  Too few stations — skipping")
                 continue
 
             time_steps = sorted(valid["time"].unique())
 
-            tasks = [(t, valid[valid["time"] == t], var, target_coords, target_elev, param_group)
-                     for t in time_steps]
+            tasks = [
+                (t, valid[valid["time"] == t], var,
+                 target_coords, target_elev, param_group, param_grid)
+                for t in time_steps
+            ]
 
             results = Parallel(n_jobs=N_JOBS)(
-                delayed(process_one_time_step)(task) for task in tqdm(tasks, desc=f"  {var}", leave=False)
+                delayed(process_one_time_step)(task)
+                for task in tqdm(tasks, desc=f"  {var}", leave=False)
             )
             results = [r for r in results if r is not None]
-
             if not results:
                 continue
 
+            # --- assemble LLOCV parquet ---
+            if SAVE_LLOCV:
+                llocv_parts = [r["llocv"] for r in results if r["llocv"] is not None and len(r["llocv"]) > 0]
+                if llocv_parts:
+                    llocv_all = pd.concat(llocv_parts, ignore_index=True)
+                    llocv_path = get_llocv_path(
+                        "IDW", DOMAIN, var, res,
+                        start_date=str(START_DATE.date()),
+                        end_date=str(END_DATE.date()),
+                    )
+                    llocv_all.to_parquet(llocv_path, index=False)
+                    print(f"  LLOCV saved: {llocv_path.name}  ({len(llocv_all)} rows)")
+
+            # --- assemble surface NC ---
             n_y, n_x = mask.shape
             data_3d = np.full((len(results), n_y, n_x), np.nan, dtype=np.float32)
-
             for i, res_dict in enumerate(results):
                 data_3d[i][mask] = res_dict["data"]
 
@@ -207,8 +248,11 @@ def main():
                     "time": times,
                     "y": grid["y"].values,
                     "x": grid["x"].values,
-                }
+                },
             )
+
+            if elev_2d is not None:
+                ds["elev"] = (("y", "x"), elev_2d)
 
             ds["p"] = ("time", [r["p"] for r in results])
             ds["Fz"] = ("time", [r["Fz"] for r in results])
@@ -219,17 +263,29 @@ def main():
             ds["kge"] = ("time", [r["kge"] for r in results])
 
             ds.attrs.update({
-                "title": f"{var} - {TIME_RES} - {DOMAIN}",
+                "title": f"{var} - IDW - {TIME_RES} - {DOMAIN}",
                 "domain": DOMAIN,
                 "time_resolution": TIME_RES,
-                "resolution_m": res,
-                "method": "Modified IDW with separate XY + Z weighting",
-                "created": datetime.now().isoformat(),
+                "variable": var,
+                "resolution_m": int(res),
+                "method": "IDW",
+                "method_full": "Modified IDW with separate XY + Z weighting",
+                "start_date": str(START_DATE.date()),
+                "end_date": str(END_DATE.date()),
+                "crs": "EPSG:31287",
                 "primary_metric": PRIMARY_METRIC,
+                "created": datetime.now().isoformat(),
             })
 
             ds.to_netcdf(out_file, engine="netcdf4")
             print(f"  Saved: {out_file.name} ({len(results)} timesteps)")
+
+            del data_3d, ds, results, tasks
+            gc.collect()
+
+        grid.close()
+        del target_coords, target_elev, mask
+        gc.collect()
 
     print("\n" + "=" * 80)
     print("IDW Production finished successfully.")
