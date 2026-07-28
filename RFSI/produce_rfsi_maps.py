@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
 produce_rfsi_maps.py
-RFSI production script using master grids + consistent output structure.
-
-Changes vs previous version:
-1. Companion LLOCV parquet with true leave-out predictions
-2. Richer NC attributes + elev grid
-3. Configurable optimisation mode (default: single representative timestep)
-4. Memory-safe prediction (chunked) and reduced parallelism for fine grids
+RFSI production – fully patched:
+- time_resolution in output filenames
+- two-phase hyper-parameter search (subsample + cheap RF)
+- true LLOCV parquet
+- richer NC attrs + elev
+- memory-safe chunked prediction + early grid crop
 """
 
 from pathlib import Path
@@ -41,8 +40,6 @@ from rfsi_optimizer import (
     run_full_llocv,
 )
 
-
-# ================== CONFIG ==================
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
 
@@ -56,16 +53,18 @@ END_DATE = pd.to_datetime(cfg["end_date"])
 RESOLUTIONS = cfg.get("resolutions_to_process", [1000])
 
 rfsi_cfg = cfg.get("rfsi", {})
-N_OBS_LIST = rfsi_cfg.get("n_obs_list", [8, 10, 12])
-RF_FIXED = rfsi_cfg.get("rf_fixed", {"n_estimators": 400, "random_state": 42})
+N_OBS_LIST = rfsi_cfg.get("n_obs_list", [8, 10, 12, 15])
+RF_FIXED = rfsi_cfg.get("rf_fixed", {"n_estimators": 400, "random_state": 31, "n_jobs": -1})
 RF_TUNABLE = rfsi_cfg.get("rf_tunable", {})
 PRIMARY_METRIC = rfsi_cfg.get("primary_metric", "rmse")
-OPTIMIZE_MODE = rfsi_cfg.get("optimize_mode", "single")   # "single" | "seasonal"
 CHUNK_SIZE = int(rfsi_cfg.get("predict_chunk_size", 250_000))
 FINE_RES_THRESHOLD = int(rfsi_cfg.get("fine_res_threshold", 200))
 N_JOBS_FINE = int(rfsi_cfg.get("n_jobs_fine", 2))
 N_JOBS_COARSE = int(rfsi_cfg.get("n_jobs_coarse", -1))
 SAVE_LLOCV = bool(rfsi_cfg.get("save_llocv", True))
+N_OPT_STATIONS = int(rfsi_cfg.get("n_opt_stations", 50))
+N_ESTIMATORS_SEARCH = int(rfsi_cfg.get("n_estimators_search", 100))
+N_ESTIMATORS_FINAL = int(RF_FIXED.get("n_estimators", 400))
 
 
 def get_time_column(time_resolution: str) -> str:
@@ -101,14 +100,12 @@ def get_domain_mask(grid_ds: xr.Dataset, bbox: tuple) -> np.ndarray:
 def load_aggregated_data():
     df = pd.read_parquet(get_aggregated_data_path("RFSI", TIME_RES))
     time_col = get_time_column(TIME_RES)
-
     if TIME_RES == "weekly":
         df["time"] = pd.to_datetime(df[time_col] + "-1", format="%Y-W%W-%w")
     elif TIME_RES == "monthly":
         df["time"] = pd.to_datetime(df[time_col] + "-01")
     else:
         df["time"] = pd.to_datetime(df[time_col])
-
     return df[(df["time"] >= START_DATE) & (df["time"] <= END_DATE)]
 
 
@@ -132,7 +129,6 @@ def prepare_covariates(df, encoder=None, fit_encoder=False):
 
 
 def predict_in_chunks(model, grid_points, X_grid, chunk_size=CHUNK_SIZE):
-    """Memory-safe grid prediction."""
     n = len(grid_points)
     preds = np.empty(n, dtype=np.float32)
     for i in range(0, n, chunk_size):
@@ -160,12 +156,9 @@ def process_one_time_step(args):
     model.fit(coords=coords, z=z, X_cov=X_cov)
 
     preds = predict_in_chunks(model, grid_points, X_grid)
-    pred_map = preds.reshape(ny, nx)
-    pred_map_flat = pred_map.ravel()
-    pred_map_flat[~domain_mask_flat] = np.nan
-    pred_map = pred_map_flat.reshape(ny, nx)
+    pred_map = preds.reshape(ny, nx).copy()
+    pred_map.ravel()[~domain_mask_flat] = np.nan
 
-    # in-sample metrics (kept for reference; true skill is in the LLOCV file)
     train_pred = model.predict(coords, X_cov_pred=X_cov)
     metrics = compute_metrics(z, train_pred)
 
@@ -174,8 +167,10 @@ def process_one_time_step(args):
 
 def main():
     print("=" * 80)
-    print(f"RFSI Production | Master Grid + {DOMAIN} domain")
-    print(f"Optimise mode: {OPTIMIZE_MODE} | save_llocv: {SAVE_LLOCV}")
+    print(f"RFSI Production | {DOMAIN} | {TIME_RES}")
+    print(f"Period: {START_DATE.date()} → {END_DATE.date()} | save_llocv={SAVE_LLOCV}")
+    print(f"Phase A: {N_OPT_STATIONS} stations, n_estimators={N_ESTIMATORS_SEARCH}")
+    print(f"Phase B: all stations, n_estimators={N_ESTIMATORS_FINAL}")
     print("=" * 80)
 
     station_data = load_aggregated_data()
@@ -184,13 +179,10 @@ def main():
 
     for res in RESOLUTIONS:
         print(f"\n{'='*60}\nRESOLUTION: {res} m")
-
         n_jobs = N_JOBS_FINE if res <= FINE_RES_THRESHOLD else N_JOBS_COARSE
         print(f"  Parallel jobs: {n_jobs}")
 
         grid_ds = xr.open_dataset(get_master_grid_path("RFSI", res))
-
-        # --- crop master grid to domain early (memory) ---
         x_sel = (grid_ds.x >= domain_bbox[0]) & (grid_ds.x <= domain_bbox[2])
         y_sel = (grid_ds.y >= domain_bbox[1]) & (grid_ds.y <= domain_bbox[3])
         grid_crop = grid_ds.isel(x=x_sel, y=y_sel)
@@ -201,11 +193,9 @@ def main():
         domain_mask = get_domain_mask(grid_crop, domain_bbox)
         domain_mask_flat = domain_mask.ravel()
 
-        # landcover on cropped grid only
-        lc_path = get_landcover_path()
         gx, gy = np.meshgrid(grid_crop.x.values, grid_crop.y.values)
         grid_points = np.column_stack([gx.ravel(), gy.ravel()])
-        with rasterio.open(lc_path) as src:
+        with rasterio.open(get_landcover_path()) as src:
             grid_clc = np.array([val[0] for val in src.sample(grid_points)], dtype=np.float32)
 
         grid_elev = grid_crop.elev.values.astype(np.float32)
@@ -213,7 +203,6 @@ def main():
 
         for var in ["precip_sum", "temp_mean", "temp_min", "temp_max",
                     "wind_mean", "wind_max", "rh_mean", "snow_mean", "snow_max", "snow_min"]:
-
             if var not in station_data.columns:
                 continue
 
@@ -223,19 +212,18 @@ def main():
                 "RFSI", DOMAIN, var, res,
                 start_date=str(START_DATE.date()),
                 end_date=str(END_DATE.date()),
+                time_resolution=TIME_RES,
             )
             if out_file.exists():
-                print(f"  Skipping {var} @ {res}m (already exists)")
+                print(f"  Skipping (exists): {out_file.name}")
                 continue
 
             valid = station_data[["station_name", "time", var]].dropna()
             station_cols = ["station_name", "x", "y", "elev"]
             if "clc_code" in stations.columns:
                 station_cols.append("clc_code")
-
-            valid = valid.merge(
-                stations[station_cols], on="station_name", how="left"
-            ).dropna(subset=["x", "y", var])
+            valid = valid.merge(stations[station_cols], on="station_name", how="left")
+            valid = valid.dropna(subset=["x", "y", var])
 
             if len(valid) < cfg.get("min_stations_per_field", 10):
                 print("  Too few stations — skipping")
@@ -243,27 +231,27 @@ def main():
 
             time_steps = sorted(valid["time"].unique())
 
-            # --- hyper-parameter optimisation ---
+            # Phase A – fast search
             sample_t = time_steps[len(time_steps) // 2]
             df_sample = valid[valid["time"] == sample_t].drop(columns=["time"], errors="ignore")
+            n_opt = min(N_OPT_STATIONS, len(df_sample))
+            df_opt = (df_sample.sample(n=n_opt, random_state=31).reset_index(drop=True)
+                      if len(df_sample) > n_opt else df_sample.reset_index(drop=True))
 
-            _, encoder = prepare_covariates(
-                valid[["elev", "clc_code"]].dropna() if "clc_code" in valid.columns
-                else valid[["elev"]].dropna(),
-                fit_encoder=True,
-            )
-
-            # grid covariates with the same encoder
+            rf_fixed_search = {**RF_FIXED, "n_estimators": N_ESTIMATORS_SEARCH, "n_jobs": 1}
+            cov_cols = [c for c in ["elev", "clc_code"] if c in valid.columns]
+            _, encoder = prepare_covariates(valid[cov_cols].dropna(), fit_encoder=True)
             X_grid, _ = prepare_covariates(grid_df, encoder=encoder)
 
-            print("  Optimizing hyperparameters (single representative timestep)...")
+            print(f"  Phase A: {len(df_opt)}/{len(df_sample)} stations, "
+                  f"n_estimators={N_ESTIMATORS_SEARCH}...")
             best_params, best_scores = optimize_rfsi_params_loocv(
-                df_sample, var, N_OBS_LIST, RF_FIXED, RF_TUNABLE,
+                df_opt, var, N_OBS_LIST, rf_fixed_search, RF_TUNABLE,
                 primary_metric=PRIMARY_METRIC, n_jobs=n_jobs,
             )
 
             n_obs = int(best_params["n_obs"])
-            rf_params = {**RF_FIXED}
+            rf_params = {**RF_FIXED, "n_estimators": N_ESTIMATORS_FINAL}
             for k in ["max_depth", "min_samples_leaf", "max_features"]:
                 if k in best_params:
                     val = best_params[k]
@@ -276,11 +264,11 @@ def main():
                 rf_params["max_depth"] = int(rf_params["max_depth"])
 
             print(f"  Best params: n_obs={n_obs}, {rf_params}")
-            print(f"  Opt scores: {best_scores}")
+            print(f"  Opt scores (subsample): {best_scores}")
 
-            # --- true LLOCV predictions for the whole period ---
+            # Phase B – full LLOCV parquet
             if SAVE_LLOCV:
-                print("  Running full LLOCV for validation parquet...")
+                print("  Phase B: full LLOCV parquet...")
                 llocv_df = run_full_llocv(
                     valid, var, n_obs, rf_params, encoder=encoder, time_col="time"
                 )
@@ -288,11 +276,12 @@ def main():
                     "RFSI", DOMAIN, var, res,
                     start_date=str(START_DATE.date()),
                     end_date=str(END_DATE.date()),
+                    time_resolution=TIME_RES,
                 )
                 llocv_df.to_parquet(llocv_path, index=False)
-                print(f"  LLOCV saved: {llocv_path.name}  ({len(llocv_df)} rows)")
+                print(f"  LLOCV: {llocv_path.name} ({len(llocv_df)} rows)")
 
-            # --- produce maps ---
+            # Phase B – maps
             tasks = [
                 (t, valid[valid["time"] == t], var, grid_points, X_grid,
                  ny, nx, n_obs, rf_params, encoder, domain_mask_flat)
@@ -317,10 +306,7 @@ def main():
                     "x": grid_crop.x.values,
                 },
             )
-
-            # elev once
             ds["elev"] = (("y", "x"), grid_elev)
-
             for key in ["n_obs", "rmse", "mae", "nse", "kge"]:
                 if key == "n_obs":
                     ds[key] = ("time", [r["n_obs"] for r in results])
@@ -347,18 +333,16 @@ def main():
                 "opt_mae": float(best_scores.get("mae", np.nan)),
                 "opt_nse": float(best_scores.get("nse", np.nan)),
                 "opt_kge": float(best_scores.get("kge", np.nan)),
+                "n_opt_stations": int(n_opt),
                 "created": datetime.now().isoformat(),
             })
 
             ds.to_netcdf(out_file, engine="netcdf4")
-            print(f"  Saved: {out_file}")
-
-            # free memory before next variable / resolution
+            print(f"  Saved: {out_file.name}")
             del data_3d, ds, results, tasks
             gc.collect()
 
         grid_ds.close()
-        del grid_crop, grid_points, grid_clc, grid_elev, X_grid
         gc.collect()
 
     print("\nRFSI production finished.")

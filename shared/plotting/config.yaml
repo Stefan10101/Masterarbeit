@@ -1,7 +1,7 @@
 plotting:
   mode: "config"
   input_nc_folder: ""
-  method: "RFSI"
+  method: "IDW"
   domain: "full"
   resolutions: [1000, 500]
   time_period: "20200101-20251231"

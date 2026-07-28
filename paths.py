@@ -181,13 +181,6 @@ def get_interpolated_map_path(method: str, domain: str, variable: str, resolutio
         return d / f"{variable}_{resolution}m_{tag}.nc"
     return d / f"{variable}_{resolution}m.nc"
 
-
-def get_llocv_path(method: str, domain: str, variable: str, resolution: int,
-                   start_date: str = None, end_date: str = None) -> Path:
-    """Companion LLOCV parquet next to the interpolated map NC."""
-    nc = get_interpolated_map_path(method, domain, variable, resolution, start_date, end_date)
-    return nc.with_name(nc.stem + "_llocv.parquet")
-
 def get_map_png_path(method: str, domain: str, resolution: int,
                      variable: str, time_label: str) -> Path:
     return get_map_output_dir(method, domain, resolution, variable) / f"{variable}_{time_label}.png"

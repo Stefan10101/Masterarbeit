@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
 produce_idw_maps.py
-Main production script for Modified IDW interpolation.
-
-Improvements:
-- True LLOCV predictions saved as companion parquet
-- Richer NC attributes + elev grid
-- Explicit memory cleanup; domain mask already limits targets
+Modified IDW production – fully patched:
+- time_resolution in output filenames
+- true LLOCV parquet
+- richer NC attrs + elev
+- memory cleanup
 """
 
 from pathlib import Path
@@ -33,10 +32,8 @@ from paths import (
     get_interpolated_map_path,
     get_llocv_path,
 )
-
 from idw_core import modified_idw, get_valid_targets
 from loocv_optimizer import optimize_idw_params_loocv, loocv_predictions
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
@@ -58,59 +55,50 @@ SAVE_LLOCV = bool(cfg.get("idw", {}).get("save_llocv", cfg.get("save_llocv", Tru
 def get_param_group(res_m: int) -> str:
     if res_m >= 1000:
         return "coarse"
-    elif res_m >= 100:
+    if res_m >= 100:
         return "medium"
-    else:
-        return "fine"
+    return "fine"
 
 
 def load_aggregated_data() -> pd.DataFrame:
     file_path = get_aggregated_data_path("IDW", TIME_RES)
     if not file_path.exists():
         raise FileNotFoundError(f"Aggregated file not found: {file_path}")
-
     df = pd.read_parquet(file_path)
     time_col = df.columns[1]
-
     if TIME_RES == "weekly":
         df["time"] = pd.to_datetime(df[time_col] + "-1", format="%Y-W%W-%w")
     elif TIME_RES == "monthly":
         df["time"] = pd.to_datetime(df[time_col] + "-01")
     else:
         df["time"] = pd.to_datetime(df[time_col])
-
-    df = df[(df["time"] >= START_DATE) & (df["time"] <= END_DATE)]
-    return df
+    return df[(df["time"] >= START_DATE) & (df["time"] <= END_DATE)]
 
 
 def process_one_time_step(args):
-    """Optimise params on this timestep, run LLOCV, interpolate full grid."""
     t, df_t, var, target_coords, target_elev, param_group, param_grid = args
 
     if len(df_t) < 5:
         return None
 
-    # --- parameter optimisation (LLOCV) ---
     if TIME_RES in ["half_hourly", "day", "night"]:
         all_times = df_t["time"].unique()
         sample_times = random.sample(list(all_times), min(HALFHOURLY_SAMPLE_N, len(all_times)))
         sample_df = df_t[df_t["time"].isin(sample_times)]
         best_params, best_scores = optimize_idw_params_loocv(
             sample_df, var, param_grid,
-            primary_metric=PRIMARY_METRIC, verbose=False, n_jobs=1
+            primary_metric=PRIMARY_METRIC, verbose=False, n_jobs=1,
         )
     else:
         best_params, best_scores = optimize_idw_params_loocv(
             df_t, var, param_grid,
-            primary_metric=PRIMARY_METRIC, verbose=False, n_jobs=1
+            primary_metric=PRIMARY_METRIC, verbose=False, n_jobs=1,
         )
 
     p = float(best_params["p"])
     Fz = float(best_params["Fz"])
-    k = int(best_params["k"])
-    k = min(k, len(df_t))
+    k = min(int(best_params["k"]), len(df_t))
 
-    # --- true leave-out predictions for this timestep ---
     llocv_df = loocv_predictions(df_t, var, p, Fz, k)
     if len(llocv_df) > 0:
         llocv_df = llocv_df.copy()
@@ -119,10 +107,8 @@ def process_one_time_step(args):
         llocv_df["Fz"] = Fz
         llocv_df["k"] = k
 
-    # --- full-grid interpolation ---
     tree = KDTree(df_t[["x", "y"]].values)
     chunk_size = 1_000_000 if param_group != "coarse" else None
-
     interp_1d = modified_idw(
         station_values=df_t[var].values,
         station_coords=df_t[["x", "y"]].values,
@@ -148,40 +134,30 @@ def process_one_time_step(args):
 
 def main():
     print("=" * 80)
-    print(f"IDW Thesis Production | Domain: {DOMAIN} | {TIME_RES}")
+    print(f"IDW Production | {DOMAIN} | {TIME_RES}")
     print(f"Period: {START_DATE.date()} → {END_DATE.date()} | save_llocv={SAVE_LLOCV}")
     print("=" * 80)
 
     station_data = load_aggregated_data()
-    stations_path = get_domain_stations_path("IDW", DOMAIN)
-    stations = pd.read_parquet(stations_path)
+    stations = pd.read_parquet(get_domain_stations_path("IDW", DOMAIN))
 
-    param_grid = cfg.get("param_grid", {}).get("power", {
-        "p": [1.0, 1.5, 2.0, 2.5, 3.0],
-        "Fz": [0.0, 0.15, 0.3, 0.5],
-        "k_neighbors": [6, 8, 10, 12, 15, 20],
-    })
+    param_grid = cfg["param_grid"]["power"]
 
     for res in RESOLUTIONS:
         param_group = get_param_group(res)
         print(f"\n{'='*60}\nRESOLUTION: {res} m ({param_group})")
 
-        grid_path = get_master_grid_path("IDW", res)
-        grid = xr.open_dataset(grid_path)
+        grid = xr.open_dataset(get_master_grid_path("IDW", res))
         target_coords, target_elev, mask = get_valid_targets(grid)
-
         if len(target_coords) == 0:
-            print(f"  Master grid @ {res}m has 0 valid target cells — skipping")
+            print("  0 valid target cells — skipping")
             continue
-
         print(f"  Valid target cells: {len(target_coords):,}")
 
-        # elev on full grid (for writing into NC)
         elev_2d = grid["elev"].values.astype(np.float32) if "elev" in grid else None
 
         for var in ["precip_sum", "temp_mean", "temp_min", "temp_max",
                     "wind_mean", "wind_max", "rh_mean", "snow_mean", "snow_max", "snow_min"]:
-
             if var not in station_data.columns:
                 continue
 
@@ -189,9 +165,10 @@ def main():
                 "IDW", DOMAIN, var, res,
                 start_date=str(START_DATE.date()),
                 end_date=str(END_DATE.date()),
+                time_resolution=TIME_RES,
             )
             if out_file.exists():
-                print(f"  Skipping {var} @ {res}m (already exists)")
+                print(f"  Skipping (exists): {out_file.name}")
                 continue
 
             print(f"\n>>> {var}")
@@ -206,7 +183,6 @@ def main():
                 continue
 
             time_steps = sorted(valid["time"].unique())
-
             tasks = [
                 (t, valid[valid["time"] == t], var,
                  target_coords, target_elev, param_group, param_grid)
@@ -221,46 +197,38 @@ def main():
             if not results:
                 continue
 
-            # --- assemble LLOCV parquet ---
             if SAVE_LLOCV:
-                llocv_parts = [r["llocv"] for r in results if r["llocv"] is not None and len(r["llocv"]) > 0]
-                if llocv_parts:
-                    llocv_all = pd.concat(llocv_parts, ignore_index=True)
+                parts = [r["llocv"] for r in results
+                         if r["llocv"] is not None and len(r["llocv"]) > 0]
+                if parts:
+                    llocv_all = pd.concat(parts, ignore_index=True)
                     llocv_path = get_llocv_path(
                         "IDW", DOMAIN, var, res,
                         start_date=str(START_DATE.date()),
                         end_date=str(END_DATE.date()),
+                        time_resolution=TIME_RES,
                     )
                     llocv_all.to_parquet(llocv_path, index=False)
-                    print(f"  LLOCV saved: {llocv_path.name}  ({len(llocv_all)} rows)")
+                    print(f"  LLOCV: {llocv_path.name} ({len(llocv_all)} rows)")
 
-            # --- assemble surface NC ---
             n_y, n_x = mask.shape
             data_3d = np.full((len(results), n_y, n_x), np.nan, dtype=np.float32)
-            for i, res_dict in enumerate(results):
-                data_3d[i][mask] = res_dict["data"]
-
-            times = [r["time"] for r in results]
+            for i, r in enumerate(results):
+                data_3d[i][mask] = r["data"]
 
             ds = xr.Dataset(
                 {var: (("time", "y", "x"), data_3d)},
                 coords={
-                    "time": times,
+                    "time": [r["time"] for r in results],
                     "y": grid["y"].values,
                     "x": grid["x"].values,
                 },
             )
-
             if elev_2d is not None:
                 ds["elev"] = (("y", "x"), elev_2d)
 
-            ds["p"] = ("time", [r["p"] for r in results])
-            ds["Fz"] = ("time", [r["Fz"] for r in results])
-            ds["k"] = ("time", [r["k"] for r in results])
-            ds["rmse"] = ("time", [r["rmse"] for r in results])
-            ds["mae"] = ("time", [r["mae"] for r in results])
-            ds["nse"] = ("time", [r["nse"] for r in results])
-            ds["kge"] = ("time", [r["kge"] for r in results])
+            for key in ["p", "Fz", "k", "rmse", "mae", "nse", "kge"]:
+                ds[key] = ("time", [r[key] for r in results])
 
             ds.attrs.update({
                 "title": f"{var} - IDW - {TIME_RES} - {DOMAIN}",
@@ -279,12 +247,10 @@ def main():
 
             ds.to_netcdf(out_file, engine="netcdf4")
             print(f"  Saved: {out_file.name} ({len(results)} timesteps)")
-
             del data_3d, ds, results, tasks
             gc.collect()
 
         grid.close()
-        del target_coords, target_elev, mask
         gc.collect()
 
     print("\n" + "=" * 80)

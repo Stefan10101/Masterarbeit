@@ -137,22 +137,20 @@ def optimize_idw_params_loocv(
 if __name__ == "__main__":
     print("loocv_optimizer.py ready.")
 
-
 def loocv_predictions(valid_df, var_name, p, Fz, k):
-    """
-    Leave-one-out predictions for a fixed parameter set.
-    Returns DataFrame columns: station_name, x, y, observed, predicted
-    (caller adds time / params).
-    """
+    """Leave-one-out predictions for fixed params. Returns DataFrame."""
+    import numpy as np
+    import pandas as pd
+    from sklearn.neighbors import KDTree
+    from idw_core import modified_idw
+
     n = len(valid_df)
     if n < 3:
         return pd.DataFrame(columns=["station_name", "x", "y", "observed", "predicted"])
-
     station_coords = valid_df[["x", "y"]].values
     station_elev = valid_df["elev"].values
     values = valid_df[var_name].values
     names = valid_df["station_name"].values if "station_name" in valid_df.columns else np.arange(n)
-
     records = []
     for i in range(n):
         mask = np.ones(n, dtype=bool)
@@ -165,13 +163,9 @@ def loocv_predictions(valid_df, var_name, p, Fz, k):
         k_use = min(k, len(loo_values))
         tree_loo = KDTree(loo_coords)
         pred = modified_idw(
-            station_values=loo_values,
-            station_coords=loo_coords,
-            station_elev=loo_elev,
-            target_coords=station_coords[[i]],
-            target_elev=station_elev[[i]],
-            tree=tree_loo,
-            p=p, Fz=Fz, k=k_use,
+            station_values=loo_values, station_coords=loo_coords, station_elev=loo_elev,
+            target_coords=station_coords[[i]], target_elev=station_elev[[i]],
+            tree=tree_loo, p=p, Fz=Fz, k=k_use,
         )
         records.append({
             "station_name": names[i],
