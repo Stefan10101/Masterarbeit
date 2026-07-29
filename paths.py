@@ -36,6 +36,15 @@ def get_metadata_path() -> Path:
     return get_raw_data_dir() / "stations_overview.csv"
 
 
+def get_stations_metadata_path() -> Path:
+    """
+    Rich station metadata that includes terrain attributes
+    (elev_dem, slope, aspect, curvature, ...).
+    Used by the regime-clustering pipeline.
+    """
+    return get_raw_data_dir() / "stations_metadata_with_terrain.csv"
+
+
 def get_dem_path() -> Path:
     return DATA_ROOT / "DEM_Source" / "COP30_mosaic_EPSG31287.tif"
 
@@ -53,6 +62,14 @@ def get_method_output_dir(method: str) -> Path:
 
 def get_aggregated_dir(method: str) -> Path:
     return get_method_output_dir(method) / "aggregated"
+
+
+def get_clusters_dir(method: str) -> Path:
+    """
+    Directory that stores regime-clustering artefacts for a method.
+    Example: .../IDW/Output/clusters
+    """
+    return get_method_output_dir(method) / "clusters"
 
 
 def get_stations_dir(method: str) -> Path:
