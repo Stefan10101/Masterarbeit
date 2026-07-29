@@ -30,6 +30,72 @@ try:
 except ImportError:
     from features import get_feature_func, FEATURE_FUNCS
 
+import re
+
+
+def parse_time_label(t, resolution: str = "half_hourly") -> pd.Timestamp:
+    """
+    Convert aggregation time keys to a Timestamp usable for doy/hour features.
+
+    Handles:
+      half_hourly / daily  – real timestamps or ISO dates
+      weekly               – '2020-W05', also edge case '2020-W00'
+      monthly              – '2020-03'
+      seasonal             – 'Winter' / '2020-Winter' / 'Spring' …
+    """
+    if isinstance(t, pd.Timestamp):
+        return t
+    if isinstance(t, (np.datetime64,)):
+        return pd.Timestamp(t)
+
+    s = str(t).strip()
+
+    # weekly: YYYY-Www  (%W can be 00 at year start)
+    m = re.match(r"^(\d{4})-W(\d{1,2})$", s)
+    if m or resolution == "weekly":
+        if m:
+            year, week = int(m.group(1)), int(m.group(2))
+        else:
+            # fallback if format unexpected
+            return pd.Timestamp("2000-01-01")
+        week = max(1, min(week, 53))
+        try:
+            return pd.to_datetime(f"{year}-W{week:02d}-1", format="%Y-W%W-%w")
+        except Exception:
+            return pd.Timestamp(year=year, month=1, day=1) + pd.Timedelta(weeks=week - 1)
+
+    # monthly: YYYY-MM
+    m = re.match(r"^(\d{4})-(\d{2})$", s)
+    if m or resolution == "monthly":
+        if m:
+            try:
+                return pd.Timestamp(year=int(m.group(1)), month=int(m.group(2)), day=15)
+            except Exception:
+                pass
+
+    # seasonal: Winter / 2020-Winter / Spring …
+    season_doy = {
+        "winter": (1, 15),
+        "spring": (4, 15),
+        "summer": (7, 15),
+        "autumn": (10, 15),
+        "fall": (10, 15),
+    }
+    low = s.lower()
+    for name, (month, day) in season_doy.items():
+        if low == name or low.endswith("-" + name) or low.endswith(name):
+            year = 2000
+            ym = re.match(r"^(\d{4})", s)
+            if ym:
+                year = int(ym.group(1))
+            return pd.Timestamp(year=year, month=month, day=day)
+
+    # generic parse
+    try:
+        return pd.to_datetime(s)
+    except Exception:
+        return pd.Timestamp("2000-01-01")
+
 
 def _prepare_station_arrays(
     df_t: pd.DataFrame,
@@ -113,20 +179,16 @@ def build_feature_matrix(
             if aligned.notna().sum() >= 5:
                 temp_values = aligned.to_numpy(dtype=float)
 
-        # time object
-        if not isinstance(t, pd.Timestamp):
-            try:
-                t = pd.to_datetime(t)
-            except Exception:
-                # for year_week / year_month we still want a proxy
-                t = pd.Timestamp(t) if not isinstance(t, pd.Timestamp) else t
+        # robust time parse (weekly W00, monthly, seasonal, …)
+        t_parsed = parse_time_label(t, resolution=resolution)
 
         # lag only for half_hourly and when previous exists and is consecutive
         use_lag = (
             resolution == "half_hourly"
             and prev_values is not None
             and prev_time is not None
-            and (t - prev_time) <= pd.Timedelta("1h")
+            and isinstance(prev_time, pd.Timestamp)
+            and (t_parsed - prev_time) <= pd.Timedelta("1h")
         )
 
         # build kwargs that every feature function accepts
@@ -134,7 +196,7 @@ def build_feature_matrix(
             values=values,
             elev=elev,
             coords=coords,
-            time=t if isinstance(t, pd.Timestamp) else pd.Timestamp("2000-01-01"),
+            time=t_parsed,
             meta_extra=meta_extra,
             prev_values=prev_values if use_lag else None,
             prev_elev=prev_elev if use_lag else None,
@@ -146,6 +208,7 @@ def build_feature_matrix(
 
         feat = feature_func(**kwargs)
 
+        # keep original time key (e.g. 2020-W05) for index compatibility
         feat[time_col] = t
         feat["n_stations"] = len(values)
         records.append(feat)
@@ -154,7 +217,7 @@ def build_feature_matrix(
         prev_values = values
         prev_elev = elev
         prev_coords = coords
-        prev_time = t if isinstance(t, pd.Timestamp) else None
+        prev_time = t_parsed
 
     if not records:
         return pd.DataFrame()
@@ -212,23 +275,45 @@ def _scale_and_pca(
     return Xs, scaler, pca
 
 
+def _safe_silhouette(Xs: np.ndarray, labels: np.ndarray) -> float:
+    """Silhouette only if 2 <= n_labels <= n_samples - 1."""
+    n_labels = len(np.unique(labels))
+    n = len(labels)
+    if n_labels < 2 or n_labels >= n:
+        return -1.0
+    try:
+        return float(silhouette_score(Xs, labels))
+    except Exception:
+        return -1.0
+
+
 def select_kmeans(
     Xs: np.ndarray,
     k_min: int,
     k_max: int,
     random_state: int,
 ) -> Tuple[int, Dict[int, float], Any, np.ndarray]:
+    n = len(Xs)
+    k_max = min(k_max, max(2, n - 1))
+    k_min = min(k_min, k_max)
     scores = {}
     best_k, best_score, best_model, best_labels = k_min, -1.0, None, None
     for k in range(k_min, k_max + 1):
-        if k >= len(Xs):
+        if k >= n:
             break
         km = KMeans(n_clusters=k, random_state=random_state, n_init=10)
         labels = km.fit_predict(Xs)
-        score = float(silhouette_score(Xs, labels)) if len(np.unique(labels)) > 1 else -1.0
+        score = _safe_silhouette(Xs, labels)
         scores[k] = score
         if score > best_score:
             best_k, best_score, best_model, best_labels = k, score, km, labels
+    if best_model is None:
+        # fallback: single-pass with k_min
+        km = KMeans(n_clusters=k_min, random_state=random_state, n_init=10)
+        best_labels = km.fit_predict(Xs)
+        best_model = km
+        best_k = k_min
+        scores[k_min] = _safe_silhouette(Xs, best_labels)
     return best_k, scores, best_model, best_labels
 
 
@@ -239,10 +324,13 @@ def select_gmm(
     random_state: int,
 ) -> Tuple[int, Dict[int, float], Any, np.ndarray]:
     """Choose k by minimum BIC (standard for GMM regime work)."""
+    n = len(Xs)
+    k_max = min(k_max, max(2, n - 1))
+    k_min = min(k_min, k_max)
     scores = {}
     best_k, best_bic, best_model, best_labels = k_min, np.inf, None, None
     for k in range(k_min, k_max + 1):
-        if k >= len(Xs):
+        if k >= n:
             break
         gmm = GaussianMixture(
             n_components=k,
@@ -256,6 +344,15 @@ def select_gmm(
         scores[k] = bic
         if bic < best_bic:
             best_k, best_bic, best_model, best_labels = k, bic, gmm, labels
+    if best_model is None:
+        gmm = GaussianMixture(
+            n_components=k_min, covariance_type="full",
+            random_state=random_state, n_init=3, max_iter=200,
+        )
+        best_labels = gmm.fit_predict(Xs)
+        best_model = gmm
+        best_k = k_min
+        scores[k_min] = float(gmm.bic(Xs))
     return best_k, scores, best_model, best_labels
 
 
@@ -267,41 +364,49 @@ def select_som(
 ) -> Tuple[int, Dict[int, float], Any, np.ndarray]:
     """
     Train a rectangular SOM. Grid size chosen so n_nodes is in [k_min, k_max]
-    and closest to sqrt-range mid. Each node is one regime.
+    and strictly less than n_samples (silhouette / clustering constraint).
     """
     if not HAS_MINISOM:
         raise ImportError(
             "minisom is required for SOM clustering. Install with: pip install minisom"
         )
 
-    # pick a nearly-square grid whose node count lies in [k_min, k_max]
+    n = len(Xs)
+    # cannot have more nodes than samples meaningfully
+    k_max = min(k_max, max(1, n - 1))
+    k_min = min(k_min, k_max)
+
     target = max(k_min, min(k_max, int(round(np.sqrt(k_min * k_max)))))
-    side = max(2, int(round(np.sqrt(target))))
+    side = max(1, int(round(np.sqrt(target))))
     n_nodes = side * side
-    while n_nodes > k_max and side > 2:
+    while n_nodes > k_max and side > 1:
         side -= 1
         n_nodes = side * side
-    while n_nodes < k_min:
+    while n_nodes < k_min and n_nodes < n:
         side += 1
         n_nodes = side * side
+    # final safety: never more nodes than samples
+    while n_nodes >= n and side > 1:
+        side -= 1
+        n_nodes = side * side
+    if n_nodes < 1:
+        side, n_nodes = 1, 1
 
     som = MiniSom(
         side, side, Xs.shape[1],
-        sigma=1.0, learning_rate=0.5,
+        sigma=max(0.5, side / 2.0), learning_rate=0.5,
         random_seed=random_state,
     )
     som.random_weights_init(Xs)
-    n_iter = min(1000, max(100, len(Xs) // 10))
+    n_iter = min(1000, max(50, n * 5))
     som.train_random(Xs, n_iter, verbose=False)
 
-    # map each sample to a flat node id
     winners = np.array([som.winner(x) for x in Xs])
     labels = winners[:, 0] * side + winners[:, 1]
 
-    # silhouette for reporting (not for selection)
-    score = float(silhouette_score(Xs, labels)) if len(np.unique(labels)) > 1 else -1.0
-    scores = {n_nodes: score}
-    return n_nodes, scores, som, labels
+    score = _safe_silhouette(Xs, labels)
+    scores = {int(n_nodes): score}
+    return int(n_nodes), scores, som, labels
 
 
 def extract_medoids(
@@ -343,6 +448,8 @@ def run_clustering_for_variable(
     pca_variance: fraction of variance to keep (None = skip PCA)
     """
     X, feature_cols = _prepare_matrix(feat_df)
+    if len(X) < 5:
+        print(f"  warning: only {len(X)} timestamps — clustering is weakly constrained")
     Xs, scaler, pca = _scale_and_pca(X, pca_variance=pca_variance, random_state=random_state)
 
     method = cluster_method.lower()

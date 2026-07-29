@@ -119,17 +119,16 @@ def _load_aggregated(
     else:
         df = pd.read_parquet(path)
 
-    # robust date filter
+    # robust date filter (works for weekly / monthly / seasonal labels too)
     if start or end:
-        ts = df[time_col]
-        if not pd.api.types.is_datetime64_any_dtype(ts):
-            ts = pd.to_datetime(ts, errors="coerce", utc=True)
-            # drop timezone for simple comparisons if present
+        from clustering_core import parse_time_label
+
+        if pd.api.types.is_datetime64_any_dtype(df[time_col]):
+            ts = df[time_col]
             if getattr(ts.dt, "tz", None) is not None:
                 ts = ts.dt.tz_convert(None)
         else:
-            if getattr(ts.dt, "tz", None) is not None:
-                ts = ts.dt.tz_convert(None)
+            ts = df[time_col].map(lambda x: parse_time_label(x, resolution))
 
         n_before = len(df)
         mask = pd.Series(True, index=df.index)

@@ -35,6 +35,14 @@ sys.path.insert(0, str(THIS_DIR))
 
 from paths import get_clusters_dir, get_clusters_plot_dir, ensure_dir
 
+# clustering helpers (works from shared/clustering or shared/plotting)
+_CLUSTERING_DIR = THIS_DIR if (THIS_DIR / "clustering_core.py").exists() else THIS_DIR.parent / "clustering"
+sys.path.insert(0, str(_CLUSTERING_DIR))
+try:
+    from clustering_core import parse_time_label
+except ImportError:
+    parse_time_label = None
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -86,10 +94,23 @@ def load_assignments(method: str, resolution: str, cluster_method: str,
     if not path.exists():
         return None
     df = pd.read_parquet(path)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    if getattr(df["timestamp"].dt, "tz", None) is not None:
-        df["timestamp"] = df["timestamp"].dt.tz_convert(None)
-    df = df.sort_values("timestamp").reset_index(drop=True)
+    col = "timestamp" if "timestamp" in df.columns else df.columns[0]
+    # rename generic time column to timestamp for downstream plots
+    if col != "timestamp":
+        df = df.rename(columns={col: "timestamp"})
+
+    raw = df["timestamp"]
+    if pd.api.types.is_datetime64_any_dtype(raw):
+        ts = raw
+        if getattr(ts.dt, "tz", None) is not None:
+            ts = ts.dt.tz_convert(None)
+    elif parse_time_label is not None:
+        ts = raw.map(lambda x: parse_time_label(x, resolution))
+    else:
+        ts = pd.to_datetime(raw, errors="coerce")
+
+    df["timestamp"] = ts
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
     return df
 
 

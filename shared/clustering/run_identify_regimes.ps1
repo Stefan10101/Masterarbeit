@@ -5,7 +5,7 @@
 
 # Clustering is method-agnostic: run once, write into every method folder
 $methods        = @("IDW", "BSS", "RFSI")
-$resolution     = "half_hourly"
+$resolution     = "seasonal"
 $kMin           = 2
 $kMax           = 12
 $nMedoids       = 42
