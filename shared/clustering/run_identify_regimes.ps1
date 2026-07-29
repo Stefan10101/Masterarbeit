@@ -9,7 +9,7 @@ $resolution     = "half_hourly"
 $kMin           = 2
 $kMax           = 12
 $nMedoids       = 42
-$clusterMethod  = "gmm"       # kmeans | gmm | som
+$clusterMethod  = "som"       # kmeans | gmm | som
 $pcaVariance    = 0.95        # 0 = disable PCA
 
 $scriptPath  = "identify_regimes.py"

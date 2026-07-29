@@ -68,12 +68,15 @@ def _cluster_dir(method: str, resolution: str, cluster_method: str) -> Path:
 def discover_variables(method: str, resolution: str,
                        cluster_methods: List[str]) -> List[str]:
     found = set()
+    skip = {"all_regime"}  # combined file, not a real variable
     for cm in cluster_methods:
         d = _cluster_dir(method, resolution, cm)
         if not d.exists():
             continue
         for f in d.glob("*_assignments.parquet"):
-            found.add(f.name.replace("_assignments.parquet", ""))
+            name = f.name.replace("_assignments.parquet", "")
+            if name not in skip:
+                found.add(name)
     return sorted(found)
 
 
@@ -269,15 +272,17 @@ def plot_quality_metrics(features: Dict[str, pd.DataFrame],
             continue
         feature_cols = [c for c in feat.columns
                         if c not in ("cluster_id", "dist_to_centroid", "n_stations")]
-        X = feat[feature_cols].to_numpy(dtype=float)
+        X = np.array(feat[feature_cols].to_numpy(dtype=float), copy=True)
         # simple impute
         for j in range(X.shape[1]):
             col = X[:, j]
             med = np.nanmedian(col)
             if not np.isfinite(med):
                 med = 0.0
-            col[~np.isfinite(col)] = med
-            X[:, j] = col
+            nan_mask = ~np.isfinite(col)
+            if nan_mask.any():
+                col[nan_mask] = med
+                X[:, j] = col
         labels = feat["cluster_id"].to_numpy()
         if len(np.unique(labels)) < 2:
             continue
@@ -447,7 +452,7 @@ def plot_timeline(assignments: Dict[str, pd.DataFrame], var: str, out_dir: Path,
             continue
         labels = sub["cluster_id"].to_numpy()
         n_c = int(labels.max()) + 1 if len(labels) else 1
-        cmap = plt.cm.get_cmap("tab10", max(n_c, 3))
+        cmap = plt.colormaps["tab10"].resampled(max(n_c, 3))
         ax.scatter(sub["timestamp"], np.zeros(len(sub)), c=labels,
                    cmap=cmap, marker="|", s=80, vmin=-0.5, vmax=max(n_c - 0.5, 2.5))
         ax.set_yticks([])
