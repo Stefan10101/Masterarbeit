@@ -46,9 +46,10 @@ def parse_args():
     p = argparse.ArgumentParser(
         description="Cluster station fields into meteorological regimes"
     )
-    p.add_argument("--method", required=True,
+    p.add_argument("--method", required=True, nargs="+",
                    choices=["BSS", "IDW", "RFSI", "COMMON"],
-                   help="Determines input aggregated dir and output clusters dir")
+                   help="One or more methods. Clustering runs once; results are "
+                        "written into every listed method's clusters folder.")
     p.add_argument("--resolution", required=True,
                    choices=["half_hourly", "daily", "weekly", "monthly", "seasonal"],
                    help="Which aggregated file to read")
@@ -57,6 +58,12 @@ def parse_args():
     p.add_argument("--k-min", type=int, default=3)
     p.add_argument("--k-max", type=int, default=8)
     p.add_argument("--n-medoids", type=int, default=8)
+    p.add_argument("--cluster-method", default="gmm",
+                   choices=["kmeans", "gmm", "som"],
+                   help="Clustering algorithm (default: gmm with BIC)")
+    p.add_argument("--pca-variance", type=float, default=0.95,
+                   help="PCA variance to retain before clustering "
+                        "(0 to disable, default 0.95)")
     p.add_argument("--filter", default="all", choices=["all", "day", "night"])
     p.add_argument("--start-date", type=str, default=None)
     p.add_argument("--end-date", type=str, default=None)
@@ -176,56 +183,96 @@ def _discover_value_columns(df: pd.DataFrame, requested: Optional[List[str]]) ->
     return mapping
 
 
+def _output_roots(methods, resolution, cluster_method, start_date, end_date):
+    """Build output dirs for every method (same relative structure)."""
+    roots = []
+    for m in methods:
+        root = get_clusters_dir(m) / resolution / cluster_method
+        if start_date or end_date:
+            tag = f"{start_date or 'start'}_{end_date or 'end'}".replace("-", "")
+            root = root / tag
+        root.mkdir(parents=True, exist_ok=True)
+        roots.append(root)
+    return roots
+
+
+def _write_variable_outputs(result, var, out_roots):
+    """Write the same artefacts into every method folder."""
+    medoid_rows = []
+    for cid, ts_list in result["medoids"].items():
+        for ts in ts_list:
+            medoid_rows.append({"variable": var, "cluster_id": cid, "timestamp": ts})
+    medoid_df = pd.DataFrame(medoid_rows)
+
+    for root in out_roots:
+        result["assignments"].to_parquet(root / f"{var}_assignments.parquet", index=False)
+        result["features"].to_parquet(root / f"{var}_features.parquet")
+        with open(root / f"{var}_summary.yaml", "w", encoding="utf-8") as f:
+            yaml.dump(result["summary"], f, sort_keys=False, allow_unicode=True)
+        medoid_df.to_parquet(root / f"{var}_medoids.parquet", index=False)
+
+
 def main():
     args = parse_args()
-    method = args.method.upper()
+    methods = [m.upper() for m in args.method]
     resolution = args.resolution
     time_col = _time_col_name(resolution)
 
     print("=" * 78)
-    print(f"Regime clustering | method={method} | resolution={resolution}")
-    print(f"k-range = [{args.k_min}, {args.k_max}]  n_medoids = {args.n_medoids}")
+    print(f"Regime clustering | methods={methods} | resolution={resolution}")
+    print(f"cluster={args.cluster_method} | PCA={args.pca_variance} | "
+          f"k=[{args.k_min},{args.k_max}] | n_medoids={args.n_medoids}")
     print("=" * 78)
 
     # ------------------------------------------------------------------
-    # Load data (only the columns we need – keeps RAM down)
+    # Load data once (from the first method that has the aggregated file)
     # ------------------------------------------------------------------
     meta = _load_metadata()
 
-    # collect every preferred column name so we never load unused min/max etc.
     from features import PREFERRED_COLUMNS
     wanted_value_cols = []
     for prefs in PREFERRED_COLUMNS.values():
         wanted_value_cols.extend(prefs)
-    # unique, preserve order
     wanted_value_cols = list(dict.fromkeys(wanted_value_cols))
 
-    data = _load_aggregated(
-        method, resolution, args.filter, args.start_date, args.end_date,
-        columns=wanted_value_cols,
-    )
-    print(f"Loaded {len(data):,} rows, {data[time_col].nunique():,} unique timestamps")
+    data = None
+    source_method = None
+    for m in methods:
+        try:
+            data = _load_aggregated(
+                m, resolution, args.filter, args.start_date, args.end_date,
+                columns=wanted_value_cols,
+            )
+            source_method = m
+            break
+        except FileNotFoundError as e:
+            print(f"  no aggregated file for {m}: {e}")
+    if data is None:
+        raise FileNotFoundError(
+            f"No aggregated {resolution} file found for any of {methods}"
+        )
+    print(f"Loaded data from {source_method}: "
+          f"{len(data):,} rows, {data[time_col].nunique():,} timestamps")
 
     var_to_col = _discover_value_columns(data, args.variables)
     print(f"Variables to process: {list(var_to_col.keys())}")
 
-    # temperature companion column (for humidity temp_corr)
     temp_col = None
     for cand in ("temp_mean", "temperature", "temp", "TL"):
         if cand in data.columns:
             temp_col = cand
             break
 
-    # ------------------------------------------------------------------
-    # Output directory (subfolder when a date range is given)
-    # ------------------------------------------------------------------
-    out_root = get_clusters_dir(method) / resolution
-    if args.start_date or args.end_date:
-        tag = f"{args.start_date or 'start'}_{args.end_date or 'end'}".replace("-", "")
-        out_root = out_root / tag
-    out_root.mkdir(parents=True, exist_ok=True)
-    print(f"Output root: {out_root}")
+    out_roots = _output_roots(
+        methods, resolution, args.cluster_method,
+        args.start_date, args.end_date,
+    )
+    for r in out_roots:
+        print(f"Output root: {r}")
 
+    # ------------------------------------------------------------------
+    # Cluster once per variable, write into every method folder
+    # ------------------------------------------------------------------
     all_assignments = []
 
     for var, value_col in var_to_col.items():
@@ -246,6 +293,7 @@ def main():
 
         print(f"  Feature matrix: {feat_df.shape[0]} timestamps × {feat_df.shape[1]-1} features")
 
+        pca_var = args.pca_variance if args.pca_variance > 0 else None
         result = run_clustering_for_variable(
             feat_df=feat_df,
             var=var,
@@ -253,39 +301,19 @@ def main():
             k_max=args.k_max,
             n_medoids=args.n_medoids,
             random_state=args.random_state,
+            cluster_method=args.cluster_method,
+            pca_variance=pca_var,
         )
 
-        # ---- write artefacts ----
-        assign = result["assignments"]
-        assign.to_parquet(out_root / f"{var}_assignments.parquet", index=False)
+        _write_variable_outputs(result, var, out_roots)
+        all_assignments.append(result["assignments"])
+        print(f"  wrote outputs to {len(out_roots)} method folder(s)")
 
-        result["features"].to_parquet(out_root / f"{var}_features.parquet")
-
-        # summary as YAML (human + machine readable)
-        summary_path = out_root / f"{var}_summary.yaml"
-        with open(summary_path, "w", encoding="utf-8") as f:
-            yaml.dump(result["summary"], f, sort_keys=False, allow_unicode=True)
-
-        # medoid timestamps only (lightweight)
-        medoid_rows = []
-        for cid, ts_list in result["medoids"].items():
-            for ts in ts_list:
-                medoid_rows.append({"variable": var, "cluster_id": cid, "timestamp": ts})
-        pd.DataFrame(medoid_rows).to_parquet(
-            out_root / f"{var}_medoids.parquet", index=False
-        )
-
-        all_assignments.append(assign)
-
-        print(f"  best k = {result['summary']['best_k']}  "
-              f"silhouette = {result['summary']['best_silhouette']:.3f}")
-        print(f"  wrote {summary_path.name} and companions")
-
-    # combined assignment table (handy for production)
     if all_assignments:
         combined = pd.concat(all_assignments, ignore_index=True)
-        combined.to_parquet(out_root / "all_regime_assignments.parquet", index=False)
-        print(f"\nCombined assignments → {out_root / 'all_regime_assignments.parquet'}")
+        for root in out_roots:
+            combined.to_parquet(root / "all_regime_assignments.parquet", index=False)
+        print(f"\nCombined assignments written to all method folders")
 
     print("\nDone.")
 

@@ -12,10 +12,18 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
 import yaml
 from tqdm import tqdm
+
+try:
+    from minisom import MiniSom
+    HAS_MINISOM = True
+except ImportError:
+    HAS_MINISOM = False
 
 try:
     from .features import get_feature_func, FEATURE_FUNCS
@@ -156,39 +164,144 @@ def build_feature_matrix(
     return feat_df
 
 
-def select_k_by_silhouette(
+def _prepare_matrix(
+    feat_df: pd.DataFrame,
+) -> Tuple[np.ndarray, List[str]]:
+    """Impute, drop constant columns, return X and remaining feature names."""
+    feature_cols = [c for c in feat_df.columns if c not in ("n_stations",)]
+    X = np.array(feat_df[feature_cols].to_numpy(dtype=float), copy=True)
+
+    for j in range(X.shape[1]):
+        col = X[:, j]
+        med = np.nanmedian(col)
+        if not np.isfinite(med):
+            med = 0.0
+        nan_mask = ~np.isfinite(col)
+        if nan_mask.any():
+            col[nan_mask] = med
+            X[:, j] = col
+
+    keep = np.std(X, axis=0) > 1e-12
+    if not keep.all():
+        dropped = [c for c, k in zip(feature_cols, keep) if not k]
+        if dropped:
+            print(f"  dropping constant/empty features: {dropped}")
+        feature_cols = [c for c, k in zip(feature_cols, keep) if k]
+        X = X[:, keep]
+
+    if X.shape[1] == 0:
+        raise RuntimeError("No usable features left after cleaning")
+    return X, feature_cols
+
+
+def _scale_and_pca(
     X: np.ndarray,
-    k_min: int = 3,
-    k_max: int = 8,
+    pca_variance: Optional[float] = 0.95,
     random_state: int = 42,
-) -> Tuple[int, Dict[int, float], KMeans]:
-    """
-    Try every k in [k_min, k_max], return best k, silhouette dict, and fitted model.
-    """
+) -> Tuple[np.ndarray, StandardScaler, Optional[PCA]]:
+    """Standardise, optionally project with PCA retaining pca_variance fraction."""
     scaler = StandardScaler()
     Xs = scaler.fit_transform(X)
 
-    sil_scores = {}
-    best_k = k_min
-    best_score = -1.0
-    best_model = None
+    pca = None
+    if pca_variance is not None and 0.0 < pca_variance < 1.0 and Xs.shape[1] > 2:
+        pca = PCA(n_components=pca_variance, random_state=random_state)
+        Xs = pca.fit_transform(Xs)
+        print(f"  PCA: {X.shape[1]} features → {Xs.shape[1]} components "
+              f"(explained var ≥ {pca_variance:.0%})")
+    return Xs, scaler, pca
 
+
+def select_kmeans(
+    Xs: np.ndarray,
+    k_min: int,
+    k_max: int,
+    random_state: int,
+) -> Tuple[int, Dict[int, float], Any, np.ndarray]:
+    scores = {}
+    best_k, best_score, best_model, best_labels = k_min, -1.0, None, None
     for k in range(k_min, k_max + 1):
         if k >= len(Xs):
             break
         km = KMeans(n_clusters=k, random_state=random_state, n_init=10)
         labels = km.fit_predict(Xs)
-        if len(np.unique(labels)) < 2:
-            score = -1.0
-        else:
-            score = float(silhouette_score(Xs, labels))
-        sil_scores[k] = score
+        score = float(silhouette_score(Xs, labels)) if len(np.unique(labels)) > 1 else -1.0
+        scores[k] = score
         if score > best_score:
-            best_score = score
-            best_k = k
-            best_model = km
+            best_k, best_score, best_model, best_labels = k, score, km, labels
+    return best_k, scores, best_model, best_labels
 
-    return best_k, sil_scores, best_model, scaler
+
+def select_gmm(
+    Xs: np.ndarray,
+    k_min: int,
+    k_max: int,
+    random_state: int,
+) -> Tuple[int, Dict[int, float], Any, np.ndarray]:
+    """Choose k by minimum BIC (standard for GMM regime work)."""
+    scores = {}
+    best_k, best_bic, best_model, best_labels = k_min, np.inf, None, None
+    for k in range(k_min, k_max + 1):
+        if k >= len(Xs):
+            break
+        gmm = GaussianMixture(
+            n_components=k,
+            covariance_type="full",
+            random_state=random_state,
+            n_init=3,
+            max_iter=200,
+        )
+        labels = gmm.fit_predict(Xs)
+        bic = float(gmm.bic(Xs))
+        scores[k] = bic
+        if bic < best_bic:
+            best_k, best_bic, best_model, best_labels = k, bic, gmm, labels
+    return best_k, scores, best_model, best_labels
+
+
+def select_som(
+    Xs: np.ndarray,
+    k_min: int,
+    k_max: int,
+    random_state: int,
+) -> Tuple[int, Dict[int, float], Any, np.ndarray]:
+    """
+    Train a rectangular SOM. Grid size chosen so n_nodes is in [k_min, k_max]
+    and closest to sqrt-range mid. Each node is one regime.
+    """
+    if not HAS_MINISOM:
+        raise ImportError(
+            "minisom is required for SOM clustering. Install with: pip install minisom"
+        )
+
+    # pick a nearly-square grid whose node count lies in [k_min, k_max]
+    target = max(k_min, min(k_max, int(round(np.sqrt(k_min * k_max)))))
+    side = max(2, int(round(np.sqrt(target))))
+    n_nodes = side * side
+    while n_nodes > k_max and side > 2:
+        side -= 1
+        n_nodes = side * side
+    while n_nodes < k_min:
+        side += 1
+        n_nodes = side * side
+
+    som = MiniSom(
+        side, side, Xs.shape[1],
+        sigma=1.0, learning_rate=0.5,
+        random_seed=random_state,
+    )
+    som.random_weights_init(Xs)
+    n_iter = min(1000, max(100, len(Xs) // 10))
+    som.train_random(Xs, n_iter, verbose=False)
+
+    # map each sample to a flat node id
+    winners = np.array([som.winner(x) for x in Xs])
+    labels = winners[:, 0] * side + winners[:, 1]
+
+    # silhouette for reporting (not for selection)
+    score = float(silhouette_score(Xs, labels)) if len(np.unique(labels)) > 1 else -1.0
+    scores = {n_nodes: score}
+    return n_nodes, scores, som, labels
 
 
 def extract_medoids(
@@ -197,12 +310,9 @@ def extract_medoids(
     timestamps: np.ndarray,
     n_medoids: int = 8,
 ) -> Dict[int, List]:
-    """
-    For each cluster return the n_medoids timestamps closest to the centroid.
-    """
+    """For each cluster return the n_medoids timestamps closest to the centroid."""
     medoids = {}
-    unique = np.unique(labels)
-    for c in unique:
+    for c in np.unique(labels):
         mask = labels == c
         pts = Xs[mask]
         ts = timestamps[mask]
@@ -224,52 +334,45 @@ def run_clustering_for_variable(
     k_max: int = 8,
     n_medoids: int = 8,
     random_state: int = 42,
+    cluster_method: str = "gmm",
+    pca_variance: Optional[float] = 0.95,
 ) -> Dict[str, Any]:
     """
     Full pipeline for one variable.
-    Returns a rich dictionary ready for serialisation.
+    cluster_method: 'kmeans' | 'gmm' | 'som'
+    pca_variance: fraction of variance to keep (None = skip PCA)
     """
-    # drop pure helper columns
-    feature_cols = [c for c in feat_df.columns if c not in ("n_stations",)]
-    X = np.array(feat_df[feature_cols].to_numpy(dtype=float), copy=True)
+    X, feature_cols = _prepare_matrix(feat_df)
+    Xs, scaler, pca = _scale_and_pca(X, pca_variance=pca_variance, random_state=random_state)
 
-    # robust imputation: column median, fall back to 0 if whole column is NaN
-    for j in range(X.shape[1]):
-        col = X[:, j]
-        med = np.nanmedian(col)
-        if not np.isfinite(med):
-            med = 0.0
-        nan_mask = ~np.isfinite(col)
-        if nan_mask.any():
-            col[nan_mask] = med
-            X[:, j] = col
+    method = cluster_method.lower()
+    if method == "kmeans":
+        best_k, scores, model, labels = select_kmeans(Xs, k_min, k_max, random_state)
+        score_name = "silhouette_scores"
+        best_score_key = "best_silhouette"
+        best_score_val = scores.get(best_k, float("nan"))
+    elif method == "gmm":
+        best_k, scores, model, labels = select_gmm(Xs, k_min, k_max, random_state)
+        score_name = "bic_scores"
+        best_score_key = "best_bic"
+        best_score_val = scores.get(best_k, float("nan"))
+    elif method == "som":
+        best_k, scores, model, labels = select_som(Xs, k_min, k_max, random_state)
+        score_name = "silhouette_scores"
+        best_score_key = "best_silhouette"
+        best_score_val = scores.get(best_k, float("nan"))
+    else:
+        raise ValueError(f"Unknown cluster_method '{cluster_method}'. Use kmeans|gmm|som")
 
-    # drop constant / all-zero-variance columns (break StandardScaler & KMeans)
-    keep = np.std(X, axis=0) > 1e-12
-    if not keep.all():
-        dropped = [c for c, k in zip(feature_cols, keep) if not k]
-        if dropped:
-            print(f"  dropping constant/empty features: {dropped}")
-        feature_cols = [c for c, k in zip(feature_cols, keep) if k]
-        X = X[:, keep]
-
-    if X.shape[1] == 0:
-        raise RuntimeError(f"No usable features left for variable '{var}'")
-
-    best_k, sil_scores, model, scaler = select_k_by_silhouette(
-        X, k_min=k_min, k_max=k_max, random_state=random_state
-    )
-    Xs = scaler.transform(X)
-    labels = model.predict(Xs)
-
+    labels = np.asarray(labels, dtype=int)
     timestamps = feat_df.index.to_numpy()
     medoids = extract_medoids(Xs, labels, timestamps, n_medoids=n_medoids)
 
-    # distances to assigned centroid
+    # distance to assigned centroid (in the space used for clustering)
     dists = np.zeros(len(labels))
     for c in np.unique(labels):
         mask = labels == c
-        centroid = model.cluster_centers_[c]
+        centroid = Xs[mask].mean(axis=0)
         dists[mask] = np.linalg.norm(Xs[mask] - centroid, axis=1)
 
     assignments = pd.DataFrame({
@@ -280,40 +383,40 @@ def run_clustering_for_variable(
         "n_stations": feat_df["n_stations"].to_numpy(),
     })
 
-    # per-cluster feature statistics
     cluster_stats = {}
     for c in sorted(np.unique(labels)):
         mask = labels == c
-        stats = {
+        cluster_stats[int(c)] = {
             "size": int(mask.sum()),
-            "mean_dist": float(dists[mask].mean()),
+            "mean_dist": float(dists[mask].mean()) if mask.any() else float("nan"),
             "feature_means": {
-                col: float(feat_df[col].iloc[mask].mean())
-                for col in feature_cols
+                col: float(feat_df[col].iloc[mask].mean()) for col in feature_cols
             },
             "feature_stds": {
-                col: float(feat_df[col].iloc[mask].std())
-                for col in feature_cols
+                col: float(feat_df[col].iloc[mask].std()) for col in feature_cols
             },
-            "medoids": [str(t) for t in medoids[int(c)]],
+            "medoids": [str(t) for t in medoids.get(int(c), [])],
         }
-        cluster_stats[int(c)] = stats
 
     summary = {
         "variable": var,
+        "cluster_method": method,
+        "pca_variance": pca_variance,
+        "n_pca_components": int(Xs.shape[1]) if pca is not None else None,
         "n_timestamps": len(feat_df),
         "best_k": int(best_k),
-        "silhouette_scores": {int(k): float(v) for k, v in sil_scores.items()},
-        "best_silhouette": float(sil_scores[best_k]),
+        score_name: {int(k): float(v) for k, v in scores.items()},
+        best_score_key: float(best_score_val) if np.isfinite(best_score_val) else None,
         "feature_columns": feature_cols,
         "cluster_stats": cluster_stats,
         "n_medoids_requested": n_medoids,
     }
 
-    # attach labels to feature matrix for later analysis
     feat_out = feat_df.copy()
     feat_out["cluster_id"] = labels
     feat_out["dist_to_centroid"] = dists
+
+    print(f"  method={method}  best_k={best_k}  {best_score_key}={best_score_val:.4g}")
 
     return {
         "assignments": assignments,
@@ -322,4 +425,5 @@ def run_clustering_for_variable(
         "medoids": medoids,
         "model": model,
         "scaler": scaler,
+        "pca": pca,
     }

@@ -138,6 +138,16 @@ def get_plots_root() -> Path:
     return DATA_ROOT / "Plots"
 
 
+def get_clusters_plot_dir(resolution: str = "half_hourly") -> Path:
+    """
+    Comparison plots for regime clustering.
+    Example: .../Plots/Clusters/half_hourly
+    """
+    d = get_plots_root() / "Clusters" / resolution
+    ensure_dir(d)
+    return d
+
+
 def get_method_plot_dir(method: str, domain: str = "full") -> Path:
     return get_plots_root() / method / domain
 
