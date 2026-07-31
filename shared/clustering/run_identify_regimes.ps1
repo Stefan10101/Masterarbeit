@@ -5,11 +5,11 @@
 
 # Clustering is method-agnostic: run once, write into every method folder
 $methods        = @("IDW", "BSS", "RFSI")
-$resolution     = "seasonal"
+$resolution     = "halfhourly"
 $kMin           = 2
-$kMax           = 12
+$kMax           = 20
 $nMedoids       = 42
-$clusterMethod  = "som"       # kmeans | gmm | som
+$clusterMethod  = "gmm"       # kmeans | gmm | som
 $pcaVariance    = 0.95        # 0 = disable PCA
 
 $scriptPath  = "identify_regimes.py"
