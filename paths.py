@@ -72,6 +72,28 @@ def get_clusters_dir(method: str) -> Path:
     return get_method_output_dir(method) / "clusters"
 
 
+def get_medoids_path(method: str, resolution: str, cluster_method: str, variable: str) -> Path:
+    """Path to the medoids parquet produced by identify_regimes."""
+    return get_clusters_dir(method) / resolution / cluster_method / f"{variable}_medoids.parquet"
+
+
+def get_cluster_params_dir(method: str, resolution: str, cluster_method: str) -> Path:
+    """
+    Directory for free-parameter files trained on cluster medoids.
+    Example: .../IDW/Output/cluster_params/half_hourly/gmm
+    """
+    d = get_method_output_dir(method) / "cluster_params" / resolution / cluster_method
+    ensure_dir(d)
+    return d
+
+
+def get_cluster_params_path(
+    method: str, resolution: str, cluster_method: str, variable: str
+) -> Path:
+    """Path to the per-variable cluster-parameter parquet."""
+    return get_cluster_params_dir(method, resolution, cluster_method) / f"{variable}_params.parquet"
+
+
 def get_stations_dir(method: str) -> Path:
     return get_method_output_dir(method) / "stations"
 
@@ -195,18 +217,48 @@ def get_map_output_dir(method: str, domain: str, resolution: int, variable: str)
     ensure_dir(d)
     return d
 
-def get_interpolated_map_path(method: str, domain: str, variable: str, resolution: int,
-                              start_date: str = None, end_date: str = None) -> Path:
+def get_interpolated_map_path(
+    method: str,
+    domain: str,
+    variable: str,
+    resolution: int,
+    start_date: str = None,
+    end_date: str = None,
+    time_resolution: str = None,
+) -> Path:
     """Path to the multi-timestep interpolated NetCDF.
     When start_date/end_date are given they are embedded in the filename
-    so different periods never collide.
+    so different periods never collide. Optional time_resolution is also
+    embedded when provided.
     """
     d = get_method_output_dir(method) / "interpolated_maps" / domain / f"res_{resolution}m" / variable
     ensure_dir(d)
+    parts = [variable, f"{resolution}m"]
+    if time_resolution:
+        parts.append(time_resolution)
     if start_date and end_date:
-        tag = f"{start_date.replace('-', '')}-{end_date.replace('-', '')}"
-        return d / f"{variable}_{resolution}m_{tag}.nc"
-    return d / f"{variable}_{resolution}m.nc"
+        parts.append(f"{start_date.replace('-', '')}-{end_date.replace('-', '')}")
+    return d / ("_".join(parts) + ".nc")
+
+
+def get_llocv_path(
+    method: str,
+    domain: str,
+    variable: str,
+    resolution: int,
+    start_date: str = None,
+    end_date: str = None,
+    time_resolution: str = None,
+) -> Path:
+    """Path to the leave-one-out CV predictions parquet."""
+    d = get_method_output_dir(method) / "llocv" / domain / f"res_{resolution}m" / variable
+    ensure_dir(d)
+    parts = [variable, f"{resolution}m"]
+    if time_resolution:
+        parts.append(time_resolution)
+    if start_date and end_date:
+        parts.append(f"{start_date.replace('-', '')}-{end_date.replace('-', '')}")
+    return d / ("_".join(parts) + "_llocv.parquet")
 
 def get_map_png_path(method: str, domain: str, resolution: int,
                      variable: str, time_label: str) -> Path:

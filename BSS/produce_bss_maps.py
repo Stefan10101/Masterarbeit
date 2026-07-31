@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 """
 produce_bss_maps.py
-Main production script for BSS and BSSE interpolation.
-Uses the central paths.py for all file locations.
+BSS/BSSE production using pre-trained cluster parameters.
+
+Fixes vs previous version:
+  - all timesteps are processed (no random half-hourly sample)
+  - NetCDF written via get_interpolated_map_path
+  - tau_d / tau_e / n_segments stored correctly
+  - master grid preferred over legacy domain grid
+  - elev column aliases handled
+  - fixed domain bounds for the knot grid
 """
+
+from __future__ import annotations
+
 from pathlib import Path
 import sys
+import gc
 import pandas as pd
 import numpy as np
 import yaml
@@ -13,29 +24,28 @@ import xarray as xr
 from datetime import datetime
 from tqdm import tqdm
 from joblib import Parallel, delayed
-import random
 import warnings
 
 warnings.filterwarnings("ignore")
 
-# ============================================================
-# IMPORT CENTRAL PATHS
-# ============================================================
-# Add CODE folder to path so we can import paths.py
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from paths import (
     get_aggregated_data_path,
+    get_cluster_params_path,
+    get_clusters_dir,
     get_domain_stations_path,
+    get_interpolated_map_path,
+    get_master_grid_path,
     get_domain_grid_path,
-    get_map_output_path,
+)
+from bss_core import (
+    create_knot_grid,
+    fit_bss,
+    fit_bsse,
+    predict_surface,
+    predict_bsse,
 )
 
-from bss_core import optimize_bss_gcv, predict_surface, predict_bsse
-
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
 
@@ -50,199 +60,356 @@ RESOLUTIONS = cfg["resolutions_to_process"]
 N_JOBS = cfg.get("n_jobs", -1)
 BSS_METHOD = cfg["bss"]["method"]
 NON_NEGATIVE_VARS = cfg["bss"].get("non_negative_vars", [])
-SEGMENT_RANGE = range(cfg["bss"]["segment_min"], cfg["bss"]["segment_max"] + 1, cfg["bss"]["segment_step"])
+CLUSTER_METHOD = cfg.get("cluster_method", "gmm")
+MIN_STATIONS = cfg.get("min_stations_per_field", 10)
 
-# Tau handling (supports both old tau_search and new separate tau_d/tau_e)
-TAU_VALUES = cfg["bss"].get("tau_search")
-TAU_D_VALUES = cfg["bss"].get("tau_d_search") or TAU_VALUES
-TAU_E_VALUES = cfg["bss"].get("tau_e_search") or TAU_VALUES
+COL_TO_CANONICAL = {
+    "temp_mean": "temperature",
+    "temp_min": "temperature",
+    "temp_max": "temperature",
+    "precip_sum": "precipitation",
+    "wind_mean": "wind_speed",
+    "wind_max": "wind_speed",
+    "rh_mean": "relative_humidity",
+    "snow_mean": "snow_height",
+    "snow_max": "snow_height",
+    "snow_min": "snow_height",
+}
+
+FALLBACK_PARAMS = {
+    "n_segments": 10,
+    "tau_d": 0.1,
+    "tau_e": 0.1,
+    "gcv": np.nan,
+    "effective_df": np.nan,
+}
+
+
+def domain_bounds(cfg: dict, domain: str) -> tuple:
+    domain_cfg = cfg.get("domain", {})
+    buffer_m = float(domain_cfg.get("buffer_m", 15000))
+    predefined = cfg.get("predefined_bboxes", {})
+    custom = domain_cfg.get("custom_bbox", [100000, 275000, 395000, 400000])
+    bbox = predefined.get(domain, custom)
+    xmin, ymin, xmax, ymax = [float(v) for v in bbox]
+    x_range = xmax - xmin
+    y_range = ymax - ymin
+    margin = 0.06
+    return (
+        xmin - buffer_m - x_range * margin,
+        xmax + buffer_m + x_range * margin,
+        ymin - buffer_m - y_range * margin,
+        ymax + buffer_m + y_range * margin,
+    )
 
 
 def load_aggregated_data() -> pd.DataFrame:
-    """Load aggregated station data using central paths."""
     file_path = get_aggregated_data_path("BSS", TIME_RES)
-
     if not file_path.exists():
-        raise FileNotFoundError(
-            f"Aggregated file not found: {file_path}\n"
-            f"Expected: BSS/Output/aggregated/{TIME_RES}_station_data.parquet"
-        )
-
+        raise FileNotFoundError(f"Aggregated file not found: {file_path}")
     df = pd.read_parquet(file_path)
-    time_col = df.columns[1]
+
+    time_candidates = ["timestamp", "time", "date", "year_week", "year_month"]
+    time_col = next((c for c in time_candidates if c in df.columns), df.columns[1])
 
     if TIME_RES == "weekly":
-        df["time"] = pd.to_datetime(df[time_col] + "-1", format="%Y-W%W-%w")
+        df["time"] = pd.to_datetime(
+            df[time_col].astype(str) + "-1", format="%Y-W%W-%w", utc=True
+        )
+    elif TIME_RES == "monthly":
+        df["time"] = pd.to_datetime(df[time_col].astype(str) + "-01", utc=True)
     else:
-        df["time"] = pd.to_datetime(df[time_col])
+        df["time"] = pd.to_datetime(df[time_col], utc=True)
 
-    df = df[(df["time"] >= START_DATE) & (df["time"] <= END_DATE)]
-    return df
+    start = START_DATE if START_DATE.tzinfo else START_DATE.tz_localize("UTC")
+    end = END_DATE if END_DATE.tzinfo else END_DATE.tz_localize("UTC")
+    return df[(df["time"] >= start) & (df["time"] <= end)]
+
+
+def load_stations() -> pd.DataFrame:
+    path = get_domain_stations_path("BSS", DOMAIN)
+    stations = pd.read_parquet(path)
+    rename = {}
+    if "elev" not in stations.columns and "elev_dem" in stations.columns:
+        rename["elev_dem"] = "elev"
+    if "elev" not in stations.columns and "hoehe" in stations.columns:
+        rename["hoehe"] = "elev"
+    if rename:
+        stations = stations.rename(columns=rename)
+    return stations
+
+
+def load_cluster_assignments(canonical_var: str) -> pd.Series:
+    path = (
+        get_clusters_dir("BSS") / TIME_RES / CLUSTER_METHOD
+        / f"{canonical_var}_assignments.parquet"
+    )
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Cluster assignments not found: {path}\n"
+            f"Run identify_regimes.py with --method BSS first."
+        )
+    df = pd.read_parquet(path, columns=["timestamp", "cluster_id"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    return df.set_index("timestamp")["cluster_id"]
+
+
+def load_cluster_params(canonical_var: str) -> dict:
+    path = get_cluster_params_path("BSS", TIME_RES, CLUSTER_METHOD, canonical_var)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Cluster parameters not found: {path}\n"
+            f"Run train_cluster_params.py first."
+        )
+    df = pd.read_parquet(path)
+    out = {}
+    for _, row in df.iterrows():
+        out[int(row["cluster_id"])] = {
+            "n_segments": int(row["n_segments"]),
+            "tau_d": float(row["tau_d"]),
+            "tau_e": float(row["tau_e"]),
+            "gcv": float(row["gcv"]) if pd.notna(row["gcv"]) else np.nan,
+            "effective_df": float(row["effective_df"]) if pd.notna(row["effective_df"]) else np.nan,
+        }
+    return out
+
+
+def load_grid(res: int):
+    """Prefer master grid; fall back to legacy domain grid."""
+    master = get_master_grid_path("BSS", res)
+    if master.exists():
+        grid = xr.open_dataset(master)
+        if "mask" in grid:
+            mask = grid["mask"].values.astype(bool)
+        else:
+            mask = np.isfinite(grid["elev"].values)
+        return grid, mask
+
+    legacy = get_domain_grid_path("BSS", DOMAIN, res)
+    if legacy.exists():
+        grid = xr.open_dataset(legacy)
+        mask = grid["mask"].values.astype(bool)
+        return grid, mask
+
+    raise FileNotFoundError(
+        f"No grid found for BSS @ {res}m\n  tried: {master}\n  tried: {legacy}"
+    )
 
 
 def process_one_time_step(args):
-    t, df_t, var, target_coords, target_elev, method = args
+    (t, df_t, var, target_coords, target_elev, mask,
+     bounds, params, bss_method) = args
+
     if len(df_t) < 5:
         return None
 
-    station_coords = df_t[["x", "y"]].values
+    station_coords = df_t[["x", "y"]].values.astype(float)
     station_values = df_t[var].values.astype(float)
-    station_elev = df_t["elev"].values.astype(float) if method == "bsse" else None
+    station_elev = df_t["elev"].values.astype(float)
 
-    # === ROBUST KNOT GRID BOUNDS ===
-    # Use union of stations + target grid points + buffer.
-    # This guarantees both fitting and prediction points are inside the knot grid.
-    if len(station_coords) > 0 and len(target_coords) > 0:
-        all_x = np.concatenate([station_coords[:, 0], target_coords[:, 0]])
-        all_y = np.concatenate([station_coords[:, 1], target_coords[:, 1]])
-        buffer = 0.06  # 6% buffer - adjust if needed
-        x_range = all_x.max() - all_x.min()
-        y_range = all_y.max() - all_y.min()
-        xmin = all_x.min() - x_range * buffer
-        xmax = all_x.max() + x_range * buffer
-        ymin = all_y.min() - y_range * buffer
-        ymax = all_y.max() + y_range * buffer
+    n_seg = int(params["n_segments"])
+    tau_d = float(params["tau_d"])
+    tau_e = float(params["tau_e"])
+    xmin, xmax, ymin, ymax = bounds
+
+    knot_x, knot_y = create_knot_grid(xmin, xmax, ymin, ymax, n_seg)
+
+    if bss_method == "bsse":
+        result = fit_bsse(
+            station_values, station_coords, station_elev,
+            knot_x, knot_y, tau_d=tau_d, tau_e=tau_e,
+        )
+        interp_1d = predict_bsse(
+            result["d"], result["e"], target_coords, target_elev, knot_x, knot_y
+        )
     else:
-        # Fallback (should rarely happen)
-        xmin, xmax, ymin, ymax = target_coords[:, 0].min(), target_coords[:, 0].max(), \
-                                 target_coords[:, 1].min(), target_coords[:, 1].max()
-
-    result = optimize_bss_gcv(
-        station_values=station_values,
-        station_coords=station_coords,
-        station_elev=station_elev,
-        xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax,
-        segment_range=SEGMENT_RANGE,
-        tau_d_values=TAU_D_VALUES,
-        tau_e_values=TAU_E_VALUES,
-        method=method
-    )
-
-    d = result["d"]
-    knot_x = result["knot_x"]
-    knot_y = result["knot_y"]
-
-    if method == "bsse":
-        e = result["e"]
-        interp_1d = predict_bsse(d, e, target_coords, target_elev, knot_x, knot_y)
-    else:
-        interp_1d = predict_surface(d, target_coords, knot_x, knot_y)
+        result = fit_bss(
+            station_values, station_coords, knot_x, knot_y, tau_d, tau_d
+        )
+        interp_1d = predict_surface(result["d"], target_coords, knot_x, knot_y)
 
     if var in NON_NEGATIVE_VARS:
         interp_1d = np.clip(interp_1d, 0, None)
 
-    best = result.get("best_params", {})
     return {
         "time": t,
         "data": interp_1d,
-        "n_segments": best.get("n_segments", np.nan),
-        "tau": best.get("tau", np.nan),
-        "gcv": result.get("gcv", np.nan),
-        "effective_df": result.get("effective_df", np.nan),
+        "n_segments": n_seg,
+        "tau_d": tau_d,
+        "tau_e": tau_e,
+        "gcv": float(result.get("gcv", params.get("gcv", np.nan))),
+        "effective_df": float(result.get("effective_df", params.get("effective_df", np.nan))),
+        "cluster_id": int(params.get("cluster_id", -1)),
     }
 
 
 def main():
-    print("=" * 85)
-    print(f"BSS/BSSE Thesis Production | Domain: {DOMAIN} | Method: {BSS_METHOD.upper()}")
+    print("=" * 80)
+    print(f"BSS/BSSE Production (cluster params) | {DOMAIN} | {BSS_METHOD.upper()}")
     print(f"Time resolution: {TIME_RES} | Period: {START_DATE.date()} → {END_DATE.date()}")
-    print("=" * 85)
+    print(f"cluster_method={CLUSTER_METHOD}")
+    print("=" * 80)
 
     station_data = load_aggregated_data()
-    stations_path = get_domain_stations_path("BSS", DOMAIN)
-    stations = pd.read_parquet(stations_path)
+    stations = load_stations()
+    bounds = domain_bounds(cfg, DOMAIN)
+    print(f"Knot bounds: {tuple(round(v, 1) for v in bounds)}")
+
+    assignment_cache = {}
+    params_cache = {}
 
     for res in RESOLUTIONS:
         print(f"\n{'='*70}\nRESOLUTION: {res} m")
 
-        grid_path = get_domain_grid_path("BSS", DOMAIN, res)
-        if not grid_path.exists():
-            print(f"  Grid not found for {res}m — skipping")
+        try:
+            grid, mask = load_grid(res)
+        except FileNotFoundError as e:
+            print(f"  {e}")
             continue
 
-        grid = xr.open_dataset(grid_path)
+        yy, xx = np.where(mask)
         target_coords = np.column_stack([
-            grid["x"].values[np.where(grid["mask"])[1]],
-            grid["y"].values[np.where(grid["mask"])[0]]
+            grid["x"].values[xx],
+            grid["y"].values[yy],
         ])
-        target_elev = grid["elev"].values[grid["mask"].values]
+        target_elev = grid["elev"].values[mask]
+        print(f"  Valid target cells: {len(target_coords):,}")
 
         for var in ["precip_sum", "temp_mean", "temp_min", "temp_max",
-                    "wind_mean", "wind_max", "rh_mean", "snow_mean", "snow_max", "snow_min"]:
-
+                    "wind_mean", "wind_max", "rh_mean",
+                    "snow_mean", "snow_max", "snow_min"]:
             if var not in station_data.columns:
                 continue
 
-            out_file = get_map_output_path("BSS", DOMAIN, var, res, TIME_RES)
-            if out_file.exists():
-                print(f"  Skipping {var} @ {res}m (already exists)")
+            canonical = COL_TO_CANONICAL.get(var)
+            if canonical is None:
+                print(f"  [SKIP] no cluster mapping for {var}")
                 continue
 
-            print(f"\n>>> {var} ({BSS_METHOD})")
+            if canonical not in assignment_cache:
+                try:
+                    assignment_cache[canonical] = load_cluster_assignments(canonical)
+                    params_cache[canonical] = load_cluster_params(canonical)
+                    print(
+                        f"  loaded clusters for {canonical}: "
+                        f"{len(params_cache[canonical])} clusters, "
+                        f"{len(assignment_cache[canonical]):,} assignments"
+                    )
+                except FileNotFoundError as e:
+                    print(f"  [SKIP] {var}: {e}")
+                    continue
+
+            assignments = assignment_cache[canonical]
+            cluster_params = params_cache[canonical]
+
+            out_file = get_interpolated_map_path(
+                "BSS", DOMAIN, var, res,
+                start_date=str(START_DATE.date()),
+                end_date=str(END_DATE.date()),
+                time_resolution=TIME_RES,
+            )
+            if out_file.exists():
+                print(f"  Skipping (exists): {out_file.name}")
+                continue
+
+            print(f"\n>>> {var}  (cluster var={canonical})")
 
             valid = station_data[["station_name", "time", var]].dropna()
             valid = valid.merge(
                 stations[["station_name", "x", "y", "elev"]],
-                on="station_name", how="left"
-            ).dropna(subset=["x", "y", "elev"])
+                on="station_name", how="left",
+            ).dropna(subset=["x", "y", "elev", var])
 
-            if len(valid) < cfg.get("min_stations_per_field", 10):
-                print(f"  Too few stations — skipping")
+            if len(valid) < MIN_STATIONS:
+                print("  Too few stations — skipping")
                 continue
 
             time_steps = sorted(valid["time"].unique())
+            tasks = []
+            n_fallback = 0
+            for t in time_steps:
+                cid = None
+                if t in assignments.index:
+                    cid = int(assignments.loc[t])
+                else:
+                    diffs = (assignments.index - t).abs()
+                    if len(diffs) and diffs.min() <= pd.Timedelta("1min"):
+                        cid = int(assignments.iloc[diffs.argmin()])
 
-            if TIME_RES in ["half_hourly", "day", "night"]:
-                sample_n = cfg["loocv"].get("half_hourly_sample_n", 5)
-                sample_times = random.sample(list(time_steps), min(sample_n, len(time_steps)))
-                tasks = [(t, valid[valid["time"] == t], var, target_coords, target_elev, BSS_METHOD)
-                         for t in sample_times]
-            else:
-                tasks = [(t, valid[valid["time"] == t], var, target_coords, target_elev, BSS_METHOD)
-                         for t in time_steps]
+                if cid is not None and cid in cluster_params:
+                    params = dict(cluster_params[cid])
+                    params["cluster_id"] = cid
+                else:
+                    params = dict(FALLBACK_PARAMS)
+                    params["cluster_id"] = -1
+                    n_fallback += 1
+
+                tasks.append(
+                    (t, valid[valid["time"] == t], var,
+                     target_coords, target_elev, mask,
+                     bounds, params, BSS_METHOD)
+                )
+
+            if n_fallback:
+                print(
+                    f"  warning: {n_fallback}/{len(time_steps)} timesteps "
+                    f"used fallback params"
+                )
 
             results = Parallel(n_jobs=N_JOBS)(
-                delayed(process_one_time_step)(task) for task in tqdm(tasks, desc=f"  {var}", leave=False)
+                delayed(process_one_time_step)(task)
+                for task in tqdm(tasks, desc=f"  {var}", leave=False)
             )
             results = [r for r in results if r is not None]
-
             if not results:
                 continue
 
-            n_y, n_x = grid["mask"].shape
+            n_y, n_x = mask.shape
             data_3d = np.full((len(results), n_y, n_x), np.nan, dtype=np.float32)
-            for i, res_dict in enumerate(results):
-                data_3d[i][grid["mask"].values] = res_dict["data"]
-
-            times = [r["time"] for r in results]
+            for i, r in enumerate(results):
+                data_3d[i][mask] = r["data"]
 
             ds = xr.Dataset(
                 {var: (("time", "y", "x"), data_3d)},
-                coords={"time": times, "y": grid["y"].values, "x": grid["x"].values}
+                coords={
+                    "time": [r["time"] for r in results],
+                    "y": grid["y"].values,
+                    "x": grid["x"].values,
+                },
             )
+            if "elev" in grid:
+                ds["elev"] = (("y", "x"), grid["elev"].values.astype(np.float32))
 
-            ds["n_segments"] = ("time", [r["n_segments"] for r in results])
-            ds["tau"] = ("time", [r["tau"] for r in results])
-            ds["gcv"] = ("time", [r["gcv"] for r in results])
-            ds["effective_df"] = ("time", [r["effective_df"] for r in results])
+            for key in ["n_segments", "tau_d", "tau_e", "gcv", "effective_df", "cluster_id"]:
+                ds[key] = ("time", [r[key] for r in results])
 
             ds.attrs.update({
                 "title": f"{var} - {TIME_RES} - {DOMAIN} - {BSS_METHOD.upper()}",
                 "domain": DOMAIN,
                 "time_resolution": TIME_RES,
-                "resolution_m": res,
+                "resolution_m": int(res),
                 "method": f"Bilinear Surface Smoothing ({BSS_METHOD})",
-                "created": datetime.now().isoformat(),
+                "method_full": f"BSS/BSSE with cluster-based free parameters",
+                "cluster_method": CLUSTER_METHOD,
+                "start_date": str(START_DATE.date()),
+                "end_date": str(END_DATE.date()),
+                "crs": "EPSG:31287",
                 "primary_validation": "gcv",
                 "non_negative_clipping_applied": int(var in NON_NEGATIVE_VARS),
+                "created": datetime.now().isoformat(),
             })
 
             ds.to_netcdf(out_file, engine="netcdf4")
             print(f"  Saved: {out_file.name} ({len(results)} timesteps)")
+            del data_3d, ds, results, tasks
+            gc.collect()
 
-    print("\n" + "=" * 85)
+        grid.close()
+        gc.collect()
+
+    print("\n" + "=" * 80)
     print("BSS/BSSE Production finished successfully.")
-    print("=" * 85)
+    print("=" * 80)
 
 
 if __name__ == "__main__":

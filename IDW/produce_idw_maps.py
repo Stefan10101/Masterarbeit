@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
 produce_idw_maps.py
-Modified IDW production – fully patched:
-- time_resolution in output filenames
-- true LLOCV parquet
-- richer NC attrs + elev
-- memory cleanup
+Modified IDW production using pre-trained cluster parameters.
+
+Flow:
+  1. Load cluster assignments + per-cluster free parameters
+     (produced by train_cluster_params.py).
+  2. For every timestep look up its cluster_id → (p, Fz, k).
+  3. Interpolate with those fixed parameters (no per-timestep LOOCV).
+  4. Optionally still write leave-one-out predictions for validation.
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 import sys
@@ -19,7 +24,6 @@ from datetime import datetime
 from tqdm import tqdm
 from joblib import Parallel, delayed
 from sklearn.neighbors import KDTree
-import random
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -27,13 +31,15 @@ warnings.filterwarnings("ignore")
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from paths import (
     get_aggregated_data_path,
+    get_cluster_params_path,
+    get_clusters_dir,
     get_domain_stations_path,
-    get_master_grid_path,
     get_interpolated_map_path,
     get_llocv_path,
+    get_master_grid_path,
 )
 from idw_core import modified_idw, get_valid_targets
-from loocv_optimizer import optimize_idw_params_loocv, loocv_predictions
+from loocv_optimizer import loocv_predictions
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
@@ -48,8 +54,27 @@ END_DATE = pd.to_datetime(cfg["end_date"])
 RESOLUTIONS = cfg["resolutions_to_process"]
 PRIMARY_METRIC = cfg.get("primary_metric", "rmse")
 N_JOBS = cfg.get("n_jobs", -1)
-HALFHOURLY_SAMPLE_N = cfg.get("loocv", {}).get("half_hourly_sample_n", 10)
 SAVE_LLOCV = bool(cfg.get("idw", {}).get("save_llocv", cfg.get("save_llocv", True)))
+CLUSTER_METHOD = cfg.get("cluster_method", "gmm")
+MIN_STATIONS = cfg.get("min_stations_per_field", 10)
+
+# Aggregated column → canonical clustering variable
+COL_TO_CANONICAL = {
+    "temp_mean": "temperature",
+    "temp_min": "temperature",
+    "temp_max": "temperature",
+    "precip_sum": "precipitation",
+    "wind_mean": "wind_speed",
+    "wind_max": "wind_speed",
+    "rh_mean": "relative_humidity",
+    "snow_mean": "snow_height",
+    "snow_max": "snow_height",
+    "snow_min": "snow_height",
+}
+
+# Fallback parameters if a cluster is missing (should not happen after training)
+FALLBACK_PARAMS = {"p": 2.0, "Fz": 0.3, "k": 12,
+                   "rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan}
 
 
 def get_param_group(res_m: int) -> str:
@@ -67,45 +92,75 @@ def load_aggregated_data() -> pd.DataFrame:
     df = pd.read_parquet(file_path)
     time_col = df.columns[1]
     if TIME_RES == "weekly":
-        df["time"] = pd.to_datetime(df[time_col] + "-1", format="%Y-W%W-%w")
+        df["time"] = pd.to_datetime(df[time_col] + "-1", format="%Y-W%W-%w", utc=True)
     elif TIME_RES == "monthly":
-        df["time"] = pd.to_datetime(df[time_col] + "-01")
+        df["time"] = pd.to_datetime(df[time_col] + "-01", utc=True)
     else:
-        df["time"] = pd.to_datetime(df[time_col])
-    return df[(df["time"] >= START_DATE) & (df["time"] <= END_DATE)]
+        df["time"] = pd.to_datetime(df[time_col], utc=True)
+
+    # make START/END tz-aware for safe comparison
+    start = START_DATE if START_DATE.tzinfo else START_DATE.tz_localize("UTC")
+    end = END_DATE if END_DATE.tzinfo else END_DATE.tz_localize("UTC")
+    return df[(df["time"] >= start) & (df["time"] <= end)]
+
+
+def load_cluster_assignments(canonical_var: str) -> pd.DataFrame:
+    """Return DataFrame with columns [timestamp, cluster_id] for one variable."""
+    path = get_clusters_dir("IDW") / TIME_RES / CLUSTER_METHOD / f"{canonical_var}_assignments.parquet"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Cluster assignments not found: {path}\n"
+            f"Run identify_regimes.py first."
+        )
+    df = pd.read_parquet(path, columns=["timestamp", "cluster_id"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    return df.set_index("timestamp")["cluster_id"]
+
+
+def load_cluster_params(canonical_var: str) -> dict:
+    """
+    Return {cluster_id: {p, Fz, k, rmse, mae, nse, kge}} for one variable.
+    """
+    path = get_cluster_params_path("IDW", TIME_RES, CLUSTER_METHOD, canonical_var)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Cluster parameters not found: {path}\n"
+            f"Run train_cluster_params.py first."
+        )
+    df = pd.read_parquet(path)
+    out = {}
+    for _, row in df.iterrows():
+        out[int(row["cluster_id"])] = {
+            "p": float(row["p"]),
+            "Fz": float(row["Fz"]),
+            "k": int(row["k"]),
+            "rmse": float(row["rmse"]) if pd.notna(row["rmse"]) else np.nan,
+            "mae": float(row["mae"]) if pd.notna(row["mae"]) else np.nan,
+            "nse": float(row["nse"]) if pd.notna(row["nse"]) else np.nan,
+            "kge": float(row["kge"]) if pd.notna(row["kge"]) else np.nan,
+        }
+    return out
 
 
 def process_one_time_step(args):
-    t, df_t, var, target_coords, target_elev, param_group, param_grid = args
+    t, df_t, var, target_coords, target_elev, param_group, params = args
 
     if len(df_t) < 5:
         return None
 
-    if TIME_RES in ["half_hourly", "day", "night"]:
-        all_times = df_t["time"].unique()
-        sample_times = random.sample(list(all_times), min(HALFHOURLY_SAMPLE_N, len(all_times)))
-        sample_df = df_t[df_t["time"].isin(sample_times)]
-        best_params, best_scores = optimize_idw_params_loocv(
-            sample_df, var, param_grid,
-            primary_metric=PRIMARY_METRIC, verbose=False, n_jobs=1,
-        )
-    else:
-        best_params, best_scores = optimize_idw_params_loocv(
-            df_t, var, param_grid,
-            primary_metric=PRIMARY_METRIC, verbose=False, n_jobs=1,
-        )
+    p = float(params["p"])
+    Fz = float(params["Fz"])
+    k = min(int(params["k"]), len(df_t))
 
-    p = float(best_params["p"])
-    Fz = float(best_params["Fz"])
-    k = min(int(best_params["k"]), len(df_t))
-
-    llocv_df = loocv_predictions(df_t, var, p, Fz, k)
-    if len(llocv_df) > 0:
-        llocv_df = llocv_df.copy()
-        llocv_df["time"] = t
-        llocv_df["p"] = p
-        llocv_df["Fz"] = Fz
-        llocv_df["k"] = k
+    llocv_df = None
+    if SAVE_LLOCV:
+        llocv_df = loocv_predictions(df_t, var, p, Fz, k)
+        if len(llocv_df) > 0:
+            llocv_df = llocv_df.copy()
+            llocv_df["time"] = t
+            llocv_df["p"] = p
+            llocv_df["Fz"] = Fz
+            llocv_df["k"] = k
 
     tree = KDTree(df_t[["x", "y"]].values)
     chunk_size = 1_000_000 if param_group != "coarse" else None
@@ -124,24 +179,33 @@ def process_one_time_step(args):
         "time": t,
         "data": interp_1d,
         "p": p, "Fz": Fz, "k": k,
-        "rmse": best_scores.get("rmse", np.nan),
-        "mae": best_scores.get("mae", np.nan),
-        "nse": best_scores.get("nse", np.nan),
-        "kge": best_scores.get("kge", np.nan),
+        "rmse": params.get("rmse", np.nan),
+        "mae": params.get("mae", np.nan),
+        "nse": params.get("nse", np.nan),
+        "kge": params.get("kge", np.nan),
+        "cluster_id": params.get("cluster_id", -1),
         "llocv": llocv_df,
     }
 
 
 def main():
     print("=" * 80)
-    print(f"IDW Production | {DOMAIN} | {TIME_RES}")
-    print(f"Period: {START_DATE.date()} → {END_DATE.date()} | save_llocv={SAVE_LLOCV}")
+    print(f"IDW Production (cluster params) | {DOMAIN} | {TIME_RES}")
+    print(f"Period: {START_DATE.date()} → {END_DATE.date()} | cluster={CLUSTER_METHOD}")
+    print(f"save_llocv={SAVE_LLOCV}")
     print("=" * 80)
 
     station_data = load_aggregated_data()
     stations = pd.read_parquet(get_domain_stations_path("IDW", DOMAIN))
+    if "elev" not in stations.columns:
+        if "elev_dem" in stations.columns:
+            stations = stations.rename(columns={"elev_dem": "elev"})
+        elif "hoehe" in stations.columns:
+            stations = stations.rename(columns={"hoehe": "elev"})
 
-    param_grid = cfg["param_grid"]["power"]
+    # cache assignments + params per canonical variable (load once)
+    assignment_cache = {}
+    params_cache = {}
 
     for res in RESOLUTIONS:
         param_group = get_param_group(res)
@@ -161,6 +225,26 @@ def main():
             if var not in station_data.columns:
                 continue
 
+            canonical = COL_TO_CANONICAL.get(var)
+            if canonical is None:
+                print(f"  [SKIP] no cluster mapping for column {var}")
+                continue
+
+            # load cluster artefacts (cached)
+            if canonical not in assignment_cache:
+                try:
+                    assignment_cache[canonical] = load_cluster_assignments(canonical)
+                    params_cache[canonical] = load_cluster_params(canonical)
+                    print(f"  loaded clusters for {canonical}: "
+                          f"{len(params_cache[canonical])} clusters, "
+                          f"{len(assignment_cache[canonical]):,} assignments")
+                except FileNotFoundError as e:
+                    print(f"  [SKIP] {var}: {e}")
+                    continue
+
+            assignments = assignment_cache[canonical]
+            cluster_params = params_cache[canonical]
+
             out_file = get_interpolated_map_path(
                 "IDW", DOMAIN, var, res,
                 start_date=str(START_DATE.date()),
@@ -171,23 +255,46 @@ def main():
                 print(f"  Skipping (exists): {out_file.name}")
                 continue
 
-            print(f"\n>>> {var}")
+            print(f"\n>>> {var}  (cluster var={canonical})")
 
             valid = station_data[["station_name", "time", var]].dropna()
             valid = valid.merge(
                 stations[["station_name", "x", "y", "elev"]], on="station_name"
             ).dropna(subset=["x", "y", "elev", var])
 
-            if len(valid) < cfg.get("min_stations_per_field", 10):
+            if len(valid) < MIN_STATIONS:
                 print("  Too few stations — skipping")
                 continue
 
             time_steps = sorted(valid["time"].unique())
-            tasks = [
-                (t, valid[valid["time"] == t], var,
-                 target_coords, target_elev, param_group, param_grid)
-                for t in time_steps
-            ]
+            tasks = []
+            n_fallback = 0
+            for t in time_steps:
+                # look up cluster
+                cid = None
+                if t in assignments.index:
+                    cid = int(assignments.loc[t])
+                else:
+                    # nearest assignment within 1 min (tz safety)
+                    diffs = (assignments.index - t).abs()
+                    if len(diffs) and diffs.min() <= pd.Timedelta("1min"):
+                        cid = int(assignments.iloc[diffs.argmin()])
+
+                if cid is not None and cid in cluster_params:
+                    params = dict(cluster_params[cid])
+                    params["cluster_id"] = cid
+                else:
+                    params = dict(FALLBACK_PARAMS)
+                    params["cluster_id"] = -1
+                    n_fallback += 1
+
+                tasks.append(
+                    (t, valid[valid["time"] == t], var,
+                     target_coords, target_elev, param_group, params)
+                )
+
+            if n_fallback:
+                print(f"  warning: {n_fallback}/{len(time_steps)} timesteps used fallback params")
 
             results = Parallel(n_jobs=N_JOBS)(
                 delayed(process_one_time_step)(task)
@@ -227,7 +334,7 @@ def main():
             if elev_2d is not None:
                 ds["elev"] = (("y", "x"), elev_2d)
 
-            for key in ["p", "Fz", "k", "rmse", "mae", "nse", "kge"]:
+            for key in ["p", "Fz", "k", "rmse", "mae", "nse", "kge", "cluster_id"]:
                 ds[key] = ("time", [r[key] for r in results])
 
             ds.attrs.update({
@@ -237,7 +344,8 @@ def main():
                 "variable": var,
                 "resolution_m": int(res),
                 "method": "IDW",
-                "method_full": "Modified IDW with separate XY + Z weighting",
+                "method_full": "Modified IDW with cluster-based free parameters",
+                "cluster_method": CLUSTER_METHOD,
                 "start_date": str(START_DATE.date()),
                 "end_date": str(END_DATE.date()),
                 "crs": "EPSG:31287",

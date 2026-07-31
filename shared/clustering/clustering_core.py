@@ -32,6 +32,13 @@ except ImportError:
 
 import re
 
+# Multiplicative down-weight for pure diurnal features (hour_sin / hour_cos).
+# Keeps seasonal (doy) signal intact while reducing the dominance of time-of-day
+# so that spatial structure (elev_corr, autocorr, …) has more influence.
+# 0.4 is moderate – not aggressive.
+DIURNAL_WEIGHT = 0.4
+DIURNAL_FEATURES = ("hour_sin", "hour_cos")
+
 
 def parse_time_label(t, resolution: str = "half_hourly") -> pd.Timestamp:
     """
@@ -230,7 +237,7 @@ def build_feature_matrix(
 def _prepare_matrix(
     feat_df: pd.DataFrame,
 ) -> Tuple[np.ndarray, List[str]]:
-    """Impute, drop constant columns, return X and remaining feature names."""
+    """Impute, drop constant columns, down-weight diurnal features, return X and names."""
     feature_cols = [c for c in feat_df.columns if c not in ("n_stations",)]
     X = np.array(feat_df[feature_cols].to_numpy(dtype=float), copy=True)
 
@@ -243,6 +250,12 @@ def _prepare_matrix(
         if nan_mask.any():
             col[nan_mask] = med
             X[:, j] = col
+
+    # multiplicative down-weight of pure diurnal features (before std filter)
+    diurnal_idx = [j for j, c in enumerate(feature_cols) if c in DIURNAL_FEATURES]
+    if diurnal_idx:
+        X[:, diurnal_idx] *= DIURNAL_WEIGHT
+        print(f"  diurnal features {list(DIURNAL_FEATURES)} down-weighted by {DIURNAL_WEIGHT}")
 
     keep = np.std(X, axis=0) > 1e-12
     if not keep.all():
@@ -515,6 +528,8 @@ def run_clustering_for_variable(
         score_name: {int(k): float(v) for k, v in scores.items()},
         best_score_key: float(best_score_val) if np.isfinite(best_score_val) else None,
         "feature_columns": feature_cols,
+        "diurnal_weight": DIURNAL_WEIGHT,
+        "diurnal_features": list(DIURNAL_FEATURES),
         "cluster_stats": cluster_stats,
         "n_medoids_requested": n_medoids,
     }
