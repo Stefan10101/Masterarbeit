@@ -22,11 +22,12 @@ predefined_bboxes:
   etsch_valley:    [200000, 220000, 300000, 320000]
   northern_edge:   [80000,  350000, 380000, 480000]
   alpine_foreland: [80000,  380000, 400000, 500000]
-time_resolution: "monthly"                      # weekly | daily | half_hourly | day | night
-start_date: "2021-01-01"
-end_date:   "2021-02-01"
+time_resolution: "monthly"
+start_date: "2020-01-01"
+end_date:   "2025-12-31"
 
-resolutions_to_process: [100]
+resolutions_to_process: [1000]
+cluster_method: "gmm"
 
 bss:
   method: "bsse"                              # "bss" or "bsse"
@@ -47,9 +48,11 @@ bss:
 
 primary_validation: "gcv"
 loocv:
-  enable: false
+  enable: true
   sample_n: 5
   half_hourly_sample_n: 5
+
+overwrite_maps: true
 
 aggregation:
   weekly:
@@ -63,8 +66,8 @@ aggregation:
     time_col: "timestamp"
     add_is_daylight: true
   monthly:
-    freq: "MS"           # Month Start
-    time_col: "date"
+    freq: "ME"
+    time_col: "year_month"
 targets:
   precipitation:
     raw_col: "precipitation"

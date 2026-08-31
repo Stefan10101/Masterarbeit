@@ -6,13 +6,17 @@ Core functions for station projection and grid creation.
 
 import pandas as pd
 import numpy as np
-import rasterio
-from rasterio.warp import reproject, Resampling
 from pyproj import Transformer
 from scipy.spatial import cKDTree
 import xarray as xr
 from pathlib import Path
 from typing import Optional, Tuple
+
+
+def _import_rasterio():
+    import rasterio
+    from rasterio.warp import reproject, Resampling
+    return rasterio, reproject, Resampling
 
 
 def project_stations(
@@ -61,6 +65,8 @@ def create_grid_from_dem(
     """
     if not dem_path.exists():
         raise FileNotFoundError(f"DEM not found: {dem_path}")
+
+    rasterio, reproject, Resampling = _import_rasterio()
 
     with rasterio.open(dem_path) as src:
         nodata = float(src.nodata) if src.nodata is not None else -9999.0
@@ -134,6 +140,103 @@ def build_kdtree(stations: pd.DataFrame) -> cKDTree:
     return cKDTree(coords)
 
 
+def _grid_geometry(ds: xr.Dataset):
+    """Cell-center coords plus pixel size and array shape."""
+    x = np.asarray(ds.x.values)
+    y = np.asarray(ds.y.values)
+    dx = float(x[1] - x[0])
+    dy = float(y[1] - y[0])
+    return x, y, dx, dy, len(y), len(x)
+
+
+def add_landcover_to_grid(
+    ds: xr.Dataset,
+    landcover_path: Path,
+    projected_crs: str = "EPSG:31287",
+    varname: str = "clc",
+) -> xr.Dataset:
+    """
+    Warp CLC onto an existing master grid with nearest-neighbour
+    (categorical). Tries rasterio first, then GDAL.
+    """
+    landcover_path = Path(landcover_path)
+    if not landcover_path.exists():
+        raise FileNotFoundError(f"Landcover not found: {landcover_path}")
+
+    x, y, dx, dy, height, width = _grid_geometry(ds)
+    xmin = float(min(x[0], x[-1]) - abs(dx) / 2.0)
+    xmax = float(max(x[0], x[-1]) + abs(dx) / 2.0)
+    ymin = float(min(y[0], y[-1]) - abs(dy) / 2.0)
+    ymax = float(max(y[0], y[-1]) + abs(dy) / 2.0)
+
+    clc = None
+    backend = None
+    try:
+        rasterio, reproject, Resampling = _import_rasterio()
+        transform = rasterio.transform.Affine.translation(
+            float(x[0]) - dx / 2.0,
+            float(y[0]) - dy / 2.0,
+        ) * rasterio.transform.Affine.scale(dx, dy)
+        with rasterio.open(landcover_path) as src:
+            nodata = src.nodata if src.nodata is not None else 0
+            dest = np.full((height, width), nodata, dtype=np.float32)
+            reproject(
+                source=rasterio.band(src, 1),
+                destination=dest,
+                src_transform=src.transform,
+                src_crs=src.crs,
+                dst_transform=transform,
+                dst_crs=projected_crs,
+                resampling=Resampling.nearest,
+                dst_nodata=nodata,
+            )
+        clc = dest
+        backend = "rasterio"
+    except Exception as err_rio:
+        try:
+            from osgeo import gdal
+            gdal.UseExceptions()
+            warped = gdal.Warp(
+                "",
+                str(landcover_path),
+                format="MEM",
+                dstSRS=projected_crs,
+                outputBounds=(xmin, ymin, xmax, ymax),
+                width=width,
+                height=height,
+                resampleAlg=gdal.GRA_NearestNeighbour,
+            )
+            if warped is None:
+                raise RuntimeError("gdal.Warp returned None")
+            band = warped.GetRasterBand(1)
+            arr = band.ReadAsArray()
+            # GDAL is north-up; flip if our y coordinate increases northward
+            if float(y[1] - y[0]) > 0:
+                arr = np.flipud(arr)
+            clc = np.asarray(arr, dtype=np.float32)
+            backend = "gdal"
+            warped = None
+        except Exception as err_gdal:
+            raise RuntimeError(
+                "Could not warp landcover onto the grid.\n"
+                f"  rasterio: {err_rio}\n"
+                f"  gdal:     {err_gdal}\n"
+                "Run this on the Linux machine if Windows blocks the DLLs."
+            ) from err_gdal
+
+    out = ds.copy()
+    out[varname] = (("y", "x"), clc)
+    out[varname].attrs.update({
+        "long_name": "CORINE land cover class",
+        "source": str(landcover_path),
+        "resampling": "nearest",
+        "backend": backend,
+    })
+    print(f"  added '{varname}' to grid via {backend}  "
+          f"({height} x {width}, unique={int(np.unique(clc).size)})")
+    return out
+
+
 def add_landcover_to_stations(stations: pd.DataFrame, landcover_path: Path) -> pd.DataFrame:
     """Sample landcover values for station locations."""
     if not landcover_path.exists():
@@ -142,6 +245,7 @@ def add_landcover_to_stations(stations: pd.DataFrame, landcover_path: Path) -> p
         return stations
 
     print(f"  Sampling landcover from: {landcover_path.name}")
+    rasterio, _, _ = _import_rasterio()
     with rasterio.open(landcover_path) as src:
         coords = list(zip(stations["x"], stations["y"]))
         values = list(src.sample(coords))

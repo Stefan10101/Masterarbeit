@@ -21,11 +21,12 @@ predefined_bboxes:
   etsch_valley:    [200000, 220000, 300000, 320000]
   northern_edge:   [80000,  350000, 380000, 480000]
   alpine_foreland: [80000,  380000, 400000, 500000]
-time_resolution: "weekly"
-start_date: "2022-03-01"
-end_date:   "2022-04-01"
+time_resolution: "monthly"
+start_date: "2020-01-01"
+end_date:   "2025-12-31"
 
-resolutions_to_process: [2000, 500]
+resolutions_to_process: [1000]
+cluster_method: "gmm"
 
 primary_metric: "rmse"
 

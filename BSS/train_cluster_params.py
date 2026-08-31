@@ -285,14 +285,34 @@ def main():
                   f"(use --force to overwrite)")
             continue
 
-        medoids_path = get_medoids_path(method, resolution, cluster_method, var)
+        import importlib.util as _ilu
+        _sp = CODE_DIR / "shared" / "splits" / "splits.py"
+        _spec = _ilu.spec_from_file_location("thesis_time_splits", _sp)
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        spec = _mod.load_time_splits()
+        dev_start, dev_end = spec["windows"]["dev"]
+        start, end = str(dev_start.date()), str(dev_end.date())
+        dated = get_medoids_path(method, resolution, cluster_method, var, start, end)
+        undated = get_medoids_path(method, resolution, cluster_method, var)
+        medoids_path = dated if dated.exists() else undated
         if not medoids_path.exists():
-            print(f"\n[SKIP] medoids not found: {medoids_path}")
-            print("  Run identify_regimes.py with --method BSS (or COMMON) first.")
+            print(f"\n[SKIP] medoids not found: {dated} or {undated}")
+            print("  Run identify_regimes.py with --method BSS first.")
             continue
 
         medoids = pd.read_parquet(medoids_path)
         medoids["timestamp"] = pd.to_datetime(medoids["timestamp"], utc=True)
+        labels = _mod.label_times(
+            pd.DatetimeIndex(medoids["timestamp"]).tz_convert("UTC").tz_localize(None)
+        )
+        before = len(medoids)
+        medoids = medoids.loc[labels.to_numpy() == "dev"].copy()
+        print(f"  medoids {medoids_path}")
+        print(f"  medoids in DEV: {len(medoids)} / {before}")
+        if medoids.empty:
+            print(f"\n[SKIP] no DEV medoids for {var}")
+            continue
         cluster_ids = sorted(medoids["cluster_id"].unique())
         print(f"\n----- {var} (column={value_col})  {len(cluster_ids)} clusters -----")
 

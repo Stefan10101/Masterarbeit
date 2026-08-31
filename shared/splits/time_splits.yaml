@@ -1,0 +1,26 @@
+# Temporal split used by every method that learns across timestamps.
+# Spatial LLOCV is separate: a held-out station is never in the model.
+#
+# train  – fit candidate models / search forests
+# dev    – choose free parameters
+# test   – numbers reported in the thesis
+#
+# purge_days: drop this many calendar days after each window end before
+# the next window starts. Stops half-hourly autocorrelation leaking across
+# the cut. Leave 0 for monthly / daily / weekly.
+
+timezone: UTC
+
+train:
+  start: "2020-01-01"
+  end:   "2022-12-31"
+
+dev:
+  start: "2023-01-01"
+  end:   "2023-12-31"
+
+test:
+  start: "2024-01-01"
+  end:   "2025-12-31"
+
+purge_days: 0

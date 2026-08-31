@@ -72,9 +72,20 @@ def get_clusters_dir(method: str) -> Path:
     return get_method_output_dir(method) / "clusters"
 
 
-def get_medoids_path(method: str, resolution: str, cluster_method: str, variable: str) -> Path:
+def get_medoids_path(
+    method: str,
+    resolution: str,
+    cluster_method: str,
+    variable: str,
+    start_date: str = None,
+    end_date: str = None,
+) -> Path:
     """Path to the medoids parquet produced by identify_regimes."""
-    return get_clusters_dir(method) / resolution / cluster_method / f"{variable}_medoids.parquet"
+    root = get_clusters_dir(method) / resolution / cluster_method
+    if start_date or end_date:
+        tag = f"{start_date or 'start'}_{end_date or 'end'}".replace("-", "")
+        root = root / tag
+    return root / f"{variable}_medoids.parquet"
 
 
 def get_cluster_params_dir(method: str, resolution: str, cluster_method: str) -> Path:
@@ -92,6 +103,36 @@ def get_cluster_params_path(
 ) -> Path:
     """Path to the per-variable cluster-parameter parquet."""
     return get_cluster_params_dir(method, resolution, cluster_method) / f"{variable}_params.parquet"
+
+
+def get_rfsi_model_path(variable: str, time_resolution: str) -> Path:
+    """Pooled RFSI forest (one file per variable × aggregation)."""
+    d = get_method_output_dir("RFSI") / "models" / time_resolution
+    ensure_dir(d)
+    return d / f"{variable}_rfsi_pooled.joblib"
+
+
+def get_time_splits_path() -> Path:
+    return PROJECT_ROOT / "CODE" / "shared" / "splits" / "time_splits.yaml"
+
+
+def get_rfsi_tuned_params_path(variable: str, time_resolution: str) -> Path:
+    """Best pooled RFSI hyperparameters from the DEV medoid search."""
+    d = get_method_output_dir("RFSI") / "cluster_params" / time_resolution / "pooled"
+    ensure_dir(d)
+    return d / f"{variable}_pooled_params.yaml"
+
+
+def get_nested_llocv_path(
+    method: str,
+    variable: str,
+    time_resolution: str,
+    domain: str = "full",
+) -> Path:
+    """Station-out nested LLOCV predictions (not the frozen-model parquet)."""
+    d = get_method_output_dir(method) / "llocv" / domain / "nested" / time_resolution
+    ensure_dir(d)
+    return d / f"{variable}_{time_resolution}_nested_llocv.parquet"
 
 
 def get_stations_dir(method: str) -> Path:

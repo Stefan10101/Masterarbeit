@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
 produce_rfsi_maps.py
-RFSI production using pre-trained cluster parameters.
+Pooled RFSI (Sekulić et al. 2020): one forest per variable.
 
 Flow:
-  1. Load cluster assignments + per-cluster free parameters
-     (produced by train_cluster_params.py).
-  2. For every timestep look up its cluster_id → (n_obs, RF hyperparams).
-  3. Fit RFSI once and predict (no per-variable Phase-A search).
-  4. Optionally write leave-location-out predictions for validation.
+  1. Stack all station–time rows (neighbour values + distances at that time,
+     plus elevation / landcover at the target).
+  2. Fit one RandomForestRegressor.
+  3. For every timestamp, predict the grid from that timestamp's stations
+     with the frozen forest.
+  4. Optional station predictions (self excluded). These are not nested LLOCV.
 """
 
 from __future__ import annotations
@@ -18,13 +19,9 @@ import sys
 import gc
 import pandas as pd
 import numpy as np
-import xarray as xr
 import yaml
-import rasterio
-from sklearn.preprocessing import OneHotEncoder
-from tqdm import tqdm
-from joblib import Parallel, delayed
 from datetime import datetime
+from tqdm import tqdm
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -32,16 +29,14 @@ warnings.filterwarnings("ignore")
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from paths import (
     get_aggregated_data_path,
-    get_cluster_params_path,
-    get_clusters_dir,
     get_domain_stations_path,
     get_interpolated_map_path,
-    get_landcover_path,
     get_llocv_path,
     get_master_grid_path,
+    get_rfsi_model_path,
 )
 from rfsi_core import RFSI
-from rfsi_optimizer import compute_metrics, run_full_llocv
+from rfsi_optimizer import compute_metrics
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
@@ -56,37 +51,21 @@ END_DATE = pd.to_datetime(cfg["end_date"])
 RESOLUTIONS = cfg.get("resolutions_to_process", [1000])
 
 rfsi_cfg = cfg.get("rfsi", {})
-RF_FIXED = dict(rfsi_cfg.get("rf_fixed", {"n_estimators": 400, "random_state": 31}))
-PRIMARY_METRIC = rfsi_cfg.get("primary_metric", "rmse")
+RF_FIXED = dict(rfsi_cfg.get("rf_fixed", {"n_estimators": 250, "random_state": 22}))
+N_OBS = int(rfsi_cfg.get("n_obs", 10))
 CHUNK_SIZE = int(rfsi_cfg.get("predict_chunk_size", 250_000))
-FINE_RES_THRESHOLD = int(rfsi_cfg.get("fine_res_threshold", 200))
-N_JOBS_FINE = int(rfsi_cfg.get("n_jobs_fine", 2))
-N_JOBS_COARSE = int(rfsi_cfg.get("n_jobs_coarse", -1))
 SAVE_LLOCV = bool(rfsi_cfg.get("save_llocv", True))
-N_ESTIMATORS_FINAL = int(RF_FIXED.get("n_estimators", 400))
-CLUSTER_METHOD = cfg.get("cluster_method", "gmm")
+SAVE_MODEL = bool(rfsi_cfg.get("save_model", True))
+USE_ELEV = bool(rfsi_cfg.get("use_elevation", True))
+USE_LC = bool(rfsi_cfg.get("use_landcover", True))
 MIN_STATIONS = cfg.get("min_stations_per_field", 10)
+VARIABLES = rfsi_cfg.get("variables_to_process")  # None = all present columns
 
-COL_TO_CANONICAL = {
-    "temp_mean": "temperature",
-    "temp_min": "temperature",
-    "temp_max": "temperature",
-    "precip_sum": "precipitation",
-    "wind_mean": "wind_speed",
-    "wind_max": "wind_speed",
-    "rh_mean": "relative_humidity",
-    "snow_mean": "snow_height",
-    "snow_max": "snow_height",
-    "snow_min": "snow_height",
-}
-
-FALLBACK_PARAMS = {
-    "n_obs": 10,
-    "max_depth": None,
-    "min_samples_leaf": 1,
-    "max_features": "sqrt",
-    "rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan,
-}
+ALL_VARS = [
+    "precip_sum", "temp_mean", "temp_min", "temp_max",
+    "wind_mean", "wind_max", "rh_mean",
+    "snow_mean", "snow_max", "snow_min",
+]
 
 
 def get_time_column(time_resolution: str) -> str:
@@ -98,7 +77,6 @@ def get_time_column(time_resolution: str) -> str:
             "daily": "date",
             "monthly": "year_month",
             "half_hourly": "timestamp",
-            "seasonally": "season",
         }.get(time_resolution, "time")
 
 
@@ -112,26 +90,33 @@ def get_domain_bbox(cfg: dict, domain_name: str) -> tuple:
     return xmin - buffer_m, ymin - buffer_m, xmax + buffer_m, ymax + buffer_m
 
 
-def get_domain_mask(grid_ds: xr.Dataset, bbox: tuple) -> np.ndarray:
+def get_domain_mask(grid_ds, bbox: tuple) -> np.ndarray:
     xmin, ymin, xmax, ymax = bbox
     x_mask = (grid_ds.x >= xmin) & (grid_ds.x <= xmax)
     y_mask = (grid_ds.y >= ymin) & (grid_ds.y <= ymax)
     return (y_mask.values[:, None] & x_mask.values[None, :])
 
 
+def as_naive_utc(values) -> np.ndarray:
+    """NetCDF cannot store tz-aware or Python datetime objects."""
+    idx = pd.DatetimeIndex(pd.to_datetime(values, utc=True))
+    return idx.tz_convert("UTC").tz_localize(None).to_numpy(dtype="datetime64[ns]")
+
+
 def load_aggregated_data() -> pd.DataFrame:
     df = pd.read_parquet(get_aggregated_data_path("RFSI", TIME_RES))
     time_col = get_time_column(TIME_RES)
     if TIME_RES == "weekly":
-        df["time"] = pd.to_datetime(df[time_col] + "-1", format="%Y-W%W-%w", utc=True)
+        raw = pd.to_datetime(df[time_col] + "-1", format="%Y-W%W-%w", utc=True)
     elif TIME_RES == "monthly":
-        df["time"] = pd.to_datetime(df[time_col] + "-01", utc=True)
+        raw = pd.to_datetime(df[time_col].astype(str) + "-01", utc=True)
     else:
-        df["time"] = pd.to_datetime(df[time_col], utc=True)
+        raw = pd.to_datetime(df[time_col], utc=True)
+    df["time"] = as_naive_utc(raw)
 
-    start = START_DATE if START_DATE.tzinfo else START_DATE.tz_localize("UTC")
-    end = END_DATE if END_DATE.tzinfo else END_DATE.tz_localize("UTC")
-    return df[(df["time"] >= start) & (df["time"] <= end)]
+    start = pd.Timestamp(START_DATE).tz_localize(None)
+    end = pd.Timestamp(END_DATE).tz_localize(None)
+    return df[(df["time"] >= start) & (df["time"] <= end)].copy()
 
 
 def get_all_stations() -> pd.DataFrame:
@@ -144,190 +129,171 @@ def get_all_stations() -> pd.DataFrame:
     return stations
 
 
-def prepare_covariates(df, encoder=None, fit_encoder=False):
+def prepare_covariates(df, encoder=None, fit_encoder=False, use_elev=True, use_lc=True):
+    from sklearn.preprocessing import OneHotEncoder
+
     X_list = []
-    if "elev" in df.columns:
-        X_list.append(df[["elev"]].values)
-    if "clc_code" in df.columns:
-        clc = df[["clc_code"]].values.reshape(-1, 1)
+    if use_elev and "elev" in df.columns:
+        X_list.append(np.asarray(df[["elev"]].values, dtype=np.float32))
+    if use_lc and "clc_code" in df.columns:
+        clc = np.asarray(df[["clc_code"]].values).reshape(-1, 1)
         if fit_encoder or encoder is None:
             encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
             clc_onehot = encoder.fit_transform(clc)
         else:
             clc_onehot = encoder.transform(clc)
-        X_list.append(clc_onehot)
-    return (np.hstack(X_list) if X_list else None), encoder
+        X_list.append(np.asarray(clc_onehot, dtype=np.float32))
+    if not X_list:
+        return None, encoder
+    return np.hstack(X_list), encoder
 
 
-def predict_in_chunks(model, grid_points, X_grid, chunk_size=CHUNK_SIZE):
+def predict_in_chunks(model, coords_obs, z_obs, grid_points, X_grid, chunk_size=CHUNK_SIZE):
     n = len(grid_points)
     preds = np.empty(n, dtype=np.float32)
     for i in range(0, n, chunk_size):
         sl = slice(i, i + chunk_size)
-        preds[sl] = model.predict(
-            coords_pred=grid_points[sl],
+        preds[sl] = model.predict_field(
+            coords_obs, z_obs,
+            grid_points[sl],
             X_cov_pred=X_grid[sl] if X_grid is not None else None,
         )
     return preds
 
 
-def load_cluster_assignments(canonical_var: str) -> pd.Series:
-    path = (
-        get_clusters_dir("RFSI") / TIME_RES / CLUSTER_METHOD
-        / f"{canonical_var}_assignments.parquet"
+def grid_landcover_flat(grid_crop) -> np.ndarray:
+    """CLC already stored on the master grid. No rasterio at production time."""
+    for name in ("clc", "clc_code", "landcover"):
+        if name in grid_crop:
+            return np.asarray(grid_crop[name].values, dtype=np.float32).ravel()
+    raise RuntimeError(
+        "Master grid has no landcover variable ('clc'). Attach it once with:\n"
+        "  cd CODE/shared/grids\n"
+        "  python create_grids.py --method RFSI --attach-landcover "
+        "--resolutions 1000 --config ../../RFSI/config.yaml"
     )
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Cluster assignments not found: {path}\n"
-            f"Run identify_regimes.py with --method RFSI first."
-        )
-    df = pd.read_parquet(path, columns=["timestamp", "cluster_id"])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    return df.set_index("timestamp")["cluster_id"]
-
-
-def load_cluster_params(canonical_var: str) -> dict:
-    path = get_cluster_params_path("RFSI", TIME_RES, CLUSTER_METHOD, canonical_var)
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Cluster parameters not found: {path}\n"
-            f"Run train_cluster_params.py first."
-        )
-    df = pd.read_parquet(path)
-    out = {}
-    for _, row in df.iterrows():
-        md = row["max_depth"]
-        if md is None or (isinstance(md, float) and np.isnan(md)):
-            md = None
-        else:
-            md = int(md)
-        mf = row["max_features"]
-        if isinstance(mf, (float, np.floating)) and not np.isnan(mf):
-            mf = float(mf)
-        out[int(row["cluster_id"])] = {
-            "n_obs": int(row["n_obs"]),
-            "max_depth": md,
-            "min_samples_leaf": int(row["min_samples_leaf"]),
-            "max_features": mf,
-            "rmse": float(row["rmse"]) if pd.notna(row["rmse"]) else np.nan,
-            "mae": float(row["mae"]) if pd.notna(row["mae"]) else np.nan,
-            "nse": float(row["nse"]) if pd.notna(row["nse"]) else np.nan,
-            "kge": float(row["kge"]) if pd.notna(row["kge"]) else np.nan,
-        }
-    return out
-
-
-def build_rf_params(cluster_params: dict) -> dict:
-    """Merge cluster-specific tunable params with production RF_FIXED."""
-    return {
-        **RF_FIXED,
-        "n_estimators": N_ESTIMATORS_FINAL,
-        "max_depth": cluster_params["max_depth"],
-        "min_samples_leaf": cluster_params["min_samples_leaf"],
-        "max_features": cluster_params["max_features"],
-        "n_jobs": 1,
-    }
-
-
-def process_one_time_step(args):
-    (t, df_t, var_name, grid_points, X_grid, ny, nx,
-     n_obs, rf_params, encoder, domain_mask_flat, cluster_id, scores) = args
-
-    if len(df_t) < 8:
-        return None
-
-    df_t = df_t.drop(columns=["time"], errors="ignore")
-    coords = df_t[["x", "y"]].values
-    z = df_t[var_name].values
-    X_cov, _ = prepare_covariates(df_t, encoder=encoder)
-
-    model = RFSI(n_obs=n_obs, rf_params=rf_params)
-    model.fit(coords=coords, z=z, X_cov=X_cov)
-
-    preds = predict_in_chunks(model, grid_points, X_grid)
-    pred_map = preds.reshape(ny, nx).copy()
-    pred_map.ravel()[~domain_mask_flat] = np.nan
-
-    train_pred = model.predict(coords, X_cov_pred=X_cov)
-    metrics = compute_metrics(z, train_pred)
-
-    return {
-        "time": t,
-        "pred_map": pred_map,
-        "n_obs": n_obs,
-        "cluster_id": cluster_id,
-        "metrics": metrics,
-        "scores": scores,
-        "rf_params": rf_params,
-    }
 
 
 def main():
+    import xarray as xr
+    from joblib import dump
+
     print("=" * 80)
-    print(f"RFSI Production (cluster params) | {DOMAIN} | {TIME_RES}")
-    print(f"Period: {START_DATE.date()} → {END_DATE.date()} | cluster={CLUSTER_METHOD}")
-    print(f"save_llocv={SAVE_LLOCV}  n_estimators={N_ESTIMATORS_FINAL}")
+    print(f"RFSI pooled production | {DOMAIN} | {TIME_RES}")
+    print(f"Period: {START_DATE.date()} → {END_DATE.date()}")
+    print(f"n_obs={N_OBS}  n_estimators={RF_FIXED.get('n_estimators')}  save_llocv={SAVE_LLOCV}")
     print("=" * 80)
 
     station_data = load_aggregated_data()
     stations = get_all_stations()
     domain_bbox = get_domain_bbox(cfg, DOMAIN)
 
-    assignment_cache = {}
-    params_cache = {}
+    use_elev = USE_ELEV
+    use_lc = USE_LC and ("clc_code" in stations.columns)
+    if USE_LC and not use_lc:
+        raise RuntimeError(
+            "use_landcover=true but stations_projected.parquet has no clc_code. "
+            "Re-run create_grids.py --method RFSI --master so stations get CLC."
+        )
+    print(f"  covariates: elev={use_elev}  landcover={use_lc}")
 
-    for res in RESOLUTIONS:
-        print(f"\n{'='*60}\nRESOLUTION: {res} m")
-        n_jobs = N_JOBS_FINE if res <= FINE_RES_THRESHOLD else N_JOBS_COARSE
-        print(f"  Parallel jobs: {n_jobs}")
+    station_cols = ["station_name", "x", "y"]
+    if use_elev and "elev" in stations.columns:
+        station_cols.append("elev")
+    if use_lc and "clc_code" in stations.columns:
+        station_cols.append("clc_code")
+    stations = stations[station_cols].drop_duplicates("station_name")
 
-        grid_ds = xr.open_dataset(get_master_grid_path("RFSI", res))
-        x_sel = (grid_ds.x >= domain_bbox[0]) & (grid_ds.x <= domain_bbox[2])
-        y_sel = (grid_ds.y >= domain_bbox[1]) & (grid_ds.y <= domain_bbox[3])
-        grid_crop = grid_ds.isel(x=x_sel, y=y_sel)
-        ny = int(grid_crop.sizes["y"])
-        nx = int(grid_crop.sizes["x"])
-        print(f"  Cropped grid: {ny} x {nx} = {ny * nx:,} cells")
+    wanted = VARIABLES if VARIABLES else ALL_VARS
+    wanted = [v for v in wanted if v in station_data.columns]
+    if not wanted:
+        raise RuntimeError(f"None of {VARIABLES} found in aggregated data.")
 
-        domain_mask = get_domain_mask(grid_crop, domain_bbox)
-        domain_mask_flat = domain_mask.ravel()
+    rf_params = {
+        **RF_FIXED,
+        "n_jobs": -1,
+        "max_depth": RF_FIXED.get("max_depth"),
+        "min_samples_leaf": RF_FIXED.get("min_samples_leaf", 1),
+        "max_features": RF_FIXED.get("max_features", "sqrt"),
+    }
+    # drop keys sklearn does not accept if None-only extras slipped in
+    rf_params = {k: v for k, v in rf_params.items() if k in {
+        "n_estimators", "max_depth", "min_samples_leaf", "max_features",
+        "random_state", "n_jobs", "min_samples_split",
+    }}
 
-        gx, gy = np.meshgrid(grid_crop.x.values, grid_crop.y.values)
-        grid_points = np.column_stack([gx.ravel(), gy.ravel()])
-        with rasterio.open(get_landcover_path()) as src:
-            grid_clc = np.array(
-                [val[0] for val in src.sample(grid_points)], dtype=np.float32
-            )
+    for var in wanted:
+        print(f"\n{'=' * 60}\nVARIABLE: {var}")
+        valid = station_data[["station_name", "time", var]].dropna()
+        valid = valid.merge(stations, on="station_name", how="inner")
+        valid = valid.dropna(subset=["x", "y", var])
+        if "elev" in valid.columns:
+            valid = valid.dropna(subset=["elev"])
 
-        grid_elev = grid_crop.elev.values.astype(np.float32)
-        grid_df = pd.DataFrame({"elev": grid_elev.ravel(), "clc_code": grid_clc})
+        n_times = valid["time"].nunique()
+        n_stat = valid["station_name"].nunique()
+        print(f"  {len(valid):,} rows | {n_stat} stations | {n_times} timestamps")
+        if n_stat < MIN_STATIONS:
+            print("  too few stations — skip")
+            continue
 
-        for var in ["precip_sum", "temp_mean", "temp_min", "temp_max",
-                    "wind_mean", "wind_max", "rh_mean",
-                    "snow_mean", "snow_max", "snow_min"]:
-            if var not in station_data.columns:
-                continue
+        X_cov, encoder = prepare_covariates(
+            valid, fit_encoder=True, use_elev=use_elev, use_lc=use_lc
+        )
+        model = RFSI(n_obs=N_OBS, rf_params=rf_params)
+        print("  fitting pooled forest …")
+        model.fit_pooled(
+            times=valid["time"].to_numpy(),
+            coords=valid[["x", "y"]].to_numpy(),
+            z=valid[var].to_numpy(),
+            X_cov=X_cov,
+            min_stations=MIN_STATIONS,
+        )
+        print(f"  trained on {model.n_train_rows_:,} rows, {model.n_features_} features")
 
-            canonical = COL_TO_CANONICAL.get(var)
-            if canonical is None:
-                print(f"  [SKIP] no cluster mapping for column {var}")
-                continue
+        if SAVE_MODEL:
+            model_path = get_rfsi_model_path(var, TIME_RES)
+            dump({"model": model, "encoder": encoder, "variable": var,
+                  "n_obs": N_OBS, "rf_params": rf_params}, model_path)
+            print(f"  saved model → {model_path}")
 
-            if canonical not in assignment_cache:
-                try:
-                    assignment_cache[canonical] = load_cluster_assignments(canonical)
-                    params_cache[canonical] = load_cluster_params(canonical)
-                    print(
-                        f"  loaded clusters for {canonical}: "
-                        f"{len(params_cache[canonical])} clusters, "
-                        f"{len(assignment_cache[canonical]):,} assignments"
+        llocv_records = []
+
+        for res in RESOLUTIONS:
+            print(f"\n  resolution {res} m")
+            grid_ds = xr.open_dataset(get_master_grid_path("RFSI", res))
+            x_sel = (grid_ds.x >= domain_bbox[0]) & (grid_ds.x <= domain_bbox[2])
+            y_sel = (grid_ds.y >= domain_bbox[1]) & (grid_ds.y <= domain_bbox[3])
+            grid_crop = grid_ds.isel(x=x_sel, y=y_sel)
+            ny = int(grid_crop.sizes["y"])
+            nx = int(grid_crop.sizes["x"])
+            print(f"  cropped grid: {ny} x {nx} = {ny * nx:,} cells")
+
+            domain_mask = get_domain_mask(grid_crop, domain_bbox)
+            domain_mask_flat = domain_mask.ravel()
+            gx, gy = np.meshgrid(grid_crop.x.values, grid_crop.y.values)
+            grid_points = np.column_stack([gx.ravel(), gy.ravel()])
+
+            grid_df = pd.DataFrame()
+            if use_elev and "elev" in grid_crop:
+                grid_df["elev"] = grid_crop.elev.values.astype(np.float32).ravel()
+            if use_lc:
+                grid_df["clc_code"] = grid_landcover_flat(grid_crop)
+            if len(grid_df.columns):
+                X_grid, _ = prepare_covariates(
+                    grid_df, encoder=encoder, use_elev=use_elev, use_lc=use_lc
+                )
+            else:
+                X_grid = None
+            if X_grid is not None and model.n_features_ is not None:
+                expect = model.n_features_
+                got = 2 * N_OBS + X_grid.shape[1]
+                if got != expect:
+                    raise RuntimeError(
+                        f"covariate mismatch: train features={expect}, "
+                        f"predict features={got} (n_obs={N_OBS}, "
+                        f"X_grid={X_grid.shape[1]})"
                     )
-                except FileNotFoundError as e:
-                    print(f"  [SKIP] {var}: {e}")
-                    continue
-
-            assignments = assignment_cache[canonical]
-            cluster_params = params_cache[canonical]
 
             out_file = get_interpolated_map_path(
                 "RFSI", DOMAIN, var, res,
@@ -335,117 +301,91 @@ def main():
                 end_date=str(END_DATE.date()),
                 time_resolution=TIME_RES,
             )
-            if out_file.exists():
-                print(f"  Skipping (exists): {out_file.name}")
-                continue
-
-            print(f"\n>>> {var}  (cluster var={canonical})")
-
-            valid = station_data[["station_name", "time", var]].dropna()
-            station_cols = ["station_name", "x", "y", "elev"]
-            if "clc_code" in stations.columns:
-                station_cols.append("clc_code")
-            valid = valid.merge(stations[station_cols], on="station_name", how="left")
-            valid = valid.dropna(subset=["x", "y", var])
-
-            if len(valid) < MIN_STATIONS:
-                print("  Too few stations — skipping")
-                continue
-
-            cov_cols = [c for c in ["elev", "clc_code"] if c in valid.columns]
-            _, encoder = prepare_covariates(valid[cov_cols].dropna(), fit_encoder=True)
-            X_grid, _ = prepare_covariates(grid_df, encoder=encoder)
 
             time_steps = sorted(valid["time"].unique())
-            tasks = []
-            n_fallback = 0
-            for t in time_steps:
-                cid = None
-                if t in assignments.index:
-                    cid = int(assignments.loc[t])
-                else:
-                    diffs = (assignments.index - t).abs()
-                    if len(diffs) and diffs.min() <= pd.Timedelta("1min"):
-                        cid = int(assignments.iloc[diffs.argmin()])
+            data_3d = np.full((len(time_steps), ny, nx), np.nan, dtype=np.float32)
+            kept_times = []
+            station_rmse = []
 
-                if cid is not None and cid in cluster_params:
-                    cp = cluster_params[cid]
-                else:
-                    cp = dict(FALLBACK_PARAMS)
-                    n_fallback += 1
-                    cid = -1
-
-                n_obs = int(cp["n_obs"])
-                rf_params = build_rf_params(cp)
-                scores = {
-                    "rmse": cp.get("rmse", np.nan),
-                    "mae": cp.get("mae", np.nan),
-                    "nse": cp.get("nse", np.nan),
-                    "kge": cp.get("kge", np.nan),
-                }
-                tasks.append(
-                    (t, valid[valid["time"] == t], var, grid_points, X_grid,
-                     ny, nx, n_obs, rf_params, encoder, domain_mask_flat,
-                     cid, scores)
+            for i, t in enumerate(tqdm(time_steps, desc=f"  {var} {res}m")):
+                df_t = valid[valid["time"] == t]
+                if len(df_t) < MIN_STATIONS:
+                    continue
+                coords = df_t[["x", "y"]].to_numpy()
+                z = df_t[var].to_numpy()
+                X_t, _ = prepare_covariates(
+                    df_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc
                 )
 
-            if n_fallback:
-                print(
-                    f"  warning: {n_fallback}/{len(time_steps)} timesteps "
-                    f"used fallback params"
-                )
+                preds = predict_in_chunks(model, coords, z, grid_points, X_grid)
+                pred_map = preds.reshape(ny, nx)
+                pred_map.ravel()[~domain_mask_flat] = np.nan
+                idx = len(kept_times)
+                data_3d[idx] = pred_map
+                kept_times.append(t)
 
-            results = Parallel(n_jobs=n_jobs)(
-                delayed(process_one_time_step)(task)
-                for task in tqdm(tasks, desc=f"  {var}")
-            )
-            results = [r for r in results if r is not None]
-            if not results:
-                continue
+                st_pred = model.predict_stations(coords, z, X_cov_obs=X_t)
+                met = compute_metrics(z, st_pred)
+                station_rmse.append(met["rmse"])
+                if SAVE_LLOCV:
+                    for name, obs, pred in zip(df_t["station_name"].to_numpy(), z, st_pred):
+                        llocv_records.append({
+                            "time": t, "station_name": name, "variable": var,
+                            "observed": float(obs), "predicted": float(pred),
+                            "resolution_m": int(res),
+                        })
 
-            data_3d = np.full((len(results), ny, nx), np.nan, dtype=np.float32)
-            for i, r in enumerate(results):
-                data_3d[i] = r["pred_map"]
-
+            n_kept = len(kept_times)
+            data_3d = data_3d[:n_kept]
+            time_coord = as_naive_utc(kept_times)
             ds = xr.Dataset(
                 {var: (("time", "y", "x"), data_3d)},
                 coords={
-                    "time": [r["time"] for r in results],
+                    "time": time_coord,
                     "y": grid_crop.y.values,
                     "x": grid_crop.x.values,
                 },
             )
-            ds["elev"] = (("y", "x"), grid_elev)
-            ds["n_obs"] = ("time", [r["n_obs"] for r in results])
-            ds["cluster_id"] = ("time", [r["cluster_id"] for r in results])
-            for key in ["rmse", "mae", "nse", "kge"]:
-                ds[key] = ("time", [r["metrics"].get(key, np.nan) for r in results])
-
+            if "elev" in grid_crop:
+                ds["elev"] = (("y", "x"), grid_crop.elev.values.astype(np.float32))
+            ds["n_obs"] = ("time", np.full(n_kept, N_OBS, dtype=np.int16))
+            ds["station_rmse"] = ("time", np.asarray(station_rmse, dtype=np.float32))
             ds.attrs.update({
-                "title": f"{var} - RFSI - {TIME_RES} - {DOMAIN}",
+                "title": f"{var} - RFSI pooled - {TIME_RES} - {DOMAIN}",
                 "domain": DOMAIN,
                 "resolution_m": int(res),
                 "method": "RFSI",
-                "method_full": "Random Forest Spatial Interpolation (cluster-based params)",
-                "cluster_method": CLUSTER_METHOD,
+                "method_full": "Random Forest Spatial Interpolation (pooled space-time)",
+                "architecture": "pooled",
                 "time_resolution": TIME_RES,
                 "variable": var,
+                "n_obs": N_OBS,
+                "n_estimators": int(rf_params.get("n_estimators", 250)),
+                "n_train_rows": int(model.n_train_rows_),
                 "start_date": str(START_DATE.date()),
                 "end_date": str(END_DATE.date()),
                 "crs": "EPSG:31287",
-                "rf_n_estimators": int(N_ESTIMATORS_FINAL),
                 "created": datetime.now().isoformat(),
             })
-
+            out_file.parent.mkdir(parents=True, exist_ok=True)
             ds.to_netcdf(out_file, engine="netcdf4")
-            print(f"  Saved: {out_file.name} ({len(results)} timesteps)")
-            del data_3d, ds, results, tasks
+            print(f"  saved {n_kept} timesteps → {out_file}")
+            grid_ds.close()
+            del data_3d, ds
             gc.collect()
 
-        grid_ds.close()
-        gc.collect()
+        if SAVE_LLOCV and llocv_records:
+            llocv_path = get_llocv_path(
+                "RFSI", DOMAIN, var, RESOLUTIONS[0],
+                start_date=str(START_DATE.date()),
+                end_date=str(END_DATE.date()),
+                time_resolution=TIME_RES,
+            )
+            pd.DataFrame(llocv_records).to_parquet(llocv_path, index=False)
+            print(f"  station predictions → {llocv_path}")
+            print("  note: frozen-model, self excluded; not nested station LLOCV")
 
-    print("\nRFSI production finished.")
+    print("\nRFSI pooled production finished.")
 
 
 if __name__ == "__main__":

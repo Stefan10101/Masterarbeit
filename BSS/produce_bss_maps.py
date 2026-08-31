@@ -35,6 +35,7 @@ from paths import (
     get_clusters_dir,
     get_domain_stations_path,
     get_interpolated_map_path,
+    get_llocv_path,
     get_master_grid_path,
     get_domain_grid_path,
 )
@@ -62,6 +63,8 @@ BSS_METHOD = cfg["bss"]["method"]
 NON_NEGATIVE_VARS = cfg["bss"].get("non_negative_vars", [])
 CLUSTER_METHOD = cfg.get("cluster_method", "gmm")
 MIN_STATIONS = cfg.get("min_stations_per_field", 10)
+SAVE_LLOCV = bool(cfg.get("loocv", {}).get("enable", True))
+OVERWRITE = bool(cfg.get("overwrite_maps", True))
 
 COL_TO_CANONICAL = {
     "temp_mean": "temperature",
@@ -196,6 +199,38 @@ def load_grid(res: int):
     )
 
 
+def llocv_field(df_t, var, knot_x, knot_y, tau_d, tau_e, bss_method, clip_nn):
+    recs = []
+    n = len(df_t)
+    coords = df_t[["x", "y"]].to_numpy(float)
+    elev = df_t["elev"].to_numpy(float)
+    vals = df_t[var].to_numpy(float)
+    names = df_t["station_name"].to_numpy()
+    for i in range(n):
+        mask = np.ones(n, dtype=bool)
+        mask[i] = False
+        if mask.sum() < 5:
+            continue
+        if bss_method == "bsse":
+            fit = fit_bsse(vals[mask], coords[mask], elev[mask], knot_x, knot_y,
+                           tau_d=tau_d, tau_e=tau_e)
+            pred = predict_bsse(fit["d"], fit["e"], coords[[i]], elev[[i]], knot_x, knot_y)
+        else:
+            fit = fit_bss(vals[mask], coords[mask], knot_x, knot_y, tau_d, tau_d)
+            pred = predict_surface(fit["d"], coords[[i]], knot_x, knot_y)
+        yhat = float(pred[0])
+        if clip_nn:
+            yhat = max(yhat, 0.0)
+        recs.append({
+            "station_name": names[i],
+            "x": float(coords[i, 0]),
+            "y": float(coords[i, 1]),
+            "observed": float(vals[i]),
+            "predicted": yhat,
+        })
+    return pd.DataFrame(recs)
+
+
 def process_one_time_step(args):
     (t, df_t, var, target_coords, target_elev, mask,
      bounds, params, bss_method) = args
@@ -231,6 +266,19 @@ def process_one_time_step(args):
     if var in NON_NEGATIVE_VARS:
         interp_1d = np.clip(interp_1d, 0, None)
 
+    llocv_df = None
+    if SAVE_LLOCV:
+        llocv_df = llocv_field(
+            df_t, var, knot_x, knot_y, tau_d, tau_e, bss_method,
+            clip_nn=var in NON_NEGATIVE_VARS,
+        )
+        if len(llocv_df):
+            llocv_df = llocv_df.copy()
+            llocv_df["time"] = t
+            llocv_df["n_segments"] = n_seg
+            llocv_df["tau_d"] = tau_d
+            llocv_df["tau_e"] = tau_e
+
     return {
         "time": t,
         "data": interp_1d,
@@ -240,6 +288,7 @@ def process_one_time_step(args):
         "gcv": float(result.get("gcv", params.get("gcv", np.nan))),
         "effective_df": float(result.get("effective_df", params.get("effective_df", np.nan))),
         "cluster_id": int(params.get("cluster_id", -1)),
+        "llocv": llocv_df,
     }
 
 
@@ -288,19 +337,24 @@ def main():
 
             if canonical not in assignment_cache:
                 try:
-                    assignment_cache[canonical] = load_cluster_assignments(canonical)
-                    params_cache[canonical] = load_cluster_params(canonical)
-                    print(
-                        f"  loaded clusters for {canonical}: "
-                        f"{len(params_cache[canonical])} clusters, "
-                        f"{len(assignment_cache[canonical]):,} assignments"
-                    )
+                    assignments = load_cluster_assignments(canonical)
+                    params = load_cluster_params(canonical)
                 except FileNotFoundError as e:
                     print(f"  [SKIP] {var}: {e}")
+                    assignment_cache[canonical] = None
+                    params_cache[canonical] = None
                     continue
+                assignment_cache[canonical] = assignments
+                params_cache[canonical] = params
+                print(
+                    f"  loaded clusters for {canonical}: "
+                    f"{len(params)} clusters, {len(assignments):,} assignments"
+                )
 
             assignments = assignment_cache[canonical]
             cluster_params = params_cache[canonical]
+            if assignments is None or cluster_params is None:
+                continue
 
             out_file = get_interpolated_map_path(
                 "BSS", DOMAIN, var, res,
@@ -308,9 +362,11 @@ def main():
                 end_date=str(END_DATE.date()),
                 time_resolution=TIME_RES,
             )
-            if out_file.exists():
+            if out_file.exists() and not OVERWRITE:
                 print(f"  Skipping (exists): {out_file.name}")
                 continue
+            if out_file.exists():
+                print(f"  overwriting {out_file.name}")
 
             print(f"\n>>> {var}  (cluster var={canonical})")
 
@@ -364,15 +420,38 @@ def main():
             if not results:
                 continue
 
+            if SAVE_LLOCV:
+                parts = [r["llocv"] for r in results
+                         if r.get("llocv") is not None and len(r["llocv"])]
+                if parts:
+                    llocv_all = pd.concat(parts, ignore_index=True)
+                    import importlib.util as _ilu
+                    _sp = Path(__file__).resolve().parents[1] / "shared" / "splits" / "splits.py"
+                    _spec = _ilu.spec_from_file_location("thesis_time_splits", _sp)
+                    _mod = _ilu.module_from_spec(_spec)
+                    _spec.loader.exec_module(_mod)
+                    llocv_all["split"] = _mod.label_times(llocv_all["time"]).to_numpy()
+                    llocv_path = get_llocv_path(
+                        "BSS", DOMAIN, var, res,
+                        start_date=str(START_DATE.date()),
+                        end_date=str(END_DATE.date()),
+                        time_resolution=TIME_RES,
+                    )
+                    llocv_all.to_parquet(llocv_path, index=False)
+                    print(f"  LLOCV: {llocv_path.name} ({len(llocv_all)} rows)")
+
             n_y, n_x = mask.shape
             data_3d = np.full((len(results), n_y, n_x), np.nan, dtype=np.float32)
             for i, r in enumerate(results):
                 data_3d[i][mask] = r["data"]
 
+            time_coord = pd.DatetimeIndex(
+                pd.to_datetime([r["time"] for r in results], utc=True)
+            ).tz_convert("UTC").tz_localize(None).to_numpy(dtype="datetime64[ns]")
             ds = xr.Dataset(
                 {var: (("time", "y", "x"), data_3d)},
                 coords={
-                    "time": [r["time"] for r in results],
+                    "time": time_coord,
                     "y": grid["y"].values,
                     "x": grid["x"].values,
                 },

@@ -251,9 +251,11 @@ def main():
                 end_date=str(END_DATE.date()),
                 time_resolution=TIME_RES,
             )
-            if out_file.exists():
+            if out_file.exists() and not cfg.get("overwrite_maps", True):
                 print(f"  Skipping (exists): {out_file.name}")
                 continue
+            if out_file.exists():
+                print(f"  overwriting {out_file.name}")
 
             print(f"\n>>> {var}  (cluster var={canonical})")
 
@@ -309,6 +311,12 @@ def main():
                          if r["llocv"] is not None and len(r["llocv"]) > 0]
                 if parts:
                     llocv_all = pd.concat(parts, ignore_index=True)
+                    import importlib.util as _ilu
+                    _sp = Path(__file__).resolve().parents[1] / "shared" / "splits" / "splits.py"
+                    _spec = _ilu.spec_from_file_location("thesis_time_splits", _sp)
+                    _mod = _ilu.module_from_spec(_spec)
+                    _spec.loader.exec_module(_mod)
+                    llocv_all["split"] = _mod.label_times(llocv_all["time"]).to_numpy()
                     llocv_path = get_llocv_path(
                         "IDW", DOMAIN, var, res,
                         start_date=str(START_DATE.date()),
@@ -323,10 +331,13 @@ def main():
             for i, r in enumerate(results):
                 data_3d[i][mask] = r["data"]
 
+            time_coord = pd.DatetimeIndex(
+                pd.to_datetime([r["time"] for r in results], utc=True)
+            ).tz_convert("UTC").tz_localize(None).to_numpy(dtype="datetime64[ns]")
             ds = xr.Dataset(
                 {var: (("time", "y", "x"), data_3d)},
                 coords={
-                    "time": [r["time"] for r in results],
+                    "time": time_coord,
                     "y": grid["y"].values,
                     "x": grid["x"].values,
                 },

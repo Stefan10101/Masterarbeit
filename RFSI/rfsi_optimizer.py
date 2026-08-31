@@ -22,7 +22,8 @@ def compute_metrics(obs: np.ndarray, pred: np.ndarray) -> Dict[str, float]:
     n = len(o)
 
     if n < 2:
-        return {"rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan}
+        return {"rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan,
+                "ccc": np.nan, "r2": np.nan}
 
     rmse = float(np.sqrt(np.mean((o - p) ** 2)))
     mae = float(np.mean(np.abs(o - p)))
@@ -30,16 +31,24 @@ def compute_metrics(obs: np.ndarray, pred: np.ndarray) -> Dict[str, float]:
     ss_res = np.sum((o - p) ** 2)
     ss_tot = np.sum((o - np.mean(o)) ** 2)
     nse = float(1 - ss_res / ss_tot) if ss_tot > 0 else np.nan
+    r2 = nse
 
     if n > 1:
         r = np.corrcoef(o, p)[0, 1]
         alpha = np.std(p) / np.std(o) if np.std(o) > 0 else np.nan
         beta = np.mean(p) / np.mean(o) if np.mean(o) != 0 else np.nan
         kge = float(1 - np.sqrt((r - 1)**2 + (alpha - 1)**2 + (beta - 1)**2))
+        mx, my = float(np.mean(o)), float(np.mean(p))
+        sxx = float(np.mean((o - mx) ** 2))
+        syy = float(np.mean((p - my) ** 2))
+        sxy = float(np.mean((o - mx) * (p - my)))
+        den = sxx + syy + (mx - my) ** 2
+        ccc = float(2 * sxy / den) if den > 0 else np.nan
     else:
         kge = np.nan
+        ccc = np.nan
 
-    return {"rmse": rmse, "mae": mae, "nse": nse, "kge": kge}
+    return {"rmse": rmse, "mae": mae, "nse": nse, "kge": kge, "ccc": ccc, "r2": r2}
 
 
 def _evaluate_combination(

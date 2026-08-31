@@ -209,6 +209,17 @@ def _write_variable_outputs(result, var, out_roots):
         with open(root / f"{var}_summary.yaml", "w", encoding="utf-8") as f:
             yaml.dump(result["summary"], f, sort_keys=False, allow_unicode=True)
         medoid_df.to_parquet(root / f"{var}_medoids.parquet", index=False)
+        import joblib
+        joblib.dump(
+            {
+                "model": result["model"],
+                "scaler": result["scaler"],
+                "pca": result["pca"],
+                "summary": result["summary"],
+                "feature_columns": result["summary"].get("feature_columns"),
+            },
+            root / f"{var}_cluster_model.joblib",
+        )
 
 
 def main():
