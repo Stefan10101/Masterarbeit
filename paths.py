@@ -123,6 +123,20 @@ def get_rfsi_tuned_params_path(variable: str, time_resolution: str) -> Path:
     return d / f"{variable}_pooled_params.yaml"
 
 
+def get_rgi_model_path(variable: str, time_resolution: str) -> Path:
+    """Frozen RGI weights (one file per variable × aggregation)."""
+    d = get_method_output_dir("RGI") / "models" / time_resolution
+    ensure_dir(d)
+    return d / f"{variable}_rgi.pt"
+
+
+def get_rgi_tuned_params_path(variable: str, time_resolution: str) -> Path:
+    """Best RGI hyperparameters from the DEV station-fold search."""
+    d = get_method_output_dir("RGI") / "cluster_params" / time_resolution / "rgi"
+    ensure_dir(d)
+    return d / f"{variable}_rgi_params.yaml"
+
+
 def get_nested_llocv_path(
     method: str,
     variable: str,

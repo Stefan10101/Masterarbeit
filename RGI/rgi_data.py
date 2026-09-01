@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Shared panel loading, metrics, and feature scaling for RGI."""
+
+from __future__ import annotations
+
+from pathlib import Path
+import importlib.util as _ilu
+import sys
+
+import numpy as np
+import pandas as pd
+import yaml
+
+CODE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CODE_DIR))
+
+
+def _label_times(times):
+    _splits_path = CODE_DIR / "shared" / "splits" / "splits.py"
+    _spec = _ilu.spec_from_file_location("thesis_time_splits", _splits_path)
+    _splits_mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_splits_mod)
+    return _splits_mod.label_times(times)
+
+
+def load_config(path: Path | None = None) -> dict:
+    path = path or Path(__file__).resolve().parent / "config.yaml"
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def time_col_name(cfg, time_res):
+    try:
+        return cfg["aggregation"][time_res]["time_col"]
+    except Exception:
+        return {
+            "weekly": "year_week",
+            "daily": "date",
+            "monthly": "year_month",
+            "half_hourly": "timestamp",
+        }.get(time_res, "time")
+
+
+def as_naive_utc(values) -> np.ndarray:
+    idx = pd.DatetimeIndex(pd.to_datetime(values, utc=True))
+    return idx.tz_convert("UTC").tz_localize(None).to_numpy(dtype="datetime64[ns]")
+
+
+def data_sources(cfg) -> tuple[str, str, str]:
+    p = cfg.get("paths", {})
+    return (
+        p.get("aggregated_from", "RFSI"),
+        p.get("stations_from", "RFSI"),
+        p.get("grids_from", "RFSI"),
+    )
+
+
+def load_panel(cfg, var: str) -> pd.DataFrame:
+    time_res = cfg["time_resolution"]
+    start = pd.Timestamp(cfg["start_date"]).tz_localize(None)
+    end = pd.Timestamp(cfg["end_date"]).tz_localize(None)
+    from paths import get_aggregated_data_path, get_domain_stations_path
+
+    agg_method, sta_method, _ = data_sources(cfg)
+    df = pd.read_parquet(get_aggregated_data_path(agg_method, time_res))
+    col = time_col_name(cfg, time_res)
+    if time_res == "weekly":
+        raw = pd.to_datetime(df[col] + "-1", format="%Y-W%W-%w", utc=True)
+    elif time_res == "monthly":
+        raw = pd.to_datetime(df[col].astype(str) + "-01", utc=True)
+    else:
+        raw = pd.to_datetime(df[col], utc=True)
+    df["time"] = as_naive_utc(raw)
+    df = df[(df["time"] >= start) & (df["time"] <= end)]
+
+    stations = pd.read_parquet(get_domain_stations_path(sta_method, "full"))
+    if "elev" not in stations.columns:
+        if "elev_dem" in stations.columns:
+            stations = stations.rename(columns={"elev_dem": "elev"})
+        elif "hoehe" in stations.columns:
+            stations = stations.rename(columns={"hoehe": "elev"})
+    keep = ["station_name", "x", "y"]
+    for extra in ("elev", "clc_code"):
+        if extra in stations.columns:
+            keep.append(extra)
+    stations = stations[keep].drop_duplicates("station_name")
+
+    valid = df[["station_name", "time", var]].dropna()
+    valid = valid.merge(stations, on="station_name", how="inner")
+    valid = valid.dropna(subset=["x", "y", var])
+    if "elev" in valid.columns:
+        valid = valid.dropna(subset=["elev"])
+    else:
+        valid["elev"] = 0.0
+    if "clc_code" not in valid.columns:
+        valid["clc_code"] = 0
+    valid["clc_code"] = valid["clc_code"].fillna(0).astype(np.int32)
+    valid["split"] = _label_times(valid["time"]).to_numpy()
+    return valid
+
+
+def compute_metrics(obs, pred) -> dict:
+    o = np.asarray(obs, dtype=float)
+    p = np.asarray(pred, dtype=float)
+    m = ~np.isnan(o) & ~np.isnan(p)
+    o, p = o[m], p[m]
+    n = len(o)
+    if n < 2:
+        return {k: np.nan for k in ("rmse", "mae", "nse", "kge", "ccc", "r2")}
+    rmse = float(np.sqrt(np.mean((o - p) ** 2)))
+    mae = float(np.mean(np.abs(o - p)))
+    ss_tot = float(np.sum((o - o.mean()) ** 2))
+    nse = float(1 - np.sum((o - p) ** 2) / ss_tot) if ss_tot > 0 else np.nan
+    r = float(np.corrcoef(o, p)[0, 1])
+    alpha = float(np.std(p) / np.std(o)) if np.std(o) > 0 else np.nan
+    beta = float(np.mean(p) / np.mean(o)) if np.mean(o) != 0 else np.nan
+    kge = float(1 - np.sqrt((r - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2))
+    mx, my = float(o.mean()), float(p.mean())
+    sxx = float(np.mean((o - mx) ** 2))
+    syy = float(np.mean((p - my) ** 2))
+    sxy = float(np.mean((o - mx) * (p - my)))
+    den = sxx + syy + (mx - my) ** 2
+    ccc = float(2 * sxy / den) if den > 0 else np.nan
+    return {"rmse": rmse, "mae": mae, "nse": nse, "kge": kge, "ccc": ccc, "r2": nse}
+
+
+def print_split_metrics(pred_df: pd.DataFrame) -> None:
+    for split_name, part in pred_df.groupby("split"):
+        met = compute_metrics(part["observed"], part["predicted"])
+        print(
+            f"  {split_name:7} n={len(part):6d}  "
+            f"RMSE={met['rmse']:.3f}  MAE={met['mae']:.3f}  "
+            f"NSE={met['nse']:.3f}  KGE={met['kge']:.3f}  CCC={met['ccc']:.3f}"
+        )
+    met_all = compute_metrics(pred_df["observed"], pred_df["predicted"])
+    print(
+        f"  {'all':7} n={len(pred_df):6d}  "
+        f"RMSE={met_all['rmse']:.3f}  MAE={met_all['mae']:.3f}  "
+        f"NSE={met_all['nse']:.3f}  KGE={met_all['kge']:.3f}  CCC={met_all['ccc']:.3f}"
+    )
+
+
+class FeatureScaler:
+    """z-score for value, x, y, elev. CLC kept as integer codes."""
+
+    keys = ("value", "x", "y", "elev")
+
+    def __init__(self):
+        self.mean = {k: 0.0 for k in self.keys}
+        self.std = {k: 1.0 for k in self.keys}
+        self.clc_codes: list[int] = [0]
+
+    def fit(self, df: pd.DataFrame, var: str) -> "FeatureScaler":
+        for col, key in ((var, "value"), ("x", "x"), ("y", "y"), ("elev", "elev")):
+            v = df[col].to_numpy(dtype=np.float64)
+            self.mean[key] = float(np.nanmean(v))
+            s = float(np.nanstd(v))
+            self.std[key] = s if s > 1e-8 else 1.0
+        codes = sorted(set(int(c) for c in df["clc_code"].to_numpy().tolist()) | {0})
+        self.clc_codes = codes
+        return self
+
+    def transform_value(self, v) -> np.ndarray:
+        v = np.asarray(v, dtype=np.float32)
+        return ((v - self.mean["value"]) / self.std["value"]).astype(np.float32)
+
+    def inverse_value(self, v) -> np.ndarray:
+        v = np.asarray(v, dtype=np.float32)
+        return (v * self.std["value"] + self.mean["value"]).astype(np.float32)
+
+    def coord_block(self, x, y, elev) -> np.ndarray:
+        x = (np.asarray(x, dtype=np.float32) - self.mean["x"]) / self.std["x"]
+        y = (np.asarray(y, dtype=np.float32) - self.mean["y"]) / self.std["y"]
+        e = (np.asarray(elev, dtype=np.float32) - self.mean["elev"]) / self.std["elev"]
+        return np.column_stack([x, y, e]).astype(np.float32)
+
+    def clc_index(self, codes) -> np.ndarray:
+        table = {c: i for i, c in enumerate(self.clc_codes)}
+        out = np.array([table.get(int(c), 0) for c in np.asarray(codes).ravel()], dtype=np.int64)
+        return out
+
+    def state_dict(self) -> dict:
+        return {
+            "mean": self.mean,
+            "std": self.std,
+            "clc_codes": self.clc_codes,
+        }
+
+    @classmethod
+    def from_state(cls, state: dict) -> "FeatureScaler":
+        obj = cls()
+        obj.mean = dict(state["mean"])
+        obj.std = dict(state["std"])
+        obj.clc_codes = list(state["clc_codes"])
+        return obj
