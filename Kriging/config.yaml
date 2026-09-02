@@ -1,0 +1,124 @@
+# config.yaml - Kriging (linear RK + OK control)
+# Station and grid files are reused from RFSI.
+
+paths:
+  input_root: "Kombiniert"
+  dem: "DEM_Source/COP30_mosaic_EPSG31287.tif"
+  output_root: "Kriging/Output"
+  aggregated_from: "RFSI"
+  stations_from: "RFSI"
+  grids_from: "RFSI"
+
+domain:
+  preset: "full"
+  custom_bbox: [100000, 275000, 395000, 400000]
+  buffer_m: 15000
+
+predefined_bboxes:
+  full:            [-60000, 200000, 460000, 620000]
+  central_alps:    [120000, 260000, 340000, 420000]
+  inn_valley:      [150000, 300000, 290000, 390000]
+  rhine_valley:    [40000,  280000, 130000, 380000]
+  etsch_valley:    [200000, 220000, 300000, 320000]
+  northern_edge:   [80000,  350000, 380000, 480000]
+  alpine_foreland: [80000,  380000, 400000, 500000]
+
+time_resolution: "monthly"
+start_date: "2020-01-01"
+end_date:   "2025-12-31"
+resolutions_to_process: [1000]
+
+kriging:
+  variables_to_process: ["temp_mean", "precip_sum"]
+  save_model: true
+  save_llocv: true
+  primary_metric: "rmse"
+
+  # frozen defaults used when no tuned yaml is present
+  trend: "linear"            # none = OK control, linear = RK
+  interactions: "both"       # none | elev_xy | elev_clc | both
+  family: "exponential"
+  k: 16
+  k_indicator: 16
+  theta_deg: 0.0
+  aniso_ratio: 1.0
+  alpha_z: 0.0
+  min_clc_count: 15
+  min_pairs: 200
+  n_lags: 12
+  predict_tile: 8000
+  seed: 22
+  n_folds: 5
+
+  regimes_from: "RFSI"
+  cluster_method: "gmm"
+
+  # two-step (Q17 D): present if value > trace. precip in mm, snow in cm
+  trace_mm:
+    half_hourly: 0.05
+    daily: 0.1
+    weekly: 0.7
+    monthly: 1.0
+    seasonal: 3.0
+  trace_snow:
+    half_hourly: 0.5
+    daily: 0.5
+    weekly: 1.0
+    monthly: 1.0
+    seasonal: 2.0
+
+  # staged DEV search (tune_kriging.py --phase)
+  search:
+    k: [8, 12, 16, 24, 32, 48, 64]
+    family: ["spherical", "exponential", "matern15", "gaussian"]
+    theta_deg: [0.0, 30.0, 60.0, 90.0]
+    aniso_ratio: [1.0, 0.5, 0.3]
+    alpha_z: [0.0, 10.0, 50.0, 100.0, 200.0]
+    interactions: ["none", "elev_xy", "elev_clc", "both"]
+  # phase 5: expand past the phase-3 corner, then re-search k
+  search_expand:
+    alpha_z: [10.0, 50.0, 100.0, 200.0, 300.0, 400.0, 600.0]
+    k: [8, 12, 16, 24, 32, 48, 64]
+
+aggregation:
+  weekly:
+    freq: "W"
+    time_col: "year_week"
+  daily:
+    freq: "D"
+    time_col: "date"
+  monthly:
+    freq: "ME"
+    time_col: "year_month"
+  half_hourly:
+    freq: "30min"
+    time_col: "timestamp"
+    add_is_daylight: true
+
+targets:
+  precipitation:
+    raw_col: "precipitation"
+    stats: ["sum"]
+    output_names: ["precip_sum"]
+  temperature:
+    raw_col: "temperature"
+    stats: ["mean", "min", "max"]
+    output_names: ["temp_mean", "temp_min", "temp_max"]
+  wind_speed:
+    raw_col: "wind_speed"
+    stats: ["mean", "max"]
+    output_names: ["wind_mean", "wind_max"]
+  relative_humidity:
+    raw_col: "relative_humidity"
+    stats: ["mean"]
+    output_names: ["rh_mean"]
+  snow_height:
+    raw_col: "snow_height"
+    stats: ["mean", "max", "min"]
+    output_names: ["snow_mean", "snow_max", "snow_min"]
+
+min_stations_per_field: 10
+random_seed: 31
+verbose: true
+n_jobs: -1
+overwrite_maps: true
