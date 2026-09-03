@@ -151,6 +151,42 @@ def get_kriging_tuned_params_path(variable: str, time_resolution: str) -> Path:
     return d / f"{variable}_kriging_params.yaml"
 
 
+def get_tps_tuned_params_path(variable: str, time_resolution: str) -> Path:
+    d = get_method_output_dir("TPS") / "cluster_params" / time_resolution / "tps"
+    ensure_dir(d)
+    return d / f"{variable}_tps_params.yaml"
+
+
+def get_gam_model_path(variable: str, time_resolution: str) -> Path:
+    d = get_method_output_dir("GAM") / "models" / time_resolution
+    ensure_dir(d)
+    return d / f"{variable}_gam.joblib"
+
+
+def get_gam_tuned_params_path(variable: str, time_resolution: str) -> Path:
+    d = get_method_output_dir("GAM") / "cluster_params" / time_resolution / "gam"
+    ensure_dir(d)
+    return d / f"{variable}_gam_params.yaml"
+
+
+def get_cnn_model_path(variable: str, time_resolution: str) -> Path:
+    d = get_method_output_dir("CNN") / "models" / time_resolution
+    ensure_dir(d)
+    return d / f"{variable}_cnn.pt"
+
+
+def get_cnn_tuned_params_path(variable: str, time_resolution: str) -> Path:
+    d = get_method_output_dir("CNN") / "cluster_params" / time_resolution / "cnn"
+    ensure_dir(d)
+    return d / f"{variable}_cnn_params.yaml"
+
+
+def get_frei_tuned_params_path(variable: str, time_resolution: str) -> Path:
+    d = get_method_output_dir("Frei") / "cluster_params" / time_resolution / "frei"
+    ensure_dir(d)
+    return d / f"{variable}_frei_params.yaml"
+
+
 def get_nested_llocv_path(
     method: str,
     variable: str,
