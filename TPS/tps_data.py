@@ -24,6 +24,7 @@ data_sources = _kd.data_sources
 clc_group = _kd.clc_group
 uses_two_step = _kd.uses_two_step
 as_naive_utc = _kd.as_naive_utc
+precip_trace = _kd.precip_trace
 
 
 def load_tps_config(path: Path | None = None) -> dict:

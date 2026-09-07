@@ -17,7 +17,8 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_tuned_params_path, get_master_grid_path
-from cnn_data import clc_group, data_sources, load_cnn_config, load_panel
+from cnn_core import grid_terrain, two_step_var
+from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace
 from train_cnn import cfg_to_cnn, train_one
 
 try:
@@ -47,23 +48,34 @@ def main():
         if name in grid:
             clc = clc_group(np.nan_to_num(grid[name].values, nan=0).astype(np.int32)).astype(np.float64)
             break
+    slope, sinasp, cosasp = grid_terrain(elev, gx, gy)
     variables = [args.variable] if args.variable else block.get("variables_to_process", ["temp_mean"])
     for var in variables:
         panel = load_panel(cfg, var)
+        trace = precip_trace(cfg, time_res, var)
+        taus = list(search.get("tau_wet", [block.get("tau_wet", 0.5)])) if two_step_var(var) else [block.get("tau_wet", 0.5)]
         best = None
-        for levels, ch, frac in itertools.product(
+        for levels, ch, frac, tau in itertools.product(
             search.get("n_levels", [block.get("n_levels", 4)]),
             search.get("base_ch", [block.get("base_ch", 32)]),
             search.get("train_mask_frac", [block.get("train_mask_frac", 0.25)]),
+            taus,
         ):
-            ccfg = cfg_to_cnn(cfg, {"n_levels": levels, "base_ch": ch, "train_mask_frac": frac})
-            _, dev = train_one(panel, var, ccfg, elev, clc, gx, gy)
-            print(f"{var} levels={levels} ch={ch} mask={frac} dev={dev:.4f}", flush=True)
+            ccfg = cfg_to_cnn(cfg, {
+                "n_levels": levels, "base_ch": ch,
+                "train_mask_frac": frac, "tau_wet": tau,
+            })
+            _, dev = train_one(
+                panel, var, ccfg, elev, clc, gx, gy,
+                slope, sinasp, cosasp, time_res=time_res, trace=trace,
+            )
+            print(f"{var} levels={levels} ch={ch} mask={frac} tau={tau} dev={dev:.4f}", flush=True)
             if best is None or dev < best["dev"]:
                 best = {
                     "n_levels": int(levels),
                     "base_ch": int(ch),
                     "train_mask_frac": float(frac),
+                    "tau_wet": float(tau),
                     "dev": float(dev),
                 }
         path = get_cnn_tuned_params_path(var, time_res)

@@ -2,7 +2,7 @@
 """
 Per-timestamp GAM (mode A).
 
-Preferred solver: mgcv via fit_gam.R / predict_gam.R (REML, separate γ).
+Preferred solver: mgcv via fit_gam.R / predict_gam.R (REML).
 Fallback: numpy B-splines if R/mgcv is missing.
 
 Formulas searched on DEV:
@@ -40,6 +40,8 @@ class GAMConfig:
     predict_tile: int = 50000
     seed: int = 22
     lam: float = 1.0  # numpy fallback only
+    trace: float = 0.1
+    r_timeout: float = 600.0
 
 
 def two_step_var(var: str) -> bool:
@@ -94,6 +96,15 @@ class GAMInterpolator:
         self._coef = None
         self._clc_levels = []
         self._r_model = None
+        self._r_tmp = None
+        self._backend = None
+
+    def close(self):
+        tmp = getattr(self, "_r_tmp", None)
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self._r_tmp = None
+        self._r_model = None
 
     def _frame(self, x, y, elev, values=None, clc=None, slope=None, sinasp=None, cosasp=None):
         df = pd.DataFrame({
@@ -110,10 +121,11 @@ class GAMInterpolator:
                 ("cosasp", cosasp, 1.0),
             ):
                 if arr is None:
+                    df[name] = fill
                     continue
                 v = np.asarray(arr, dtype=np.float64)
-                if np.unique(v[np.isfinite(v)]).size >= 5:
-                    df[name] = v
+                v = np.where(np.isfinite(v), v, fill)
+                df[name] = v
         if self.cfg.use_clc and clc is not None:
             df["clc"] = np.asarray(clc, dtype=np.int32)
         return df
@@ -122,37 +134,47 @@ class GAMInterpolator:
         script = self._r_dir / self.cfg.fit_r
         if not script.exists() or not self._use_r:
             return False
+        self.close()
         tmp = Path(tempfile.mkdtemp(prefix="gam_"))
         train = tmp / "train.parquet"
         df.to_parquet(train, index=False)
         out = tmp / "fit"
-        cmd = [self.cfg.rscript, str(script), str(train), str(out), self.cfg.formula, family]
+        cmd = [
+            self.cfg.rscript, str(script), str(train), str(out),
+            self.cfg.formula, family, str(int(self.cfg.n_splines)),
+        ]
         try:
-            proc = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=120)
+            subprocess.run(
+                cmd, check=True, capture_output=True, text=True,
+                timeout=float(self.cfg.r_timeout),
+            )
         except Exception as exc:
             err = ""
             if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
                 err = exc.stderr[-500:]
             print(f"  mgcv failed, numpy fallback: {type(exc).__name__} {err}", flush=True)
+            shutil.rmtree(tmp, ignore_errors=True)
             return False
         model = out / "model.rds"
         if not model.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
             return False
         self._r_model = model
         self._r_tmp = tmp
         return True
 
     def _predict_r(self, df: pd.DataFrame) -> np.ndarray | None:
-        if self._r_model is None:
+        if self._r_model is None or self._r_tmp is None:
             return None
         pred_script = self._r_dir / "predict_gam.R"
         q = self._r_tmp / "query.parquet"
         o = self._r_tmp / "pred.parquet"
         df.to_parquet(q, index=False)
         try:
-            proc = subprocess.run(
+            subprocess.run(
                 [self.cfg.rscript, str(pred_script), str(self._r_model), str(q), str(o)],
-                check=True, capture_output=True, text=True, timeout=120,
+                check=True, capture_output=True, text=True,
+                timeout=float(self.cfg.r_timeout),
             )
             return pd.read_parquet(o)["predicted"].to_numpy(dtype=np.float64)
         except Exception as exc:
@@ -171,10 +193,12 @@ class GAMInterpolator:
             sl = np.zeros_like(x) if slope is None else np.asarray(slope, dtype=np.float64)
             sa = np.zeros_like(x) if sinasp is None else np.asarray(sinasp, dtype=np.float64)
             ca = np.ones_like(x) if cosasp is None else np.asarray(cosasp, dtype=np.float64)
+            sl = np.where(np.isfinite(sl), sl, 0.0)
+            sa = np.where(np.isfinite(sa), sa, 0.0)
+            ca = np.where(np.isfinite(ca), ca, 1.0)
             self._knots["sl"] = _knots(sl, max(n_s // 2, 4), k)
             self._knots["sa"] = _knots(sa, max(n_s // 2, 4), k)
             self._knots["ca"] = _knots(ca, max(n_s // 2, 4), k)
-            self._terrain_src = (sl, sa, ca)
         X, widths = self._design(x, y, elev, clc, slope, sinasp, cosasp, fit=True)
         p = np.zeros((X.shape[1], X.shape[1]))
         col = 1
@@ -215,6 +239,9 @@ class GAMInterpolator:
             sl = np.zeros_like(x) if slope is None else np.asarray(slope, dtype=np.float64)
             sa = np.zeros_like(x) if sinasp is None else np.asarray(sinasp, dtype=np.float64)
             ca = np.ones_like(x) if cosasp is None else np.asarray(cosasp, dtype=np.float64)
+            sl = np.where(np.isfinite(sl), sl, 0.0)
+            sa = np.where(np.isfinite(sa), sa, 0.0)
+            ca = np.where(np.isfinite(ca), ca, 1.0)
             parts.append(_bs(sl, self._knots["sl"], k, n2))
             parts.append(_bs(sa, self._knots["sa"], k, n2))
             parts.append(_bs(ca, self._knots["ca"], k, n2))
@@ -231,11 +258,14 @@ class GAMInterpolator:
         widths = [p.shape[1] for p in parts]
         return np.column_stack(parts), widths
 
-    def fit_gaussian(self, x, y, elev, values, clc=None, slope=None, sinasp=None, cosasp=None):
-        self._fit_args = (np.asarray(x, float), np.asarray(y, float), np.asarray(elev, float),
-                          np.asarray(values, float), clc, slope, sinasp, cosasp)
+    def fit_gaussian(self, x, y, elev, values, clc=None, slope=None, sinasp=None, cosasp=None,
+                     family: str = "gaussian"):
+        self._fit_args = (
+            np.asarray(x, float), np.asarray(y, float), np.asarray(elev, float),
+            np.asarray(values, float), clc, slope, sinasp, cosasp,
+        )
         df = self._frame(x, y, elev, values, clc, slope, sinasp, cosasp)
-        if self._fit_r(df, "gaussian"):
+        if self._fit_r(df, family):
             self._backend = "mgcv"
             return self
         self._fit_numpy(*self._fit_args)
@@ -274,26 +304,31 @@ class GAMInterpolator:
         self, x, y, elev, values, xq, yq, zq,
         clc=None, clc_q=None, slope=None, slope_q=None,
         sinasp=None, sinasp_q=None, cosasp=None, cosasp_q=None,
-        var: str = "temp_mean", trace: float = 0.1,
+        var: str = "temp_mean", trace: float | None = None,
     ) -> np.ndarray:
         values = np.asarray(values, float)
-        if self.cfg.two_step and two_step_var(var):
-            wet = (values > trace).astype(float)
-            self.fit_gaussian(x, y, elev, wet, clc, slope, sinasp, cosasp)
-            p = np.clip(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q), 0.0, 1.0)
-            wet_m = values > trace
-            if wet_m.sum() >= 5:
-                self.fit_gaussian(
-                    np.asarray(x)[wet_m], np.asarray(y)[wet_m], np.asarray(elev)[wet_m],
-                    values[wet_m],
-                    None if clc is None else np.asarray(clc)[wet_m],
-                    None if slope is None else np.asarray(slope)[wet_m],
-                    None if sinasp is None else np.asarray(sinasp)[wet_m],
-                    None if cosasp is None else np.asarray(cosasp)[wet_m],
-                )
-                amt = np.maximum(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q), 0.0)
-            else:
-                amt = np.zeros(np.asarray(xq).size)
-            return np.where(p >= self.cfg.tau_wet, amt, 0.0)
-        self.fit_gaussian(x, y, elev, values, clc, slope, sinasp, cosasp)
-        return self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q)
+        tr = self.cfg.trace if trace is None else float(trace)
+        try:
+            if self.cfg.two_step and two_step_var(var):
+                wet = (values > tr).astype(float)
+                self.fit_gaussian(x, y, elev, wet, clc, slope, sinasp, cosasp, family="binomial")
+                p = np.clip(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q), 0.0, 1.0)
+                wet_m = values > tr
+                if wet_m.sum() >= 5:
+                    self.fit_gaussian(
+                        np.asarray(x)[wet_m], np.asarray(y)[wet_m], np.asarray(elev)[wet_m],
+                        values[wet_m],
+                        None if clc is None else np.asarray(clc)[wet_m],
+                        None if slope is None else np.asarray(slope)[wet_m],
+                        None if sinasp is None else np.asarray(sinasp)[wet_m],
+                        None if cosasp is None else np.asarray(cosasp)[wet_m],
+                        family="gaussian",
+                    )
+                    amt = np.maximum(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q), 0.0)
+                else:
+                    amt = np.zeros(np.asarray(xq).size)
+                return np.where(p >= self.cfg.tau_wet, amt, 0.0)
+            self.fit_gaussian(x, y, elev, values, clc, slope, sinasp, cosasp, family="gaussian")
+            return self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q)
+        finally:
+            self.close()

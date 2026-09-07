@@ -8,11 +8,12 @@ Basin profiles shrink toward a domain-wide profile and blend only
 on divide buffers.
 
 Residuals: IDW with valley-axis cost distance from shared.watersheds.
+Precip/snow: two-step (no temperature profile), p_wet >= tau.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 
@@ -37,10 +38,18 @@ class FreiConfig:
     across_w: float = 4.0
     select_metric: bool = True
     lam_z: float = 150.0
+    two_step: bool = True
+    tau_wet: float = 0.5
+    trace: float = 0.1
     min_stations: int = 10
     predict_tile: int = 20000
     seed: int = 22
     across_w_grid: tuple = (2.0, 4.0, 8.0)
+
+
+def two_step_var(var: str) -> bool:
+    v = var.lower()
+    return v.startswith("precip") or v.startswith("snow")
 
 
 def _linear_tz(z, t):
@@ -121,22 +130,37 @@ class FreiInterpolator:
         return summit, cold
 
     def _weights(self, x, y):
-        """Soft membership: 1 in basin, decay across divide buffer."""
-        reg = self._regions(x, y)
+        n = len(np.asarray(x))
         n_r = int(self.pack["n_regions"]) if self.pack else 1
-        w = np.zeros((len(x), n_r))
-        if self.pack is None:
-            w[:, 0] = 1.0
+        if self.pack is None or "region_dist" not in self.pack:
+            w = np.zeros((n, n_r))
+            if self.pack is None:
+                w[:, 0] = 1.0
+                return w, np.ones(n, dtype=int)
+            reg = self._regions(x, y)
+            w[np.arange(n), np.clip(reg - 1, 0, n_r - 1)] = 1.0
             return w, reg
-        w[np.arange(len(x)), np.clip(reg - 1, 0, n_r - 1)] = 1.0
-        # dilute cells near a different-region neighbour on the DEM
-        return w, reg
+        from shared.watersheds import sample_blend_weights
+        dx = float(self.pack.get("dx", 1000.0))
+        blend_cells = max(float(self.cfg.blend_km) * 1000.0 / max(dx, 1.0), 1.0)
+        w = sample_blend_weights(
+            self.pack["region_dist"], self.pack["xs"], self.pack["ys"],
+            x, y, blend_cells,
+        )
+        if w.shape[1] != n_r:
+            w2 = np.zeros((n, n_r))
+            w2[:, : min(n_r, w.shape[1])] = w[:, : min(n_r, w.shape[1])]
+            w = w2
+        return w, self._regions(x, y)
 
     def _background(self, x, y, z, t):
         w, reg = self._weights(x, y)
         summit, cold = self._flags(x, y)
         n_r = w.shape[1]
-        global_p = fit_profile(z[summit | ~cold] if (~cold).sum() >= 5 else z, t[summit | ~cold] if (~cold).sum() >= 5 else t)
+        keep = summit | ~cold
+        if keep.sum() < 5:
+            keep = np.ones(len(t), dtype=bool)
+        global_p = fit_profile(z[keep], t[keep])
         params = []
         for r in range(n_r):
             m = (reg == r + 1) & (~cold | summit)
@@ -159,34 +183,43 @@ class FreiInterpolator:
             out += w[:, r] * eval_profile(zq, p)
         return out
 
-    def _cost(self, x0, y0, x1, y1):
+    def _horiz_m(self, x0, y0, x1, y1):
         if self.pack is None:
             return np.hypot(x1 - x0, y1 - y0)
         from shared.watersheds import cost_between
         xs, ys = self.pack["xs"], self.pack["ys"]
-        dx = float(xs[1] - xs[0]) if len(xs) > 1 else 1.0
-        dy = float(ys[1] - ys[0]) if len(ys) > 1 else 1.0
+        dx = float(self.pack.get("dx", abs(xs[1] - xs[0]) if len(xs) > 1 else 1000.0))
+        dy = float(ys[1] - ys[0]) if len(ys) > 1 else dx
         c0 = np.clip(((x0 - xs[0]) / dx), 0, len(xs) - 1)
         r0 = np.clip(((y0 - ys[0]) / dy), 0, len(ys) - 1)
         c1 = np.clip(((x1 - xs[0]) / dx), 0, len(xs) - 1)
         r1 = np.clip(((y1 - ys[0]) / dy), 0, len(ys) - 1)
-        return cost_between(r0, c0, r1, c1, self.pack["uy"], self.pack["ux"], self.pack["tpi"], self.cfg.across_w)
+        cells = cost_between(r0, c0, r1, c1, self.pack["uy"], self.pack["ux"], self.pack["tpi"], self.cfg.across_w)
+        return cells * dx
 
-    def _residual_idw(self, x, y, z, resid, xq, yq, zq, across_w):
+    def _residual_idw(self, x, y, z, resid, xq, yq, zq, across_w, ix=None):
         old = self.cfg.across_w
         self.cfg.across_w = across_w
         k = min(int(self.cfg.k), len(resid))
-        tree = cKDTree(np.column_stack([x, y]))
-        _, ix = tree.query(np.column_stack([xq, yq]), k=k)
-        ix = np.atleast_2d(ix)
-        d = np.zeros((len(xq), k))
+        if ix is None:
+            tree = cKDTree(np.column_stack([x, y]))
+            _, ix = tree.query(np.column_stack([xq, yq]), k=k)
+        if k == 1 or np.ndim(ix) == 1:
+            ix = np.asarray(ix)[:, None]
+        else:
+            ix = np.asarray(ix)
+        k = ix.shape[1]
+        d = np.empty((len(xq), k), dtype=np.float64)
         for j in range(k):
-            horiz = self._cost(xq, yq, x[ix[:, j]], y[ix[:, j]])
+            horiz = self._horiz_m(xq, yq, x[ix[:, j]], y[ix[:, j]])
             dz = zq - z[ix[:, j]]
             d[:, j] = np.sqrt(horiz * horiz + (self.cfg.lam_z * dz) ** 2)
         self.cfg.across_w = old
-        d = np.maximum(d, 1.0)
+        hit = d[:, 0] <= 1e-9
+        d = np.maximum(d, 1e-6)
         w = d ** (-float(self.cfg.power))
+        w[hit] = 0.0
+        w[hit, 0] = 1.0
         w /= w.sum(1, keepdims=True)
         return (w * resid[ix]).sum(1)
 
@@ -196,24 +229,16 @@ class FreiInterpolator:
         k = min(int(self.cfg.k), len(resid) - 1)
         tree = cKDTree(np.column_stack([x, y]))
         _, ix = tree.query(np.column_stack([x, y]), k=k + 1)
-        ix = np.atleast_2d(ix[:, 1:])
+        ix = np.atleast_2d(ix)[:, 1:]
         best = (np.inf, self.cfg.across_w)
         for aw in self.cfg.across_w_grid:
-            hat = self._residual_idw(x, y, z, resid, x, y, z, aw)
-            # this uses self neighbours including identity-ish; cheap proxy
+            hat = self._residual_idw(x, y, z, resid, x, y, z, aw, ix=ix)
             mse = float(np.mean((hat - resid) ** 2))
             if mse < best[0]:
                 best = (mse, float(aw))
         return best[1]
 
-    def predict_timestamp(self, x, y, elev, values, xq, yq, zq, use_profile: bool = True):
-        x = np.asarray(x, float)
-        y = np.asarray(y, float)
-        z = np.asarray(elev, float)
-        t = np.asarray(values, float)
-        xq = np.asarray(xq, float)
-        yq = np.asarray(yq, float)
-        zq = np.asarray(zq, float)
+    def _field(self, x, y, z, t, xq, yq, zq, use_profile: bool):
         if use_profile:
             bg_s, params, _ = self._background(x, y, z, t)
             resid = t - bg_s
@@ -230,3 +255,28 @@ class FreiInterpolator:
             sl = slice(i0, i0 + tile)
             out[sl] = bg_q[sl] + self._residual_idw(x, y, z, resid, xq[sl], yq[sl], zq[sl], aw)
         return out, {"across_w": aw, "params": params}
+
+    def predict_timestamp(self, x, y, elev, values, xq, yq, zq, use_profile: bool = True,
+                          var: str = "temp_mean"):
+        x = np.asarray(x, float)
+        y = np.asarray(y, float)
+        z = np.asarray(elev, float)
+        t = np.asarray(values, float)
+        xq = np.asarray(xq, float)
+        yq = np.asarray(yq, float)
+        zq = np.asarray(zq, float)
+        if self.cfg.two_step and two_step_var(var):
+            wet = (t > self.cfg.trace).astype(float)
+            p, info = self._field(x, y, z, wet, xq, yq, zq, use_profile=False)
+            p = np.clip(p, 0.0, 1.0)
+            wet_m = t > self.cfg.trace
+            if wet_m.sum() >= 5:
+                amt, info2 = self._field(
+                    x[wet_m], y[wet_m], z[wet_m], t[wet_m], xq, yq, zq, use_profile=False,
+                )
+                amt = np.maximum(amt, 0.0)
+                info = {**info, "amount_across_w": info2.get("across_w")}
+            else:
+                amt = np.zeros(xq.size)
+            return np.where(p >= self.cfg.tau_wet, amt, 0.0), info
+        return self._field(x, y, z, t, xq, yq, zq, use_profile)

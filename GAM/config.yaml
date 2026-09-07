@@ -29,7 +29,7 @@ end_date:   "2025-12-31"
 resolutions_to_process: [1000]
 
 gam:
-  variables_to_process: ["temp_mean"]
+  variables_to_process: ["temp_mean", "precip_sum"]
   save_model: true
   save_llocv: true
   primary_metric: "rmse"
@@ -49,6 +49,7 @@ gam:
   seed: 22
   n_folds: 5
   predict_tile: 50000
+  r_timeout: 600
 
   search:
     formula:

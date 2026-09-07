@@ -74,12 +74,8 @@ def as_naive_utc(values) -> np.ndarray:
 
 
 def data_sources(cfg) -> tuple[str, str, str]:
-    p = cfg.get("paths", {})
-    return (
-        p.get("aggregated_from", "RFSI"),
-        p.get("stations_from", "RFSI"),
-        p.get("grids_from", "RFSI"),
-    )
+    """Kept so callers compile. Path helpers ignore the names and use Source/."""
+    return ("Source", "Source", "Source")
 
 
 def clc_group(codes) -> np.ndarray:

@@ -42,7 +42,7 @@ cnn:
   cyclic_time: true
   two_step: true
   tau_wet: 0.5
-  train_mask_frac: 0.25
+  train_mask_frac: 0.40
   epochs: 40
   patience: 8
   lr: 0.001

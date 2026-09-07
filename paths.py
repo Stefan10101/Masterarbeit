@@ -15,7 +15,9 @@ from typing import Union
 def get_project_root() -> Path:
     current = Path(__file__).resolve().parent
     while current.parent != current:
-        if (current / "CODE").exists() and (current / "BSS").exists():
+        if (current / "CODE").exists() and (
+            (current / "Source").exists() or (current / "Methods").exists()
+        ):
             return current
         current = current.parent
     raise RuntimeError("Could not determine project root.")
@@ -29,7 +31,7 @@ DATA_ROOT = PROJECT_ROOT
 
 
 def get_raw_data_dir() -> Path:
-    return DATA_ROOT / "Kombiniert"
+    return DATA_ROOT / "QC"
 
 
 def get_metadata_path() -> Path:
@@ -45,23 +47,29 @@ def get_stations_metadata_path() -> Path:
     return get_raw_data_dir() / "stations_metadata_with_terrain.csv"
 
 
+def get_source_root() -> Path:
+    """Shared interpolation inputs. Cleaned station archive is QC/."""
+    return DATA_ROOT / "Source"
+
+
 def get_dem_path() -> Path:
-    return DATA_ROOT / "DEM_Source" / "COP30_mosaic_EPSG31287.tif"
+    return get_source_root() / "DEM" / "COP30_mosaic_EPSG31287.tif"
 
 
 def get_landcover_path() -> Path:
-    return DATA_ROOT / "Landcover_Source" / "Reprojected" / "CLC2018_EPSG31287_100m.tif"
+    return get_source_root() / "Landcover" / "CLC2018_EPSG31287_100m.tif"
 
 
 # ============================================================
 # METHOD OUTPUT STRUCTURE
 # ============================================================
 def get_method_output_dir(method: str) -> Path:
-    return DATA_ROOT / method / "Output"
+    return DATA_ROOT / "Methods" / method / "Output"
 
 
-def get_aggregated_dir(method: str) -> Path:
-    return get_method_output_dir(method) / "aggregated"
+def get_aggregated_dir(method: str | None = None) -> Path:
+    """method is ignored. Aggregated parquet lives in Source/."""
+    return get_source_root() / "aggregated"
 
 
 def get_clusters_dir(method: str) -> Path:
@@ -199,12 +207,14 @@ def get_nested_llocv_path(
     return d / f"{variable}_{time_resolution}_nested_llocv.parquet"
 
 
-def get_stations_dir(method: str) -> Path:
-    return get_method_output_dir(method) / "stations"
+def get_stations_dir(method: str | None = None) -> Path:
+    """method is ignored. Station tables live in Source/."""
+    return get_source_root() / "stations"
 
 
-def get_grids_dir(method: str) -> Path:
-    return get_method_output_dir(method) / "grids"
+def get_grids_dir(method: str | None = None) -> Path:
+    """method is ignored. Master / domain grids live in Source/."""
+    return get_source_root() / "grids"
 
 
 def get_maps_dir(method: str) -> Path:
@@ -222,9 +232,11 @@ def get_clipped_landcover_dir(method: str) -> Path:
 # ============================================================
 # NEW: MASTER GRID HELPER (recommended)
 # ============================================================
-def get_master_grid_path(method: str, resolution: int) -> Path:
-    """Path to master grid for a given method and resolution."""
-    return get_grids_dir(method) / "master" / f"res_{resolution}m" / "grid.nc"
+def get_master_grid_path(method: str | None = None, resolution: int = 1000) -> Path:
+    """Master grid (elev + CLC). method is ignored."""
+    if isinstance(method, int) and resolution == 1000:
+        resolution = method
+    return get_grids_dir() / "master" / f"res_{resolution}m" / "grid.nc"
 
 
 # ============================================================
@@ -277,6 +289,12 @@ def get_clusters_plot_dir(resolution: str = "half_hourly") -> Path:
 
 def get_method_plot_dir(method: str, domain: str = "full") -> Path:
     return get_plots_root() / method / domain
+
+
+def get_llocv_compare_dir(time_resolution: str, variable: str) -> Path:
+    d = get_plots_root() / "llocv_compare" / time_resolution / variable
+    ensure_dir(d)
+    return d
 
 
 def get_validation_scatter_dir(method: str, domain: str = "full") -> Path:

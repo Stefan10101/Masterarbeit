@@ -39,8 +39,11 @@ def main():
         else:
             print(f"{var}: watershed pack n_regions={pack['n_regions']}")
         best = None
+        protocols = list(search.get("protocol", [block.get("protocol", "eobs")]))
+        if time_res == "monthly":
+            protocols = ["tps"]
         for proto, kern, lam, az, mode in itertools.product(
-            search.get("protocol", [block.get("protocol", "eobs")]),
+            protocols,
             search.get("kernel", [block.get("kernel", "3d")]),
             search.get("lam", [block.get("lam", 1.0)]),
             search.get("alpha_z", [block.get("alpha_z", 100.0)]),
@@ -50,7 +53,8 @@ def main():
                 "protocol": proto, "kernel": kern, "lam": lam,
                 "alpha_z": az, "alpha_z_mode": mode,
             })
-            pred = run_llocv(panel, var, tcfg, n_folds, {"train"}, {"dev"}, pack)
+            this_pack = pack if mode == "watershed" else None
+            pred = run_llocv(panel, var, tcfg, n_folds, {"train"}, {"dev"}, this_pack, time_res)
             met = compute_metrics(pred["observed"], pred["predicted"])
             print(f"{var} proto={proto} kern={kern} lam={lam} az={az} mode={mode} RMSE={met['rmse']:.3f} n={len(pred)}")
             if best is None or met["rmse"] < best["rmse"]:

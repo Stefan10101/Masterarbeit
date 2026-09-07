@@ -31,7 +31,7 @@ from paths import (
     get_domain_stations_path,
     get_nested_llocv_path,
 )
-from rfsi_core import RFSI
+from rfsi_core import RFSI, build_covariates, neighbor_width
 from rfsi_optimizer import compute_metrics
 
 import importlib.util as _ilu
@@ -68,22 +68,13 @@ def time_col_name(cfg, time_res):
 
 
 def prepare_covariates(df, encoder=None, fit_encoder=False, use_elev=True, use_lc=True):
-    from sklearn.preprocessing import OneHotEncoder
-
-    X_list = []
-    if use_elev and "elev" in df.columns:
-        X_list.append(np.asarray(df[["elev"]].values, dtype=np.float32))
-    if use_lc and "clc_code" in df.columns:
-        clc = np.asarray(df[["clc_code"]].values).reshape(-1, 1)
-        if fit_encoder or encoder is None:
-            encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
-            clc_onehot = encoder.fit_transform(clc)
-        else:
-            clc_onehot = encoder.transform(clc)
-        X_list.append(np.asarray(clc_onehot, dtype=np.float32))
-    if not X_list:
-        return None, encoder
-    return np.hstack(X_list), encoder
+    X = build_covariates(
+        elev=df["elev"].to_numpy() if use_elev and "elev" in df.columns else None,
+        clc_code=df["clc_code"].to_numpy() if use_lc and "clc_code" in df.columns else None,
+        use_elev=use_elev and "elev" in df.columns,
+        use_lc=use_lc and "clc_code" in df.columns,
+    )
+    return X, None
 
 
 def load_panel(cfg, var):
@@ -129,7 +120,7 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
     rf_params = {
         "n_estimators": int(rf_fixed.get("n_estimators", 250)),
         "max_depth": rf_fixed.get("max_depth"),
-        "min_samples_leaf": int(rf_fixed.get("min_samples_leaf", 1)),
+        "min_samples_leaf": int(rf_fixed.get("min_samples_leaf", 5)),
         "max_features": rf_fixed.get("max_features", "sqrt"),
         "random_state": int(rf_fixed.get("random_state", 22)),
         "n_jobs": -1,
@@ -190,8 +181,11 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
         except RuntimeError:
             continue
 
+        donors = valid[valid["station_name"] != name]
         for t, hold_t in hold.groupby("time", sort=False):
-            others = train[train["time"] == t]
+            # Neighbours are same-timestamp other stations (any year).
+            # The forest itself was fit on TRAIN times only.
+            others = donors[donors["time"] == t]
             if len(others) < max(min_stations, n_obs):
                 continue
             X_hold, _ = prepare_covariates(
@@ -251,12 +245,12 @@ def parse_args():
     )
     p.add_argument(
         "--fit",
-        default="all",
+        default="train",
         help="Comma list: train,dev,test or all. Times used to build each fold forest.",
     )
     p.add_argument(
         "--score",
-        default="all",
+        default="dev,test",
         help="Comma list: train,dev,test or all. Times written to the parquet.",
     )
     p.add_argument("--max-stations", type=int, default=0, help="Smoke test: first N stations")

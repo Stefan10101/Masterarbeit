@@ -15,7 +15,8 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_interpolated_map_path, get_master_grid_path
 from frei_core import FreiInterpolator
-from frei_data import data_sources, load_frei_config, load_panel
+from frei_core import two_step_var
+from frei_data import data_sources, load_frei_config, load_panel, precip_trace
 from llocv_frei import cfg_to_frei, load_tuned, pack_from_master
 
 try:
@@ -45,17 +46,19 @@ def main():
 
         for var in variables:
             panel = load_panel(cfg, var)
-            fcfg = cfg_to_frei(cfg, load_tuned(var, time_res))
+            tuned = load_tuned(var, time_res)
+            tuned["trace"] = precip_trace(cfg, time_res, var)
+            fcfg = cfg_to_frei(cfg, tuned)
             pack = pack_from_master(cfg, fcfg.n_regions)
             model = FreiInterpolator(fcfg, pack=pack)
-            use_profile = not str(var).lower().startswith("precip")
+            use_profile = not two_step_var(var)
             fields, used = [], []
             for ts, sl in panel.groupby("time"):
                 if sl["station_name"].nunique() < min_stations:
                     continue
                 hat, _ = model.predict_timestamp(
                     sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(),
-                    sl[var].to_numpy(), xq, yq, zq, use_profile=use_profile,
+                    sl[var].to_numpy(), xq, yq, zq, use_profile=use_profile, var=var,
                 )
                 fields.append(hat.reshape(yy.shape).astype(np.float32))
                 used.append(np.datetime64(ts, "ns"))

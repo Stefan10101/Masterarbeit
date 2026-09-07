@@ -22,6 +22,7 @@ compute_metrics = _kd.compute_metrics
 print_split_metrics = _kd.print_split_metrics
 data_sources = _kd.data_sources
 clc_group = _kd.clc_group
+precip_trace = _kd.precip_trace
 
 
 def load_cnn_config(path: Path | None = None) -> dict:

@@ -37,6 +37,7 @@ rfsi:
   rf_fixed:
     n_estimators: 250
     random_state: 22
+    min_samples_leaf: 5
 
   rf_tunable:
     max_depth: [null, 20, 50]

@@ -31,6 +31,7 @@ cluster_method: "gmm"
 
 bss:
   method: "bsse"                              # "bss" or "bsse"
+  # elev scaled to km in bss_core (ELEV_SCALE=1000). Retrain cluster params.
   segment_min: 4
   segment_max: 18
   segment_step: 2

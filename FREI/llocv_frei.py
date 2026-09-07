@@ -17,8 +17,8 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_frei_tuned_params_path, get_master_grid_path, get_nested_llocv_path
-from frei_core import FreiConfig, FreiInterpolator
-from frei_data import data_sources, load_frei_config, load_panel, print_split_metrics
+from frei_core import FreiConfig, FreiInterpolator, two_step_var
+from frei_data import data_sources, load_frei_config, load_panel, precip_trace, print_split_metrics
 
 
 def parse_split_arg(text: str) -> set[str]:
@@ -53,6 +53,9 @@ def cfg_to_frei(cfg, overrides=None) -> FreiConfig:
         across_w=float(o.get("across_w", f.get("across_w", 4.0))),
         select_metric=bool(f.get("select_metric", True)),
         lam_z=float(o.get("lam_z", f.get("lam_z", 150.0))),
+        two_step=bool(f.get("two_step", True)),
+        tau_wet=float(o.get("tau_wet", f.get("tau_wet", 0.5))),
+        trace=float(o.get("trace", f.get("trace", 0.1))),
         min_stations=int(cfg.get("min_stations_per_field", 10)),
         predict_tile=int(f.get("predict_tile", 20000)),
         seed=int(f.get("seed", 22)),
@@ -96,7 +99,7 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
     names = sorted(panel["station_name"].unique())
     folds = station_folds(names, n_folds, fcfg.seed)
     model = FreiInterpolator(fcfg, pack=pack)
-    use_profile = not str(var).lower().startswith("precip")
+    use_profile = not two_step_var(var)
     rows = []
     for hold in folds:
         hold_set = set(hold)
@@ -118,6 +121,7 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
                     don[var].to_numpy(),
                     q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
                     use_profile=use_profile,
+                    var=var,
                 )
             except Exception as exc:
                 print(f"  frei predict failed {ts}: {type(exc).__name__}: {exc}", flush=True)
@@ -144,7 +148,9 @@ def main():
     n_folds = args.folds or int(cfg["frei"].get("n_folds", 5))
     pack = pack_from_master(cfg)
     for var in variables:
-        fcfg = cfg_to_frei(cfg, load_tuned(var, time_res))
+        tuned = load_tuned(var, time_res)
+        tuned["trace"] = precip_trace(cfg, time_res, var)
+        fcfg = cfg_to_frei(cfg, tuned)
         pack = pack_from_master(cfg, fcfg.n_regions)
         panel = load_panel(cfg, var)
         pred = run_llocv(panel, var, fcfg, n_folds, parse_split_arg(args.fit), parse_split_arg(args.score), pack)

@@ -2,8 +2,10 @@
 """
 3D / partial thin-plate spline + E-OBS protocol.
 
-protocol=eobs: monthly TPS background, anomaly step = KrigingInterpolator
-(T difference; precip/snow indicator + amount).
+protocol=tps: interpolate each timestamp (two-step for precip/snow).
+protocol=eobs: monthly TPS background + anomaly kriging
+  (T difference; precip/snow ratio on wet days). On monthly time_res
+  eobs is identical to tps.
 kernel=3d: φ(r)=r on (x, y, αz z)
 kernel=partial: φ(r)=r² log r on (x, y) + linear elev in the null space
 alpha_z_mode=watershed: z is scaled by a per-basin αz (DEV phase 2)
@@ -38,15 +40,20 @@ class TPSConfig:
     family: str = "exponential"
     k_indicator: int = 16
     tau_wet: float = 0.5
+    two_step: bool = True
+    trace: float = 0.1
     min_stations: int = 10
     predict_tile: int = 20000
     seed: int = 22
 
 
+def two_step_var(var: str) -> bool:
+    v = var.lower()
+    return v.startswith("precip") or v.startswith("snow")
+
+
 def estimate_region_alpha(x, y, elev, regions, default_az: float) -> dict:
     """Per-basin αz from median |Δxy|/|Δz| of local station pairs."""
-    from scipy.spatial import cKDTree
-
     x = np.asarray(x, float)
     y = np.asarray(y, float)
     z = np.asarray(elev, float)
@@ -61,8 +68,12 @@ def estimate_region_alpha(x, y, elev, regions, default_az: float) -> dict:
         zz = z[m]
         k = min(6, int(m.sum()))
         d, ix = cKDTree(xy).query(xy, k=k)
-        d = np.atleast_2d(d)
-        ix = np.atleast_2d(ix)
+        if k == 1:
+            d = np.asarray(d, float)[:, None]
+            ix = np.asarray(ix)[:, None]
+        else:
+            d = np.asarray(d, float)
+            ix = np.asarray(ix)
         ratios = []
         for i in range(len(zz)):
             for jpos in range(1, k):
@@ -89,17 +100,21 @@ def attach_watershed(model: "TPSInterpolator", pack: dict | None, x, y, elev) ->
         regs = _fn(x, y)
         model.cfg.region_alpha = estimate_region_alpha(x, y, elev, regs, model.cfg.alpha_z)
         counts = {int(r): int((regs == r).sum()) for r in np.unique(regs)}
-        print(f"  watershed αz={ {k: round(v, 1) for k, v in sorted(model.cfg.region_alpha.items())} } n={counts}")
+        print(f"  watershed az={ {k: round(v, 1) for k, v in sorted(model.cfg.region_alpha.items())} } n={counts}")
 
 
 def _scale_z(elev, regions, cfg: TPSConfig) -> np.ndarray:
     z = np.asarray(elev, dtype=np.float64)
     if cfg.alpha_z_mode != "watershed" or regions is None:
         return z * float(cfg.alpha_z)
-    out = np.empty_like(z)
-    for i, r in enumerate(np.asarray(regions, dtype=int)):
-        out[i] = z[i] * float(cfg.region_alpha.get(int(r), cfg.alpha_z))
-    return out
+    regs = np.asarray(regions, dtype=int)
+    n = int(max(int(regs.max()) + 1, 1))
+    lookup = np.full(n, float(cfg.alpha_z), dtype=np.float64)
+    for r, v in cfg.region_alpha.items():
+        ri = int(r)
+        if 0 <= ri < n:
+            lookup[ri] = float(v)
+    return z * lookup[np.clip(regs, 0, n - 1)]
 
 
 def _coords(x, y, elev, cfg: TPSConfig, regions=None) -> np.ndarray:
@@ -157,6 +172,26 @@ def eval_tps(coords_obs, w, c, coords_pred, kernel, tile, extra_pred=None):
     return out
 
 
+def _idw(coords, values, query, k: int) -> np.ndarray:
+    values = np.asarray(values, float)
+    k = min(max(int(k), 1), len(values))
+    tree = cKDTree(coords)
+    d, ix = tree.query(query, k=k)
+    if k == 1:
+        d = np.asarray(d, float)[:, None]
+        ix = np.asarray(ix)[:, None]
+    else:
+        d = np.asarray(d, float)
+        ix = np.asarray(ix)
+    hit = d[:, 0] <= 1e-12
+    d = np.maximum(d, 1e-6)
+    w = d ** (-2.0)
+    w[hit] = 0.0
+    w[hit, 0] = 1.0
+    w /= w.sum(axis=1, keepdims=True)
+    return (w * values[ix]).sum(axis=1)
+
+
 def _kriging():
     try:
         from kriging_core import KrigingConfig, KrigingInterpolator
@@ -168,7 +203,7 @@ def _kriging():
 class TPSInterpolator:
     def __init__(self, cfg: TPSConfig, regions_fn=None):
         self.cfg = cfg
-        self.regions_fn = regions_fn  # callable(x,y) -> region ids
+        self.regions_fn = regions_fn
 
     def _regs(self, x, y):
         if self.regions_fn is None or self.cfg.alpha_z_mode != "watershed":
@@ -190,14 +225,31 @@ class TPSInterpolator:
         extra_q = None if extra is None else self._poly(xq, yq, zq, cq)
         return eval_tps(co, w, c, cq, self.cfg.kernel, self.cfg.predict_tile, extra_q)
 
-    def predict_timestamp(self, stn, val, elev, xq, yq, zq) -> np.ndarray:
+    def predict_timestamp(self, stn, val, elev, xq, yq, zq, var: str = "temp_mean") -> np.ndarray:
+        val = np.asarray(val, float)
+        if self.cfg.two_step and two_step_var(var):
+            wet = (val > self.cfg.trace).astype(float)
+            p = np.clip(self.predict_field(stn[:, 0], stn[:, 1], elev, wet, xq, yq, zq), 0.0, 1.0)
+            wet_m = val > self.cfg.trace
+            if wet_m.sum() >= 5:
+                amt = np.maximum(
+                    self.predict_field(
+                        stn[wet_m, 0], stn[wet_m, 1], np.asarray(elev)[wet_m],
+                        val[wet_m], xq, yq, zq,
+                    ),
+                    0.0,
+                )
+            else:
+                amt = np.zeros(np.asarray(xq).size)
+            return np.where(p >= self.cfg.tau_wet, amt, 0.0)
         return self.predict_field(stn[:, 0], stn[:, 1], elev, val, xq, yq, zq)
 
-    def _anom_krige(self, donors: dict, queries: dict, values, var: str, is_zero_inf: bool):
+    def _anom_krige(self, donors: dict, queries: dict, values, var: str):
         KrigingConfig, KrigingInterpolator = _kriging()
         if KrigingInterpolator is None:
             return None
         import pandas as pd
+        values = np.asarray(values, float)
         don = pd.DataFrame({
             "x": donors["x"], "y": donors["y"], "elev": donors["elev"],
             var: values, "time": donors["time"],
@@ -217,33 +269,31 @@ class TPSInterpolator:
         )
         model = KrigingInterpolator(kcfg)
         try:
-            model.fit(don, var, "daily", {"kriging": {"trace_mm": {"daily": 0.1}}})
-            # force two-step from the variable name
-            model.two_step = is_zero_inf
-            if is_zero_inf:
-                model.trace = 0.0  # anomalies already relative; presence handled outside
+            model.fit(don, var, "daily", {"kriging": {}})
+            model.two_step = False
+            model.trace = 0.0
             return model.predict_frame(don, q, var)
         except Exception:
             return None
 
     def predict_eobs_timestamp(
         self, stn, val, elev, month_stn, month_val, month_elev,
-        xq, yq, zq, is_precip: bool, clc_s=None, clc_q=None, time=None,
+        xq, yq, zq, var: str = "temp_mean", clc_s=None, clc_q=None, time=None,
     ) -> np.ndarray:
-        bg = self.predict_field(month_stn[:, 0], month_stn[:, 1], month_elev, month_val, xq, yq, zq)
-        bg_s = self.predict_field(
-            month_stn[:, 0], month_stn[:, 1], month_elev, month_val,
-            stn[:, 0], stn[:, 1], elev,
+        is_zero = two_step_var(var)
+        bg = self.predict_timestamp(month_stn, month_val, month_elev, xq, yq, zq, var=var)
+        bg_s = self.predict_timestamp(
+            month_stn, month_val, month_elev,
+            stn[:, 0], stn[:, 1], elev, var=var,
         )
-        if is_precip:
-            wet = (np.asarray(val, float) > 0).astype(float)
-            amount = np.asarray(val, float)
-            # indicator + amount on the raw daily field, then scale by monthly TPS
-            # Haylock: anomaly vs monthly. Indicator on wet-day, amount = daily/monthly.
-            ratio = amount / np.maximum(bg_s, 1e-6)
+        val = np.asarray(val, float)
+        if is_zero:
+            ratio = np.zeros_like(val)
+            good = bg_s > 1e-6
+            ratio[good] = val[good] / bg_s[good]
             anom = ratio
         else:
-            anom = np.asarray(val, float) - bg_s
+            anom = val - bg_s
 
         donors = {
             "x": stn[:, 0], "y": stn[:, 1], "elev": elev,
@@ -254,17 +304,11 @@ class TPSInterpolator:
             "x": xq, "y": yq, "elev": zq,
             "clc": np.zeros(len(xq), dtype=int) if clc_q is None else clc_q,
         }
-        hat = self._anom_krige(donors, queries, anom, "anom", is_precip)
+        hat = self._anom_krige(donors, queries, anom, "anom")
         if hat is None:
-            coords = _coords(stn[:, 0], stn[:, 1], elev, self.cfg, self._regs(stn[:, 0], stn[:, 1]))
+            co = _coords(stn[:, 0], stn[:, 1], elev, self.cfg, self._regs(stn[:, 0], stn[:, 1]))
             cq = _coords(xq, yq, zq, self.cfg, self._regs(xq, yq))
-            tree = cKDTree(coords)
-            k = min(self.cfg.k, len(anom))
-            d, ix = tree.query(cq, k=k)
-            d = np.maximum(np.atleast_2d(d), 1e-6)
-            w = d ** (-2.0)
-            w /= w.sum(1, keepdims=True)
-            hat = (w * anom[np.atleast_2d(ix)]).sum(1)
-        if is_precip:
+            hat = _idw(co, anom, cq, self.cfg.k)
+        if is_zero:
             return np.maximum(bg, 0.0) * np.maximum(hat, 0.0)
         return bg + hat

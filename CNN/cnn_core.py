@@ -88,6 +88,19 @@ class ConvBlock(nn.Module):
         return self.net(x)
 
 
+def _infer_unet(sd):
+    """n_levels / base / in_ch from a SmallUNet state_dict."""
+    downs = []
+    for k in sd:
+        if k.startswith("down.") and k.endswith(".net.0.weight"):
+            downs.append(int(k.split(".")[1]))
+    n_levels = (max(downs) + 1) if downs else 4
+    w0 = sd.get("down.0.net.0.weight")
+    if w0 is None:
+        return n_levels, 32, 9
+    return n_levels, int(w0.shape[0]), int(w0.shape[1])
+
+
 class SmallUNet(nn.Module):
     def __init__(self, in_ch: int, base: int = 32, n_levels: int = 4, out_ch: int = 1):
         super().__init__()
@@ -103,6 +116,8 @@ class SmallUNet(nn.Module):
         for i in range(n_levels - 1, 0, -1):
             self.up.append(ConvBlock(chs[i] + chs[i - 1], chs[i - 1]))
         self.out = nn.Conv2d(chs[0], out_ch, 1)
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
 
     def forward(self, x):
         skips = []
@@ -122,19 +137,42 @@ class SmallUNet(nn.Module):
 def idw_raster(rows, cols, values, ny, nx, k: int = 8) -> np.ndarray:
     from scipy.spatial import cKDTree
 
+    values = np.asarray(values, dtype=np.float64)
     pts = np.column_stack([rows.astype(np.float64), cols.astype(np.float64)])
     yy, xx = np.mgrid[0:ny, 0:nx]
     grid = np.column_stack([yy.ravel(), xx.ravel()])
     tree = cKDTree(pts)
     kk = min(max(int(k), 1), len(values))
     d, ix = tree.query(grid, k=kk)
-    d = np.atleast_2d(np.asarray(d, dtype=np.float64))
-    ix = np.atleast_2d(ix)
-    d = np.maximum(d, 1.0)
+    if kk == 1:
+        d = np.asarray(d, dtype=np.float64)[:, None]
+        ix = np.asarray(ix)[:, None]
+    else:
+        d = np.asarray(d, dtype=np.float64)
+        ix = np.asarray(ix)
+    hit = d[:, 0] <= 1e-12
+    d = np.maximum(d, 1e-6)
     w = d ** (-2.0)
+    w[hit] = 0.0
+    w[hit, 0] = 1.0
     w /= w.sum(axis=1, keepdims=True)
     out = (w * values[ix]).sum(axis=1)
     return out.reshape(ny, nx).astype(np.float32)
+
+
+def grid_terrain(elev, gx, gy):
+    """Slope / aspect rasters from the master-grid DEM."""
+    from shared.terrain import aspect_trig, slope_aspect_from_dem
+
+    dx = float(gx[1] - gx[0]) if len(gx) > 1 else 1.0
+    dy = float(gy[1] - gy[0]) if len(gy) > 1 else 1.0
+    slope, aspect = slope_aspect_from_dem(elev, abs(dx), abs(dy))
+    sinasp, cosasp = aspect_trig(aspect)
+    return (
+        np.asarray(slope, dtype=np.float32),
+        np.asarray(sinasp, dtype=np.float32),
+        np.asarray(cosasp, dtype=np.float32),
+    )
 
 
 def station_to_raster(rows, cols, values, ny, nx):
@@ -187,10 +225,23 @@ class CNNInterpolator:
         }
 
     def load_state_dict(self, blob):
-        self.in_ch = int(blob.get("in_ch", self.in_ch))
+        saved = blob.get("cfg") or {}
+        if isinstance(saved, dict):
+            for k, v in saved.items():
+                if hasattr(self.cfg, k):
+                    setattr(self.cfg, k, v)
+        net_sd = blob["net"]
+        n_levels, base_ch, in_ch = _infer_unet(net_sd)
+        self.in_ch = int(blob.get("in_ch", in_ch))
         self.out_ch = int(blob.get("out_ch", self.out_ch))
-        self.net = SmallUNet(self.in_ch, self.cfg.base_ch, self.cfg.n_levels, self.out_ch).to(self.device)
-        self.net.load_state_dict(blob["net"])
+        if "down.0.net.0.weight" in net_sd:
+            self.in_ch = int(net_sd["down.0.net.0.weight"].shape[1])
+        if "out.weight" in net_sd:
+            self.out_ch = int(net_sd["out.weight"].shape[0])
+        self.cfg.n_levels = n_levels
+        self.cfg.base_ch = base_ch
+        self.net = SmallUNet(self.in_ch, base_ch, n_levels, self.out_ch).to(self.device)
+        self.net.load_state_dict(net_sd)
         self.y_mean = blob["y_mean"]
         self.y_std = blob["y_std"]
         self.z_mean = blob["z_mean"]
@@ -209,7 +260,13 @@ class CNNInterpolator:
         if time_ch:
             for t in time_ch:
                 chans.append(np.full(value.shape, float(t), dtype=np.float32))
-        return np.stack(chans, axis=0).astype(np.float32)
+        packed = np.stack(chans, axis=0).astype(np.float32)
+        if packed.shape[0] != int(self.in_ch):
+            raise RuntimeError(
+                f"CNN packed {packed.shape[0]} channels but net expects {self.in_ch}. "
+                f"use_terrain={self.cfg.use_terrain} cyclic_time={self.cfg.cyclic_time}"
+            )
+        return packed
 
     def predict_raster(self, value, mask, elev, clc, slope=None, sinasp=None, cosasp=None,
                        time_ch=None, two_step: bool = False, base=None) -> np.ndarray:

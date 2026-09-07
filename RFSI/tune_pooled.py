@@ -32,7 +32,7 @@ from paths import (
     get_medoids_path,
     get_rfsi_tuned_params_path,
 )
-from rfsi_core import RFSI
+from rfsi_core import RFSI, build_covariates
 from rfsi_optimizer import compute_metrics
 
 _splits_path = CODE_DIR / "shared" / "splits" / "splits.py"
@@ -68,22 +68,13 @@ def load_config():
 
 
 def prepare_covariates(df, encoder=None, fit_encoder=False, use_elev=True, use_lc=True):
-    from sklearn.preprocessing import OneHotEncoder
-
-    X_list = []
-    if use_elev and "elev" in df.columns:
-        X_list.append(np.asarray(df[["elev"]].values, dtype=np.float32))
-    if use_lc and "clc_code" in df.columns:
-        clc = np.asarray(df[["clc_code"]].values).reshape(-1, 1)
-        if fit_encoder or encoder is None:
-            encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
-            clc_onehot = encoder.fit_transform(clc)
-        else:
-            clc_onehot = encoder.transform(clc)
-        X_list.append(np.asarray(clc_onehot, dtype=np.float32))
-    if not X_list:
-        return None, encoder
-    return np.hstack(X_list), encoder
+    X = build_covariates(
+        elev=df["elev"].to_numpy() if use_elev and "elev" in df.columns else None,
+        clc_code=df["clc_code"].to_numpy() if use_lc and "clc_code" in df.columns else None,
+        use_elev=use_elev and "elev" in df.columns,
+        use_lc=use_lc and "clc_code" in df.columns,
+    )
+    return X, None
 
 
 def load_panel(cfg, var):

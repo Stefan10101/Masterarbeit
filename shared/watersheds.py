@@ -205,14 +205,45 @@ def cost_between(y0, x0, y1, x1, uy, ux, tpi_map, across_w: float = 4.0) -> np.n
     return cost * length / steps
 
 
-def sample_region(labels: np.ndarray, xs: np.ndarray, ys: np.ndarray, x, y) -> np.ndarray:
+def _index_xy(xs, ys, x, y):
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
     dx = float(xs[1] - xs[0]) if len(xs) > 1 else 1.0
     dy = float(ys[1] - ys[0]) if len(ys) > 1 else 1.0
-    ix = np.clip(((x - xs[0]) / dx).astype(int), 0, len(xs) - 1)
-    iy = np.clip(((y - ys[0]) / dy).astype(int), 0, len(ys) - 1)
+    ix = np.clip(np.round((x - xs[0]) / dx).astype(int), 0, len(xs) - 1)
+    iy = np.clip(np.round((y - ys[0]) / dy).astype(int), 0, len(ys) - 1)
+    return ix, iy
+
+
+def sample_region(labels: np.ndarray, xs: np.ndarray, ys: np.ndarray, x, y) -> np.ndarray:
+    ix, iy = _index_xy(xs, ys, x, y)
     return labels[iy, ix]
+
+
+def region_distance(regions: np.ndarray) -> np.ndarray:
+    """Distance in cells from every pixel to each region. Shape (n_regions, ny, nx)."""
+    n_r = int(np.max(regions)) if regions.size else 0
+    if n_r < 1:
+        return np.zeros((1,) + regions.shape, dtype=np.float32)
+    out = np.empty((n_r,) + regions.shape, dtype=np.float32)
+    for r in range(1, n_r + 1):
+        out[r - 1] = ndi.distance_transform_edt(regions != r)
+    return out
+
+
+def sample_blend_weights(dist: np.ndarray, xs, ys, x, y, blend_cells: float) -> np.ndarray:
+    """Soft region membership. Inside a basin w~1; decays across the divide."""
+    ix, iy = _index_xy(xs, ys, x, y)
+    d = dist[:, iy, ix].T  # (n_pts, n_r)
+    b = max(float(blend_cells), 1e-6)
+    w = np.clip(1.0 - d / b, 0.0, 1.0)
+    empty = w.sum(axis=1) <= 0
+    if empty.any():
+        nearest = np.argmin(d[empty], axis=1)
+        w[empty] = 0.0
+        w[np.where(empty)[0], nearest] = 1.0
+    w = w / w.sum(axis=1, keepdims=True)
+    return w
 
 
 def build_pack(dem: np.ndarray, xs: np.ndarray, ys: np.ndarray, cfg: WatershedConfig) -> dict:
@@ -227,6 +258,7 @@ def build_pack(dem: np.ndarray, xs: np.ndarray, ys: np.ndarray, cfg: WatershedCo
     uy, ux = valley_unit(direc)
     return {
         "regions": regions,
+        "region_dist": region_distance(regions),
         "tpi": tpi_map,
         "summit": summit,
         "coldpool": cold,
@@ -234,6 +266,7 @@ def build_pack(dem: np.ndarray, xs: np.ndarray, ys: np.ndarray, cfg: WatershedCo
         "ux": ux,
         "xs": np.asarray(xs, dtype=np.float64),
         "ys": np.asarray(ys, dtype=np.float64),
-        "n_regions": int(regions.max()),
+        "dx": float(dx),
+        "n_regions": int(max(int(regions.max()), 1)),
         "cfg": cfg,
     }

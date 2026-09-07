@@ -17,7 +17,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_interpolated_map_path, get_master_grid_path, get_tps_tuned_params_path
 from tps_core import TPSInterpolator, attach_watershed
-from tps_data import data_sources, load_panel, load_tps_config, uses_two_step
+from tps_data import data_sources, load_panel, load_tps_config, precip_trace, uses_two_step
 from llocv_tps import cfg_to_tps, load_tuned, month_key, pack_from_master, predict_rows
 
 try:
@@ -55,7 +55,9 @@ def main():
 
         for var in variables:
             panel = load_panel(cfg, var)
-            tcfg = cfg_to_tps(cfg, load_tuned(var, time_res))
+            tuned = load_tuned(var, time_res)
+            tuned["trace"] = precip_trace(cfg, time_res, var)
+            tcfg = cfg_to_tps(cfg, tuned)
             model = TPSInterpolator(tcfg)
             attach_watershed(
                 model,
@@ -71,7 +73,7 @@ def main():
                     continue
                 # fake query frame so predict_rows can reuse E-OBS monthly logic
                 q = pd.DataFrame({"x": xq, "y": yq, "elev": zq, "time": ts})
-                hat = predict_rows(model, sl, q, var)
+                hat = predict_rows(model, sl, q, var, monthly_panel=panel, time_res=time_res)
                 fields.append(hat.reshape(yy.shape).astype(np.float32))
                 used.append(np.datetime64(ts, "ns"))
             if not fields:

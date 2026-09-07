@@ -21,6 +21,39 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
+DIST_SCALE = 1000.0  # m → km in the distance features
+
+
+def neighbor_width(n_obs: int) -> int:
+    """z_1..z_n + d_km_1..d_n + idw."""
+    return int(n_obs) * 2 + 1
+
+
+def clc_level1(codes) -> np.ndarray:
+    c = np.asarray(codes, dtype=np.int32)
+    out = np.zeros(c.shape, dtype=np.int32)
+    high = c >= 100
+    out[high] = c[high] // 100
+    mid = (c >= 1) & (c <= 5)
+    out[mid] = c[mid]
+    out[(out < 0) | (out > 5)] = 0
+    return out
+
+
+def build_covariates(elev=None, clc_code=None, use_elev: bool = True, use_lc: bool = True):
+    """elev in km + CLC level-1 one-hot (6 cols). Fixed width, no sklearn encoder."""
+    parts = []
+    if use_elev and elev is not None:
+        e = np.asarray(elev, dtype=np.float32).reshape(-1)
+        parts.append((e / 1000.0)[:, None])
+    if use_lc and clc_code is not None:
+        g = np.clip(clc_level1(clc_code).reshape(-1), 0, 5)
+        parts.append(np.eye(6, dtype=np.float32)[g])
+    if not parts:
+        return None
+    return np.hstack(parts).astype(np.float32)
+
+
 def build_neighbor_features(
     coords_obs: np.ndarray,
     z_obs: np.ndarray,
@@ -30,9 +63,11 @@ def build_neighbor_features(
     exclude_self: bool = False,
 ) -> np.ndarray:
     """
-    Features from n nearest observations: [z_1..z_n, d_1..d_n].
+    Features from n nearest observations: [z_1..z_n, d_km_1..d_n, idw].
 
     exclude_self=True drops the 0-distance match (training stations).
+    Distances are in km. idw is inverse-distance^2 mean of those neighbours
+    so the forest has an explicit local baseline (should not lose to IDW).
     """
     coords_obs = np.asarray(coords_obs, dtype=np.float64)
     z_obs = np.asarray(z_obs, dtype=np.float64)
@@ -60,7 +95,13 @@ def build_neighbor_features(
         z_neighbors = np.pad(z_neighbors, ((0, 0), (0, pad)), constant_values=np.nan)
         distances = np.pad(distances, ((0, 0), (0, pad)), constant_values=np.nan)
 
-    return np.hstack([z_neighbors, distances]).astype(np.float32)
+    d_km = distances / DIST_SCALE
+    w = 1.0 / np.maximum(distances, 1.0) ** 2
+    good = np.isfinite(z_neighbors) & np.isfinite(w)
+    w = np.where(good, w, 0.0)
+    z_w = np.where(good, z_neighbors, 0.0)
+    idw = (w * z_w).sum(axis=1) / np.maximum(w.sum(axis=1), 1e-12)
+    return np.hstack([z_neighbors, d_km, idw[:, None]]).astype(np.float32)
 
 
 def assemble_pooled_training(

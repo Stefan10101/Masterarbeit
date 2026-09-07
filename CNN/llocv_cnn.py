@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """CNN LLOCV.
 
-Default: frozen pooled model, score held-out station pixels (same protocol
-as produce_* station parquet — not nested).
+Default: frozen pooled model, 5 station folds, score held-out stations
+on every timestamp (same folds as GAM/Kriging/RGI).
 
 --nested retrains one U-Net per station fold on TRAIN times of the other
 stations and scores DEV+TEST of the held-out stations.
+
+--loo is the slow full leave-one-station-per-timestamp path.
 """
 
 from __future__ import annotations
@@ -24,9 +26,9 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_model_path, get_master_grid_path, get_nested_llocv_path
-from cnn_core import CNNInterpolator, cyclic_time, idw_raster, station_to_raster, two_step_var
-from cnn_data import data_sources, load_cnn_config, load_panel, print_split_metrics
-from train_cnn import cfg_to_cnn, grid_index, load_tuned, train_one
+from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_raster, station_to_raster, two_step_var
+from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, print_split_metrics
+from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned, train_one
 
 try:
     import xarray as xr
@@ -44,45 +46,56 @@ def station_folds(names, n_folds, seed):
     return folds
 
 
-def predict_stations(model, part, var, gx, gy, elev, clc, ccfg):
-    rows, cols = grid_index(part["x"].to_numpy(), part["y"].to_numpy(), gx, gy)
-    val = part[var].to_numpy()
-    ny, nx = elev.shape
-    field, mask = station_to_raster(rows, cols, val, ny, nx)
-    base = idw_raster(rows, cols, val, ny, nx, k=ccfg.idw_k) if ccfg.residual_idw else None
-    # zero the query pixels so the net cannot copy them
-    field_q = field.copy()
-    mask_q = mask.copy()
-    field_q[rows, cols] = 0.0
-    mask_q[rows, cols] = 0.0
-    # keep donor pixels: rebuild from everyone except we only have `part`
-    # caller must pass donors+queries separately
-    return field_q, mask_q, base, rows, cols
-
-
-def eval_parts(model, donors, queries, var, gx, gy, elev, clc, ccfg):
+def eval_parts(model, donors, queries, var, gx, gy, elev, clc, ccfg, slope, sinasp, cosasp, subdaily):
     rows_d, cols_d = grid_index(donors["x"].to_numpy(), donors["y"].to_numpy(), gx, gy)
     val_d = donors[var].to_numpy()
     ny, nx = elev.shape
     field, mask = station_to_raster(rows_d, cols_d, val_d, ny, nx)
-    base = idw_raster(rows_d, cols_d, val_d, ny, nx, k=ccfg.idw_k) if ccfg.residual_idw else None
+    residual = bool(model.cfg.residual_idw)
+    base = idw_raster(rows_d, cols_d, val_d, ny, nx, k=model.cfg.idw_k) if residual else None
     inp = np.where(mask > 0, field - base, 0.0).astype(np.float32) if base is not None else field
     ts = donors["time"].iloc[0] if "time" in donors.columns else queries["time"].iloc[0]
-    tch = cyclic_time(ts, False) if ccfg.cyclic_time else None
+    tch = cyclic_time(ts, subdaily) if model.cfg.cyclic_time else None
     hat = model.predict_raster(
-        inp, mask, elev, clc, time_ch=tch,
-        two_step=ccfg.two_step and two_step_var(var),
+        inp, mask, elev, clc,
+        slope=slope, sinasp=sinasp, cosasp=cosasp,
+        time_ch=tch,
+        two_step=model.cfg.two_step and two_step_var(var),
         base=base,
     )
     rows_q, cols_q = grid_index(queries["x"].to_numpy(), queries["y"].to_numpy(), gx, gy)
     return hat[rows_q, cols_q]
 
 
+def load_frozen(ccfg, var, time_res):
+    path = get_cnn_model_path(var, time_res)
+    try:
+        blob = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        blob = torch.load(path, map_location="cpu")
+    model = CNNInterpolator(
+        ccfg,
+        in_ch=int(blob.get("in_ch", 9)),
+        out_ch=int(blob.get("out_ch", 1)),
+    )
+    model.load_state_dict(blob)
+    model.net.to(model.device)
+    print(
+        f"loaded {path.name} in={model.in_ch} out={model.out_ch} "
+        f"levels={model.cfg.n_levels} y_mean={model.y_mean:.3f} y_std={model.y_std:.3f} "
+        f"residual_idw={model.cfg.residual_idw} device={model.device}",
+        flush=True,
+    )
+    return model
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variable", default=None)
     p.add_argument("--nested", action="store_true")
+    p.add_argument("--loo", action="store_true")
     p.add_argument("--folds", type=int, default=None)
+    p.add_argument("--score", default="dev,test")
     args = p.parse_args()
     cfg = load_cnn_config()
     if xr is None:
@@ -95,17 +108,20 @@ def main():
     gy = grid["y"].values.astype(np.float64)
     elev = grid["elev"].values.astype(np.float64) if "elev" in grid else np.zeros((gy.size, gx.size))
     clc = np.zeros_like(elev)
-    from cnn_data import clc_group
     for name in ("clc_code", "clc", "landcover"):
         if name in grid:
             clc = clc_group(np.nan_to_num(grid[name].values, nan=0).astype(np.int32)).astype(np.float64)
             break
+    slope, sinasp, cosasp = grid_terrain(elev, gx, gy)
     variables = [args.variable] if args.variable else cfg["cnn"].get("variables_to_process", ["temp_mean"])
-    n_folds = args.folds or 5
+    n_folds = args.folds or int(cfg["cnn"].get("n_folds", 5))
+    score = {s.strip() for s in args.score.split(",") if s.strip()}
 
     for var in variables:
         panel = load_panel(cfg, var)
         ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))
+        subdaily = is_subdaily(panel, time_res)
+        trace = precip_trace(cfg, time_res, var)
         rows = []
         if args.nested:
             names = sorted(panel["station_name"].unique())
@@ -114,29 +130,37 @@ def main():
                 hold_set = set(hold)
                 don = panel[~panel["station_name"].isin(hold_set)]
                 q = panel[panel["station_name"].isin(hold_set)]
-                model, _ = train_one(don, var, ccfg, elev, clc, gx, gy)
-                for ts, qq in q[q["split"].isin(["dev", "test"])].groupby("time"):
+                model, _ = train_one(
+                    don, var, ccfg, elev, clc, gx, gy,
+                    slope, sinasp, cosasp, time_res=time_res, trace=trace,
+                )
+                q_score = q if score == {"all"} else q[q["split"].isin(score)]
+                for ts, qq in q_score.groupby("time"):
                     dd = don[don["time"] == ts]
-                    if dd.empty:
+                    if dd.empty or dd["station_name"].nunique() < ccfg.min_stations:
                         continue
-                    hat = eval_parts(model, dd, qq, var, gx, gy, elev, clc, ccfg)
+                    hat = eval_parts(model, dd, qq, var, gx, gy, elev, clc, ccfg, slope, sinasp, cosasp, subdaily)
                     part = qq[["station_name", "time", "split", var]].copy()
                     part["predicted"] = hat
                     part = part.rename(columns={var: "observed"})
                     rows.append(part)
         else:
-            blob = torch.load(get_cnn_model_path(var, time_res), map_location="cpu")
-            model = CNNInterpolator(ccfg)
-            model.load_state_dict(blob)
-            for ts, sl in panel.groupby("time"):
-                # leave-one-station in the raster: use all others as donors
-                names = sl["station_name"].tolist()
-                if len(names) < ccfg.min_stations + 1:
-                    continue
-                for i, name in enumerate(names):
-                    qq = sl.iloc[[i]]
-                    dd = sl.drop(sl.index[i])
-                    hat = eval_parts(model, dd, qq, var, gx, gy, elev, clc, ccfg)
+            model = load_frozen(ccfg, var, time_res)
+            names = sorted(panel["station_name"].unique())
+            if args.loo:
+                groups = [[n] for n in names]
+            else:
+                groups = station_folds(names, n_folds, ccfg.seed)
+            for hold in groups:
+                hold_set = set(hold)
+                for ts, sl in panel.groupby("time"):
+                    qq = sl[sl["station_name"].isin(hold_set)]
+                    dd = sl[~sl["station_name"].isin(hold_set)]
+                    if qq.empty or dd["station_name"].nunique() < ccfg.min_stations:
+                        continue
+                    if score != {"all"} and qq["split"].iloc[0] not in score:
+                        continue
+                    hat = eval_parts(model, dd, qq, var, gx, gy, elev, clc, ccfg, slope, sinasp, cosasp, subdaily)
                     part = qq[["station_name", "time", "split", var]].copy()
                     part["predicted"] = hat
                     part = part.rename(columns={var: "observed"})

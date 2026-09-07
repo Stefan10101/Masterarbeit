@@ -18,7 +18,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path, get_nested_llocv_path
 from gam_core import GAMConfig, GAMInterpolator
-from gam_data import load_gam_config, load_panel, print_split_metrics
+from gam_data import load_gam_config, load_panel, precip_trace, print_split_metrics
 
 
 def parse_split_arg(text: str) -> set[str]:
@@ -56,6 +56,8 @@ def cfg_to_gam(cfg, overrides=None) -> GAMConfig:
         min_stations=int(cfg.get("min_stations_per_field", 10)),
         predict_tile=int(g.get("predict_tile", 50000)),
         seed=int(g.get("seed", 22)),
+        trace=float(o.get("trace", g.get("trace", 0.1))),
+        r_timeout=float(g.get("r_timeout", 600.0)),
     )
 
 
@@ -67,11 +69,18 @@ def load_tuned(var, time_res):
         return yaml.safe_load(f) or {}
 
 
-def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits):
+def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, progress: str | None = None):
+    import time
+
     names = sorted(panel["station_name"].unique())
     folds = station_folds(names, n_folds, gcfg.seed)
     rows = []
-    for hold in folds:
+    tag = f"[{progress}] " if progress else ""
+    t0 = time.time()
+    n_done = 0
+    n_fail = 0
+    backend = None
+    for fi, hold in enumerate(folds, start=1):
         hold_set = set(hold)
         don_all = panel[~panel["station_name"].isin(hold_set)]
         q_all = panel[panel["station_name"].isin(hold_set)]
@@ -81,34 +90,54 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits):
         don_all = don_all.copy()
         q_all["_t"] = pd.to_datetime(q_all["time"]).astype("datetime64[ns]")
         don_all["_t"] = pd.to_datetime(don_all["time"]).astype("datetime64[ns]")
-        for ts, q in q_all.groupby("_t"):
+        times = list(q_all.groupby("_t"))
+        print(
+            f"{tag}fold {fi}/{n_folds} hold={len(hold_set)} score_times={len(times)}",
+            flush=True,
+        )
+        for ti, (ts, q) in enumerate(times, start=1):
             don = don_all[don_all["_t"] == ts]
             if don["station_name"].nunique() < gcfg.min_stations:
                 continue
             model = GAMInterpolator(gcfg)
-            slp = don["slope"].to_numpy() if "slope" in don.columns else None
             try:
                 hat = model.predict_timestamp(
-                don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
-                don[var].to_numpy(),
-                q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
-                clc=don["clc_group"].to_numpy(),
-                clc_q=q["clc_group"].to_numpy(),
-                slope=slp,
-                slope_q=q["slope"].to_numpy() if "slope" in q.columns else None,
-                sinasp=don["sinasp"].to_numpy() if "sinasp" in don.columns else None,
-                sinasp_q=q["sinasp"].to_numpy() if "sinasp" in q.columns else None,
-                cosasp=don["cosasp"].to_numpy() if "cosasp" in don.columns else None,
-                cosasp_q=q["cosasp"].to_numpy() if "cosasp" in q.columns else None,
+                    don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
+                    don[var].to_numpy(),
+                    q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
+                    clc=don["clc_group"].to_numpy(),
+                    clc_q=q["clc_group"].to_numpy(),
+                    slope=don["slope"].to_numpy() if "slope" in don.columns else None,
+                    slope_q=q["slope"].to_numpy() if "slope" in q.columns else None,
+                    sinasp=don["sinasp"].to_numpy() if "sinasp" in don.columns else None,
+                    sinasp_q=q["sinasp"].to_numpy() if "sinasp" in q.columns else None,
+                    cosasp=don["cosasp"].to_numpy() if "cosasp" in don.columns else None,
+                    cosasp_q=q["cosasp"].to_numpy() if "cosasp" in q.columns else None,
                     var=var,
+                    trace=gcfg.trace,
                 )
             except Exception as exc:
-                print(f"  gam predict failed {ts}: {type(exc).__name__}: {exc}", flush=True)
+                n_fail += 1
+                print(f"{tag}FAIL {ts} {type(exc).__name__}: {exc}", flush=True)
                 continue
+            n_done += 1
+            be = getattr(model, "_backend", None)
+            if backend is None and be:
+                backend = be
+                print(f"{tag}backend={backend} first_ok {ts}", flush=True)
+            if ti == 1 or ti % 6 == 0 or ti == len(times):
+                dt = time.time() - t0
+                print(
+                    f"{tag}fold {fi}/{n_folds} time {ti}/{len(times)} "
+                    f"ok={n_done} fail={n_fail} {dt:.0f}s backend={backend}",
+                    flush=True,
+                )
             part = q[["station_name", "time", "split", var]].copy()
             part["predicted"] = hat
             part = part.rename(columns={var: "observed"})
             rows.append(part)
+    dt = time.time() - t0
+    print(f"{tag}llocv done ok={n_done} fail={n_fail} rows={len(rows)} {dt:.0f}s", flush=True)
     if not rows:
         return pd.DataFrame(columns=["station_name", "time", "split", "observed", "predicted"])
     return pd.concat(rows, ignore_index=True)
@@ -126,7 +155,9 @@ def main():
     variables = [args.variable] if args.variable else cfg["gam"].get("variables_to_process", ["temp_mean"])
     n_folds = args.folds or int(cfg["gam"].get("n_folds", 5))
     for var in variables:
-        gcfg = cfg_to_gam(cfg, load_tuned(var, time_res))
+        tuned = load_tuned(var, time_res)
+        tuned["trace"] = precip_trace(cfg, time_res, var)
+        gcfg = cfg_to_gam(cfg, tuned)
         panel = load_panel(cfg, var)
         pred = run_llocv(panel, var, gcfg, n_folds, parse_split_arg(args.fit), parse_split_arg(args.score))
         out = get_nested_llocv_path("GAM", var, time_res, domain="full")

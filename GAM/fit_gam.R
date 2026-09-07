@@ -2,18 +2,22 @@
 # Fit one mgcv GAM from a station parquet and write model + station fitted values.
 # Called from gam_core.py. Columns required on input:
 #   y, x, ycoord, elev [, slope, sinasp, cosasp, clc]
-# Args: train.parquet out_dir formula_id family
+# Args: train.parquet out_dir formula_id family [n_splines]
 # family: gaussian | binomial | Gamma
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 3) {
-  stop("usage: fit_gam.R train.parquet out_dir formula_id [family]")
+  stop("usage: fit_gam.R train.parquet out_dir formula_id [family] [n_splines]")
 }
 
 train_path <- args[[1]]
 out_dir <- args[[2]]
 formula_id <- args[[3]]
 family_name <- if (length(args) >= 4) args[[4]] else "gaussian"
+n_splines <- if (length(args) >= 5) as.integer(args[[5]]) else 10L
+if (!is.finite(n_splines) || n_splines < 4L) {
+  n_splines <- 10L
+}
 
 suppressPackageStartupMessages({
   library(mgcv)
@@ -32,13 +36,12 @@ if ("ycoord" %in% names(df)) {
 }
 
 has <- function(col) col %in% names(df)
-clc <- has("clc")
 nuniq <- function(v) length(unique(v[is.finite(v)]))
-k_ok <- function(v, k = 10L) max(4L, min(as.integer(k), nuniq(v) - 1L))
+k_ok <- function(v, k) max(4L, min(as.integer(k), nuniq(v) - 1L))
 
-kx <- k_ok(df$x, 10L)
-ky <- k_ok(df$yc, 10L)
-ke <- k_ok(df$elev, 8L)
+kx <- k_ok(df$x, n_splines)
+ky <- k_ok(df$yc, n_splines)
+ke <- k_ok(df$elev, max(4L, n_splines - 2L))
 
 rhs <- switch(formula_id,
   te_xy_s_elev = sprintf("te(x, yc, k=c(%d,%d)) + s(elev, k=%d)", kx, ky, ke),
@@ -51,15 +54,17 @@ rhs <- switch(formula_id,
 )
 for (col in c("slope", "sinasp", "cosasp")) {
   if (has(col) && nuniq(df[[col]]) >= 6L) {
-    rhs <- paste(rhs, sprintf("+ s(%s, k=%d)", col, k_ok(df[[col]], 6L)))
+    rhs <- paste(rhs, sprintf("+ s(%s, k=%d)", col, k_ok(df[[col]], max(4L, n_splines %/% 2L))))
   }
 }
-if (clc) {
+if (has("clc")) {
   df$clc <- factor(df$clc)
-  rhs <- paste(rhs, "+ clc")
+  if (nlevels(df$clc) >= 2L) {
+    rhs <- paste(rhs, "+ clc")
+  }
 }
 
-fam <- switch(family_name,
+fam <- switch(tolower(family_name),
   gaussian = gaussian(),
   binomial = binomial(),
   gamma = Gamma(link = "log"),

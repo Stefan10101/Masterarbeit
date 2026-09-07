@@ -17,8 +17,8 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_master_grid_path, get_nested_llocv_path, get_tps_tuned_params_path
-from tps_core import TPSConfig, TPSInterpolator, attach_watershed
-from tps_data import data_sources, load_panel, load_tps_config, print_split_metrics, uses_two_step
+from tps_core import TPSConfig, TPSInterpolator, attach_watershed, two_step_var
+from tps_data import data_sources, load_panel, load_tps_config, precip_trace, print_split_metrics, uses_two_step
 
 
 def parse_split_arg(text: str) -> set[str]:
@@ -57,6 +57,8 @@ def cfg_to_tps(cfg, overrides=None) -> TPSConfig:
         family=str(t.get("family", "exponential")),
         k_indicator=int(t.get("k_indicator", 16)),
         tau_wet=float(o.get("tau_wet", t.get("tau_wet", 0.5))),
+        two_step=bool(t.get("two_step", True)),
+        trace=float(o.get("trace", t.get("trace", 0.1))),
         min_stations=int(cfg.get("min_stations_per_field", 10)),
         predict_tile=int(t.get("predict_tile", 20000)),
         seed=int(t.get("seed", 22)),
@@ -98,11 +100,30 @@ def month_key(times) -> np.ndarray:
     return (t.year * 100 + t.month).to_numpy()
 
 
-def predict_rows(model: TPSInterpolator, donors: pd.DataFrame, query: pd.DataFrame, var: str):
+def monthly_from_panel(panel: pd.DataFrame, var: str, yearmonth: int) -> pd.DataFrame:
+    mk = month_key(panel["time"])
+    mon = panel[mk == yearmonth]
+    if mon.empty:
+        return mon
+    agg = "sum" if two_step_var(var) else "mean"
+    return (
+        mon.groupby("station_name")
+        .agg(x=("x", "first"), y=("y", "first"), elev=("elev", "first"), val=(var, agg))
+        .reset_index()
+    )
+
+
+def predict_rows(model: TPSInterpolator, donors: pd.DataFrame, query: pd.DataFrame, var: str,
+                 monthly_panel: pd.DataFrame | None = None, time_res: str = "monthly"):
     if donors.empty or query.empty:
         return np.full(len(query), np.nan)
-    precip = uses_two_step(var)
-    if model.cfg.protocol == "tps" or donors["time"].nunique() <= 1:
+    use_eobs = (
+        model.cfg.protocol == "eobs"
+        and time_res in ("daily", "weekly", "half_hourly")
+        and monthly_panel is not None
+        and len(monthly_panel)
+    )
+    if not use_eobs:
         return model.predict_timestamp(
             donors[["x", "y"]].to_numpy(),
             donors[var].to_numpy(),
@@ -110,15 +131,22 @@ def predict_rows(model: TPSInterpolator, donors: pd.DataFrame, query: pd.DataFra
             query["x"].to_numpy(),
             query["y"].to_numpy(),
             query["elev"].to_numpy(),
+            var=var,
         )
-    mk = month_key(donors["time"])
-    qk = month_key(query["time"])[0]
-    mon = donors[mk == qk]
-    if len(mon) < model.cfg.min_stations:
-        mon = donors
-    agg = "sum" if precip else "mean"
-    monthly = mon.groupby("station_name").agg(x=("x", "first"), y=("y", "first"),
-                                              elev=("elev", "first"), val=(var, agg)).reset_index()
+    qk = int(month_key(query["time"])[0])
+    monthly = monthly_from_panel(monthly_panel, var, qk)
+    if len(monthly) < model.cfg.min_stations:
+        return model.predict_timestamp(
+            donors[["x", "y"]].to_numpy(),
+            donors[var].to_numpy(),
+            donors["elev"].to_numpy(),
+            query["x"].to_numpy(),
+            query["y"].to_numpy(),
+            query["elev"].to_numpy(),
+            var=var,
+        )
+    clc_s = donors["clc_group"].to_numpy() if "clc_group" in donors.columns else None
+    clc_q = query["clc_group"].to_numpy() if "clc_group" in query.columns else None
     return model.predict_eobs_timestamp(
         donors[["x", "y"]].to_numpy(),
         donors[var].to_numpy(),
@@ -129,11 +157,15 @@ def predict_rows(model: TPSInterpolator, donors: pd.DataFrame, query: pd.DataFra
         query["x"].to_numpy(),
         query["y"].to_numpy(),
         query["elev"].to_numpy(),
-        is_precip=precip,
+        var=var,
+        clc_s=clc_s,
+        clc_q=clc_q,
+        time=query["time"].iloc[0],
     )
 
 
-def run_llocv(panel, var, tcfg: TPSConfig, n_folds: int, fit_splits, score_splits, pack=None):
+def run_llocv(panel, var, tcfg: TPSConfig, n_folds: int, fit_splits, score_splits, pack=None,
+              time_res: str = "monthly"):
     names = sorted(panel["station_name"].unique())
     folds = station_folds(names, n_folds, tcfg.seed)
     model = TPSInterpolator(tcfg)
@@ -153,7 +185,7 @@ def run_llocv(panel, var, tcfg: TPSConfig, n_folds: int, fit_splits, score_split
             don = don_all[don_all["time"] == ts]
             if don["station_name"].nunique() < tcfg.min_stations:
                 continue
-            hat = predict_rows(model, don, q, var)
+            hat = predict_rows(model, don, q, var, monthly_panel=don_all, time_res=time_res)
             part = q[["station_name", "time", "split", var]].copy()
             part["predicted"] = hat
             part = part.rename(columns={var: "observed"})
@@ -180,9 +212,11 @@ def main():
 
     for var in variables:
         tuned = load_tuned(var, time_res)
+        tuned["trace"] = precip_trace(cfg, time_res, var)
         tcfg = cfg_to_tps(cfg, tuned)
         panel = load_panel(cfg, var)
-        pred = run_llocv(panel, var, tcfg, n_folds, fit_splits, score_splits)
+        pack = pack_from_master(cfg, tcfg.n_regions)
+        pred = run_llocv(panel, var, tcfg, n_folds, fit_splits, score_splits, pack, time_res)
         out = get_nested_llocv_path("TPS", var, time_res, domain="full")
         pred.to_parquet(out, index=False)
         print(f"{var} -> {out}")

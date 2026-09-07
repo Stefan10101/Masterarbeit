@@ -9,6 +9,8 @@ import argparse
 import itertools
 import os
 import sys
+import time
+import traceback
 
 import numpy as np
 import yaml
@@ -38,18 +40,32 @@ def _init(panel, cfg, n_folds, var):
 
 
 def _eval_cell(form, ns, tau):
-    gcfg = cfg_to_gam(_CFG, {"formula": form, "n_splines": ns, "tau_wet": tau})
-    pred = run_llocv(_PANEL, _VAR, gcfg, _N_FOLDS, {"train"}, {"dev"})
-    met = compute_metrics(pred["observed"], pred["predicted"])
-    nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0
-    return {
-        "formula": form,
-        "n_splines": int(ns),
-        "tau_wet": float(tau),
-        "rmse": float(met["rmse"]),
-        "n": int(len(pred)),
-        "finite": nfin,
-    }
+    tag = f"{_VAR} form={form} ns={ns} tau={tau}"
+    print(f"START {tag}", flush=True)
+    t0 = time.time()
+    try:
+        gcfg = cfg_to_gam(_CFG, {"formula": form, "n_splines": ns, "tau_wet": tau})
+        pred = run_llocv(_PANEL, _VAR, gcfg, _N_FOLDS, {"train"}, {"dev"}, progress=tag)
+        met = compute_metrics(pred["observed"], pred["predicted"])
+        nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0
+        row = {
+            "formula": form,
+            "n_splines": int(ns),
+            "tau_wet": float(tau),
+            "rmse": float(met["rmse"]),
+            "n": int(len(pred)),
+            "finite": nfin,
+            "sec": float(time.time() - t0),
+        }
+        print(
+            f"DONE  {tag} RMSE={row['rmse']:.3f} n={row['n']} finite={row['finite']} {row['sec']:.0f}s",
+            flush=True,
+        )
+        return row
+    except Exception as exc:
+        print(f"CRASH {tag} {type(exc).__name__}: {exc}", flush=True)
+        traceback.print_exc()
+        raise
 
 
 def main():
@@ -76,20 +92,50 @@ def main():
         else:
             taus = [float(block.get("tau_wet", 0.5))]
         cells = list(itertools.product(formulas, ns_list, taus))
-        print(f"{var} cells={len(cells)}", flush=True)
+        n_dev_t = int(panel.loc[panel["split"] == "dev", "time"].nunique())
+        n_sta = int(panel["station_name"].nunique())
+        print(
+            f"{var} cells={len(cells)} stations={n_sta} dev_times={n_dev_t} "
+            f"folds={n_folds}  (each cell ≈ {n_folds}×{n_dev_t} GAM fits)",
+            flush=True,
+        )
+        for i, c in enumerate(cells, start=1):
+            print(f"  queued {i}/{len(cells)} form={c[0]} ns={c[1]} tau={c[2]}", flush=True)
         if jobs == 1:
             _init(panel, cfg, n_folds, var)
             results = [_eval_cell(*c) for c in cells]
         else:
             results = []
+            print(
+                f"workers={jobs}  (worker fold lines may appear late on Windows; "
+                f"DONE lines print as soon as a cell finishes)",
+                flush=True,
+            )
             with ProcessPoolExecutor(
                 max_workers=jobs,
                 initializer=_init,
                 initargs=(panel, cfg, n_folds, var),
             ) as ex:
                 futs = {ex.submit(_eval_cell, *c): c for c in cells}
+                n_left = len(futs)
                 for fut in as_completed(futs):
-                    results.append(fut.result())
+                    cell = futs[fut]
+                    n_left -= 1
+                    try:
+                        row = fut.result()
+                    except Exception as exc:
+                        print(
+                            f"CELL FAILED form={cell[0]} ns={cell[1]} tau={cell[2]} "
+                            f"{type(exc).__name__}: {exc}  remaining={n_left}",
+                            flush=True,
+                        )
+                        raise
+                    results.append(row)
+                    print(
+                        f"PARENT got form={row['formula']} ns={row['n_splines']} "
+                        f"RMSE={row['rmse']:.3f} {row.get('sec', 0):.0f}s  remaining={n_left}",
+                        flush=True,
+                    )
         results.sort(key=lambda r: (r["formula"], r["n_splines"], r["tau_wet"]))
         best = None
         for row in results:

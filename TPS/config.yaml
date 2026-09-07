@@ -29,7 +29,7 @@ end_date:   "2025-12-31"
 resolutions_to_process: [1000]
 
 tps:
-  variables_to_process: ["temp_mean"]
+  variables_to_process: ["temp_mean", "precip_sum"]
   save_model: true
   save_llocv: true
   primary_metric: "rmse"
@@ -47,6 +47,7 @@ tps:
   family: "exponential"
   k_indicator: 16
   tau_wet: 0.5
+  two_step: true
 
   seed: 22
   n_folds: 5
