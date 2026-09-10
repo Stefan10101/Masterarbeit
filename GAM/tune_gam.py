@@ -21,7 +21,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs
 from gam_data import (
     attach_pack_terrain,
     attach_temperature,
@@ -86,6 +86,7 @@ def main():
     p.add_argument("--folds", type=int, default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    add_hours_arg(p)
     add_time_res_arg(p)
     args = p.parse_args()
     cfg = load_gam_config()
@@ -106,9 +107,11 @@ def main():
             panel = attach_temperature(panel, cfg)
         panel = attach_pack_terrain(panel, pack)
         panel = subset_times(panel, months)
+        panel, hours = apply_hour_cut(panel, time_res, args.hours)
+        jobs = cap_jobs(jobs, len(panel))
         print(var, "rows", len(panel), "times", panel["time"].nunique(),
               "splits", panel.groupby("split").size().to_dict(),
-              "months", months, "folds", n_folds, "jobs", jobs, flush=True)
+              "months", months, "hours", hours, "folds", n_folds, "jobs", jobs, flush=True)
         if args.quick:
             formulas = [block.get("formula", "te_xy_s_elev")]
             ns_list = [block.get("n_splines", 10)]

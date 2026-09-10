@@ -53,6 +53,58 @@ POLICY = {
 }
 
 
+def add_hours_arg(parser, dest: str = "hours"):
+    parser.add_argument(
+        "--hours",
+        dest=dest,
+        default=None,
+        help="UTC hours as 0,6,12,18 or 'all'. half_hourly default is 0,6,12,18.",
+    )
+    return parser
+
+
+def parse_hours(spec):
+    if spec is None or spec == "":
+        return None
+    if spec == "all":
+        return "all"
+    if isinstance(spec, (list, tuple)):
+        return tuple(int(h) for h in spec)
+    return tuple(int(x.strip()) for x in str(spec).split(",") if x.strip())
+
+
+def default_hours(time_res: str, explicit=None):
+    if explicit is not None:
+        return parse_hours(explicit)
+    if time_res != "half_hourly":
+        return None
+    return POLICY["half_hourly"]["subsample_hours"]
+
+
+def subset_hours(panel: pd.DataFrame, hours, time_col: str = "time") -> pd.DataFrame:
+    if hours is None or hours == "" or hours == "all":
+        return panel
+    if time_col not in panel.columns:
+        return panel
+    want = {int(h) for h in hours}
+    if not want:
+        return panel
+    return panel.loc[pd.to_datetime(panel[time_col]).dt.hour.isin(want)].copy()
+
+
+def apply_hour_cut(panel: pd.DataFrame, time_res: str, hours_arg=None, time_col: str = "time"):
+    """Apply locked hh 00/06/12/18 cut unless --hours all."""
+    hours = default_hours(time_res, hours_arg)
+    return subset_hours(panel, hours, time_col=time_col), hours
+
+
+def cap_jobs(jobs: int, n_rows: int, limit: int = 2, row_cut: int = 2_000_000) -> int:
+    jobs = max(1, int(jobs))
+    if n_rows > row_cut and jobs > limit:
+        return limit
+    return jobs
+
+
 def add_time_res_arg(parser, dest: str = "time_resolution"):
     parser.add_argument(
         "--time-resolution",

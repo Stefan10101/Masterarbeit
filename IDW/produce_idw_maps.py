@@ -92,8 +92,9 @@ def load_aggregated_data() -> pd.DataFrame:
         raise FileNotFoundError(f"Aggregated file not found: {file_path}")
     df = pd.read_parquet(file_path)
     time_col = df.columns[1]
-    from shared.time_res import parse_time_index
+    from shared.time_res import apply_hour_cut, parse_time_index
     df["time"] = parse_time_index(df[time_col], TIME_RES)
+    df, _ = apply_hour_cut(df, TIME_RES)
 
     # make START/END tz-aware for safe comparison
     start = START_DATE if START_DATE.tzinfo else START_DATE.tz_localize("UTC")

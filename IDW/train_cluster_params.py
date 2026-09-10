@@ -132,7 +132,8 @@ def load_aggregated(method: str, resolution: str) -> pd.DataFrame:
     else:
         ts = pd.to_datetime(df[time_col], utc=True)
         df["time"] = ts
-
+    from shared.time_res import apply_hour_cut
+    df, _ = apply_hour_cut(df, resolution)
     return df
 
 

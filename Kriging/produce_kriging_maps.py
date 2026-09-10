@@ -80,6 +80,7 @@ def parse_args():
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     p.add_argument("--skip-station-check", action="store_true")
+    add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
 
@@ -134,6 +135,8 @@ def main():
         if months:
             fit = subset_times(fit, months)
             panel = subset_times(panel, months)
+        panel, _hours = apply_hour_cut(panel, time_res, args.hours)
+        fit, _ = apply_hour_cut(fit, time_res, args.hours)
         panel = subset_years(panel, args.years)
         if fit.empty:
             print(f"  [SKIP] {var}: no train/dev rows")

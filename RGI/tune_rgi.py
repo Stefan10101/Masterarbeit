@@ -29,7 +29,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_rgi_tuned_params_path
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from rgi_core import RGI, RGIConfig
 from rgi_data import attach_extras, compute_metrics, extra_cols_for_var, load_config, load_panel
 from llocv_rgi import cfg_to_rgi, station_folds
@@ -84,6 +84,7 @@ def run_variable(cfg, var, phase: str):
     if cfg.get("_quick_months"):
         from Kriging.kriging_data import subset_times
         panel = subset_times(panel, cfg["_quick_months"])
+    panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
     rgi_cfg = cfg.get("rgi", {})
     search = rgi_cfg.get("search", {})
     expand = rgi_cfg.get("search_expand", {})
@@ -187,6 +188,7 @@ def parse_args():
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
     p.add_argument("--folds", type=int, default=None)
+    add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
 
@@ -195,6 +197,7 @@ def main():
     args = parse_args()
     cfg = load_config()
     apply_time_res(cfg, args)
+    cfg["_hours"] = args.hours
     wanted = args.variables or cfg.get("rgi", {}).get("variables_to_process") or [
         "temp_mean",
     ]

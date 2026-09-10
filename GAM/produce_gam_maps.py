@@ -33,7 +33,7 @@ from gam_data import (
 )
 from llocv_gam import cfg_to_gam, load_tuned
 from shared.terrain import aspect_trig, slope_aspect_from_dem
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 
 try:
     import xarray as xr
@@ -57,6 +57,7 @@ def parse_args():
     p.add_argument("--split", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
 
@@ -119,6 +120,7 @@ def main():
             panel = subset_splits(panel, splits)
             if months:
                 panel = subset_times(panel, months)
+            panel, _hours = apply_hour_cut(panel, time_res, args.hours)
             panel = subset_years(panel, args.years)
             n_t = int(panel["time"].nunique())
             print(

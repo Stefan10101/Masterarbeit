@@ -24,7 +24,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_frei_tuned_params_path
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs
 from frei_data import (
     attach_temperature,
     compute_block,
@@ -133,6 +133,7 @@ def main():
     p.add_argument("--folds", type=int, default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    add_hours_arg(p)
     add_time_res_arg(p)
     args = p.parse_args()
     cfg = load_frei_config()
@@ -152,10 +153,12 @@ def main():
         if var.lower().startswith("rh") and rh_mode in ("predicted", "observed"):
             panel = attach_temperature(panel, cfg)
         panel = subset_times(panel, months)
+        panel, hours = apply_hour_cut(panel, time_res, args.hours)
+        jobs = cap_jobs(jobs, len(panel))
         print(
             f"{var} rows={len(panel)} times={panel['time'].nunique()} "
             f"splits={panel.groupby('split').size().to_dict()} "
-            f"mode={mode} months={months} folds={n_folds} jobs={jobs}",
+            f"mode={mode} months={months} hours={hours} folds={n_folds} jobs={jobs}",
             flush=True,
         )
         nregs = list(search.get("n_regions", [block.get("n_regions", 6)]))

@@ -108,6 +108,8 @@ def load_aggregated_data() -> pd.DataFrame:
     df = pd.read_parquet(get_aggregated_data_path("RFSI", TIME_RES))
     time_col = get_time_column(TIME_RES)
     df["time"] = as_naive_utc(df[time_col], TIME_RES)
+    from shared.time_res import apply_hour_cut
+    df, _ = apply_hour_cut(df, TIME_RES)
 
     start = pd.Timestamp(START_DATE).tz_localize(None)
     end = pd.Timestamp(END_DATE).tz_localize(None)

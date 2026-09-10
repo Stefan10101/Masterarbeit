@@ -27,7 +27,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_kriging_tuned_params_path, get_nested_llocv_path
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from kriging_core import KrigingConfig, KrigingInterpolator
 from kriging_data import (
     attach_pack_terrain,
@@ -101,6 +101,7 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
     panel = load_panel(cfg, var)
     if months:
         panel = subset_times(panel, months)
+    panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
     need_t = str(var).lower().startswith("rh") and (
         (rh_t_mode or cfg.get("kriging", {}).get("rh_t_mode", "none")) in ("predicted", "observed")
     )
@@ -204,6 +205,7 @@ def parse_args():
     p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
 
@@ -212,6 +214,7 @@ def main():
     args = parse_args()
     cfg = load_config()
     apply_time_res(cfg, args)
+    cfg["_hours"] = args.hours
     wanted = args.variables or cfg.get("kriging", {}).get("variables_to_process") or [
         "temp_mean", "precip_sum",
     ]

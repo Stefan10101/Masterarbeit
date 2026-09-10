@@ -32,7 +32,7 @@ from tps_data import (
     uses_two_step,
 )
 from llocv_tps import cfg_to_tps, load_tuned, month_key, pack_from_master, predict_rows
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 
 try:
     import xarray as xr
@@ -48,6 +48,7 @@ def parse_args():
     p.add_argument("--split", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
 
@@ -99,6 +100,7 @@ def main():
             panel = subset_splits(panel, splits)
             if months:
                 panel = subset_times(panel, months)
+            panel, _hours = apply_hour_cut(panel, time_res, args.hours)
             panel = subset_years(panel, args.years)
             model = TPSInterpolator(tcfg)
             attach_watershed(

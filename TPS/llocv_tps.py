@@ -17,7 +17,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_nested_llocv_path, get_tps_tuned_params_path
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from tps_core import TPSConfig, TPSInterpolator, attach_watershed, two_step_var
 from tps_data import (
     attach_pack_terrain,
@@ -241,6 +241,7 @@ def main():
     p.add_argument("--months", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    add_hours_arg(p)
     add_time_res_arg(p)
     args = p.parse_args()
 
@@ -268,6 +269,7 @@ def main():
         panel = attach_pack_terrain(panel, pack)
         if months:
             panel = subset_times(panel, months)
+        panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         pred = run_llocv(panel, var, tcfg, n_folds, fit_splits, score_splits, pack, time_res)
         out = get_nested_llocv_path("TPS", var, time_res, domain="full")
         pred.to_parquet(out, index=False)

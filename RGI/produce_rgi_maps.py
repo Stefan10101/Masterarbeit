@@ -40,7 +40,7 @@ from rgi_data import (
     load_panel,
 )
 from llocv_rgi import cfg_to_rgi
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 
 try:
     import xarray as xr
@@ -69,6 +69,7 @@ def main():
     p.add_argument("--variables", nargs="*", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
+    add_hours_arg(p)
     add_time_res_arg(p)
     args = p.parse_args()
     cfg = load_config()
@@ -109,6 +110,7 @@ def main():
         if cfg.get("_quick_months"):
             from Kriging.kriging_data import subset_times, subset_splits
             panel = subset_times(panel, cfg["_quick_months"])
+        panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         fit = panel[panel["split"].isin(("train", "dev"))]
         if fit.empty:
             print(f"  [SKIP] {var}: no train/dev rows")

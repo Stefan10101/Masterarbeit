@@ -118,8 +118,9 @@ def load_aggregated_data() -> pd.DataFrame:
     time_candidates = ["timestamp", "time", "date", "year_week", "year_month"]
     time_col = next((c for c in time_candidates if c in df.columns), df.columns[1])
 
-    from shared.time_res import parse_time_index
+    from shared.time_res import apply_hour_cut, parse_time_index
     df["time"] = parse_time_index(df[time_col], TIME_RES)
+    df, _ = apply_hour_cut(df, TIME_RES)
 
     start = START_DATE if START_DATE.tzinfo else START_DATE.tz_localize("UTC")
     end = END_DATE if END_DATE.tzinfo else END_DATE.tz_localize("UTC")

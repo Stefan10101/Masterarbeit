@@ -34,7 +34,7 @@ from paths import (
 )
 from rfsi_core import RFSI, build_covariates, extras_for_var, two_step_var
 from rfsi_optimizer import compute_metrics
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 
 _splits_path = CODE_DIR / "shared" / "splits" / "splits.py"
 _spec = _ilu.spec_from_file_location("thesis_time_splits", _splits_path)
@@ -228,7 +228,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
         panel = panel[(panel["time"] >= dev_start) & (panel["time"] <= dev_end)].copy()
         print(f"  QUICK DEV panel: {len(panel):,} rows | "
               f"{panel['station_name'].nunique()} stations | "
-              f"{panel['time'].nunique()} months")
+              f"{panel['time'].nunique()} times")
     else:
         medoid_times = load_medoid_times(cfg, var, cluster_method)
         if len(medoid_times) == 0:
@@ -242,6 +242,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
         print(f"  DEV medoid panel: {len(panel):,} rows | "
               f"{panel['station_name'].nunique()} stations | "
               f"{panel['time'].nunique()} months")
+    panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
 
     X_all, encoder = prepare_covariates(
         panel, fit_encoder=True, use_elev=use_elev, use_lc=use_lc,
@@ -336,6 +337,7 @@ def parse_args():
     p.add_argument("--n-splits", type=int, default=5)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
+    add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
 
@@ -344,6 +346,7 @@ def main():
     args = parse_args()
     cfg = load_config()
     apply_time_res(cfg, args)
+    cfg["_hours"] = args.hours
     wanted = args.variables or cfg.get("rfsi", {}).get("variables_to_process") or [
         "temp_mean", "precip_sum",
     ]

@@ -15,7 +15,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_interpolated_map_path, get_master_grid_path
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from frei_core import FreiInterpolator, two_step_var
 from frei_data import (
     attach_temperature,
@@ -44,6 +44,7 @@ def main():
     p.add_argument("--split", default=None, help="all | test | dev,test")
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    add_hours_arg(p)
     add_time_res_arg(p)
     args = p.parse_args()
 
@@ -85,6 +86,7 @@ def main():
             panel = subset_years(panel, years)
             if months:
                 panel = subset_times(panel, months)
+            panel, _hours = apply_hour_cut(panel, time_res, args.hours)
             pack = pack_from_master(cfg, fcfg.n_regions)
             model = FreiInterpolator(fcfg, pack=pack)
             use_profile = not two_step_var(var)

@@ -17,7 +17,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_tuned_params_path, get_master_grid_path
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from cnn_core import grid_terrain, two_step_var
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace
 from train_cnn import cfg_to_cnn, train_one
@@ -32,6 +32,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variable", default=None)
     p.add_argument("--quick", action="store_true")
+    add_hours_arg(p)
     add_time_res_arg(p)
     args = p.parse_args()
     cfg = load_cnn_config()
@@ -66,6 +67,7 @@ def main():
     variables = [args.variable] if args.variable else block.get("variables_to_process", ["temp_mean"])
     for var in variables:
         panel = load_panel(cfg, var)
+        panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         trace = precip_trace(cfg, time_res, var)
         taus = list(search.get("tau_wet", [block.get("tau_wet", 0.5)])) if two_step_var(var) else [block.get("tau_wet", 0.5)]
         best = None

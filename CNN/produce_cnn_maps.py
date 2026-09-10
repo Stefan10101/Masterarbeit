@@ -20,7 +20,7 @@ from paths import get_cnn_model_path, get_interpolated_map_path, get_master_grid
 from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_raster, station_to_raster, two_step_var
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace
 from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned, train_one
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 
 try:
     import xarray as xr
@@ -34,6 +34,7 @@ def main():
     p.add_argument("--variable", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
+    add_hours_arg(p)
     add_time_res_arg(p)
     args = p.parse_args()
     print("produce_cnn_maps start", flush=True)
@@ -74,6 +75,7 @@ def main():
             if args.quick or args.months:
                 from Kriging.kriging_data import subset_times
                 panel = subset_times(panel, args.months or "seasonal4")
+            panel, _hours = apply_hour_cut(panel, time_res, args.hours)
             ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))
             wpath = get_cnn_model_path(var, time_res)
             print(f"{var} weights={wpath} exists={wpath.exists()}", flush=True)
