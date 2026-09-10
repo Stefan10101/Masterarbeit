@@ -118,14 +118,8 @@ def load_aggregated_data() -> pd.DataFrame:
     time_candidates = ["timestamp", "time", "date", "year_week", "year_month"]
     time_col = next((c for c in time_candidates if c in df.columns), df.columns[1])
 
-    if TIME_RES == "weekly":
-        df["time"] = pd.to_datetime(
-            df[time_col].astype(str) + "-1", format="%Y-W%W-%w", utc=True
-        )
-    elif TIME_RES == "monthly":
-        df["time"] = pd.to_datetime(df[time_col].astype(str) + "-01", utc=True)
-    else:
-        df["time"] = pd.to_datetime(df[time_col], utc=True)
+    from shared.time_res import parse_time_index
+    df["time"] = parse_time_index(df[time_col], TIME_RES)
 
     start = START_DATE if START_DATE.tzinfo else START_DATE.tz_localize("UTC")
     end = END_DATE if END_DATE.tzinfo else END_DATE.tz_localize("UTC")

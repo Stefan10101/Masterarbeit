@@ -68,9 +68,9 @@ def time_col_name(cfg, time_res):
         }.get(time_res, "time")
 
 
-def as_naive_utc(values) -> np.ndarray:
-    idx = pd.DatetimeIndex(pd.to_datetime(values, utc=True))
-    return idx.tz_convert("UTC").tz_localize(None).to_numpy(dtype="datetime64[ns]")
+def as_naive_utc(values, time_res: str | None = None) -> np.ndarray:
+    from shared.time_res import to_naive_utc
+    return to_naive_utc(values, time_res)
 
 
 def data_sources(cfg) -> tuple[str, str, str]:
@@ -278,13 +278,7 @@ def load_panel(cfg, var: str) -> pd.DataFrame:
     agg_method, sta_method, _ = data_sources(cfg)
     df = pd.read_parquet(get_aggregated_data_path(agg_method, time_res))
     col = time_col_name(cfg, time_res)
-    if time_res == "weekly":
-        raw = pd.to_datetime(df[col] + "-1", format="%Y-W%W-%w", utc=True)
-    elif time_res == "monthly":
-        raw = pd.to_datetime(df[col].astype(str) + "-01", utc=True)
-    else:
-        raw = pd.to_datetime(df[col], utc=True)
-    df["time"] = as_naive_utc(raw)
+    df["time"] = as_naive_utc(df[col], time_res)
     df = df[(df["time"] >= start) & (df["time"] <= end)]
 
     stations = pd.read_parquet(get_domain_stations_path(sta_method, "full"))
@@ -332,7 +326,7 @@ def attach_regimes(cfg, times: np.ndarray, var: str) -> np.ndarray:
         return np.zeros(len(times), dtype=np.int32)
     asg = pd.read_parquet(path)
     tcol = "timestamp" if "timestamp" in asg.columns else "time"
-    asg["time"] = as_naive_utc(asg[tcol])
+    asg["time"] = as_naive_utc(asg[tcol], time_res)
     asg = asg.drop_duplicates("time")
     src = pd.DataFrame({"time": times})
     merged = src.merge(asg[["time", "cluster_id"]], on="time", how="left")

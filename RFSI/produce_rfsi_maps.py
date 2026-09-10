@@ -98,22 +98,16 @@ def get_domain_mask(grid_ds, bbox: tuple) -> np.ndarray:
     return (y_mask.values[:, None] & x_mask.values[None, :])
 
 
-def as_naive_utc(values) -> np.ndarray:
+def as_naive_utc(values, time_res=None):
     """NetCDF cannot store tz-aware or Python datetime objects."""
-    idx = pd.DatetimeIndex(pd.to_datetime(values, utc=True))
-    return idx.tz_convert("UTC").tz_localize(None).to_numpy(dtype="datetime64[ns]")
+    from shared.time_res import to_naive_utc
+    return to_naive_utc(values, time_res)
 
 
 def load_aggregated_data() -> pd.DataFrame:
     df = pd.read_parquet(get_aggregated_data_path("RFSI", TIME_RES))
     time_col = get_time_column(TIME_RES)
-    if TIME_RES == "weekly":
-        raw = pd.to_datetime(df[time_col] + "-1", format="%Y-W%W-%w", utc=True)
-    elif TIME_RES == "monthly":
-        raw = pd.to_datetime(df[time_col].astype(str) + "-01", utc=True)
-    else:
-        raw = pd.to_datetime(df[time_col], utc=True)
-    df["time"] = as_naive_utc(raw)
+    df["time"] = as_naive_utc(df[time_col], TIME_RES)
 
     start = pd.Timestamp(START_DATE).tz_localize(None)
     end = pd.Timestamp(END_DATE).tz_localize(None)

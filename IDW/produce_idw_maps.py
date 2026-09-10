@@ -92,12 +92,8 @@ def load_aggregated_data() -> pd.DataFrame:
         raise FileNotFoundError(f"Aggregated file not found: {file_path}")
     df = pd.read_parquet(file_path)
     time_col = df.columns[1]
-    if TIME_RES == "weekly":
-        df["time"] = pd.to_datetime(df[time_col] + "-1", format="%Y-W%W-%w", utc=True)
-    elif TIME_RES == "monthly":
-        df["time"] = pd.to_datetime(df[time_col] + "-01", utc=True)
-    else:
-        df["time"] = pd.to_datetime(df[time_col], utc=True)
+    from shared.time_res import parse_time_index
+    df["time"] = parse_time_index(df[time_col], TIME_RES)
 
     # make START/END tz-aware for safe comparison
     start = START_DATE if START_DATE.tzinfo else START_DATE.tz_localize("UTC")

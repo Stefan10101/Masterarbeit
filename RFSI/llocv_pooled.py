@@ -46,9 +46,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
 
 
-def as_naive_utc(values) -> np.ndarray:
-    idx = pd.DatetimeIndex(pd.to_datetime(values, utc=True))
-    return idx.tz_convert("UTC").tz_localize(None).to_numpy(dtype="datetime64[ns]")
+def as_naive_utc(values, time_res=None):
+    from shared.time_res import to_naive_utc
+    return to_naive_utc(values, time_res)
 
 
 def load_config():
@@ -86,13 +86,7 @@ def load_panel(cfg, var):
     end = pd.Timestamp(cfg["end_date"]).tz_localize(None)
     df = pd.read_parquet(get_aggregated_data_path("RFSI", time_res))
     col = time_col_name(cfg, time_res)
-    if time_res == "weekly":
-        raw = pd.to_datetime(df[col] + "-1", format="%Y-W%W-%w", utc=True)
-    elif time_res == "monthly":
-        raw = pd.to_datetime(df[col].astype(str) + "-01", utc=True)
-    else:
-        raw = pd.to_datetime(df[col], utc=True)
-    df["time"] = as_naive_utc(raw)
+    df["time"] = as_naive_utc(df[col], time_res)
     df = df[(df["time"] >= start) & (df["time"] <= end)]
 
     stations = pd.read_parquet(get_domain_stations_path("RFSI", "full"))
