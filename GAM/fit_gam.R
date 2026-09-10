@@ -52,7 +52,7 @@ rhs <- switch(formula_id,
   te_xyelev = sprintf("te(x, yc, elev, k=c(%d,%d,%d))", kx, ky, ke),
   stop("unknown formula_id: ", formula_id)
 )
-for (col in c("slope", "sinasp", "cosasp")) {
+for (col in c("slope", "sinasp", "cosasp", "tmean")) {
   if (has(col) && nuniq(df[[col]]) >= 6L) {
     rhs <- paste(rhs, sprintf("+ s(%s, k=%d)", col, k_ok(df[[col]], max(4L, n_splines %/% 2L))))
   }

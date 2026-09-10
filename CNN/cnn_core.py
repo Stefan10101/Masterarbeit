@@ -43,6 +43,7 @@ class CNNConfig:
     device: str = "auto"
     use_amp: bool = True
     min_stations: int = 10
+    rh_t_mode: str = "none"
 
 
 def two_step_var(var: str) -> bool:
@@ -50,7 +51,17 @@ def two_step_var(var: str) -> bool:
     return v.startswith("precip") or v.startswith("snow")
 
 
-def n_in_channels(cfg: CNNConfig, subdaily: bool) -> int:
+def clip_var(var: str, pred) -> np.ndarray:
+    v = str(var).lower()
+    out = np.asarray(pred, dtype=np.float64)
+    if v.startswith("precip") or v.startswith("snow") or v.startswith("wind"):
+        return np.maximum(out, 0.0)
+    if v.startswith("rh"):
+        return np.clip(out, 0.0, 100.0)
+    return out
+
+
+def n_in_channels(cfg: CNNConfig, subdaily: bool, extra_ch: int = 0) -> int:
     n = 3  # value, mask, elev
     if cfg.use_terrain:
         n += 3  # slope, sinasp, cosasp
@@ -59,7 +70,7 @@ def n_in_channels(cfg: CNNConfig, subdaily: bool) -> int:
         n += 2
         if subdaily:
             n += 2
-    return n
+    return n + int(extra_ch)
 
 
 def pick_device(name: str):
@@ -75,12 +86,13 @@ def pick_device(name: str):
 class ConvBlock(nn.Module):
     def __init__(self, c_in, c_out):
         super().__init__()
+        g = 8 if c_out >= 8 else 1
         self.net = nn.Sequential(
             nn.Conv2d(c_in, c_out, 3, padding=1),
-            nn.BatchNorm2d(c_out),
+            nn.GroupNorm(g, c_out),
             nn.ReLU(inplace=True),
             nn.Conv2d(c_out, c_out, 3, padding=1),
-            nn.BatchNorm2d(c_out),
+            nn.GroupNorm(g, c_out),
             nn.ReLU(inplace=True),
         )
 
@@ -134,7 +146,10 @@ class SmallUNet(nn.Module):
         return self.out(h)
 
 
-def idw_raster(rows, cols, values, ny, nx, k: int = 8) -> np.ndarray:
+def idw_raster(rows, cols, values, ny, nx, k: int = 8, exclude_self: bool = True) -> np.ndarray:
+    """IDW in pixel space. exclude_self drops the 0-distance hit so station
+    cells get a real neighbour baseline (otherwise residual is identically 0).
+    """
     from scipy.spatial import cKDTree
 
     values = np.asarray(values, dtype=np.float64)
@@ -143,18 +158,29 @@ def idw_raster(rows, cols, values, ny, nx, k: int = 8) -> np.ndarray:
     grid = np.column_stack([yy.ravel(), xx.ravel()])
     tree = cKDTree(pts)
     kk = min(max(int(k), 1), len(values))
-    d, ix = tree.query(grid, k=kk)
-    if kk == 1:
+    qk = min(kk + 1, len(values)) if exclude_self else kk
+    d, ix = tree.query(grid, k=qk)
+    if qk == 1:
         d = np.asarray(d, dtype=np.float64)[:, None]
         ix = np.asarray(ix)[:, None]
     else:
         d = np.asarray(d, dtype=np.float64)
         ix = np.asarray(ix)
-    hit = d[:, 0] <= 1e-12
+    if exclude_self and d.shape[1] > 1:
+        out_d = d[:, :kk].copy()
+        out_ix = ix[:, :kk].copy()
+        hit = d[:, 0] <= 1e-12
+        if hit.any():
+            sl_d = d[hit, 1:]
+            sl_i = ix[hit, 1:]
+            if sl_d.shape[1] < kk:
+                sl_d = np.pad(sl_d, ((0, 0), (0, kk - sl_d.shape[1])), mode="edge")
+                sl_i = np.pad(sl_i, ((0, 0), (0, kk - sl_i.shape[1])), mode="edge")
+            out_d[hit] = sl_d[:, :kk]
+            out_ix[hit] = sl_i[:, :kk]
+        d, ix = out_d, out_ix
     d = np.maximum(d, 1e-6)
     w = d ** (-2.0)
-    w[hit] = 0.0
-    w[hit, 0] = 1.0
     w /= w.sum(axis=1, keepdims=True)
     out = (w * values[ix]).sum(axis=1)
     return out.reshape(ny, nx).astype(np.float32)
@@ -247,7 +273,8 @@ class CNNInterpolator:
         self.z_mean = blob["z_mean"]
         self.z_std = blob["z_std"]
 
-    def pack_channels(self, value, mask, elev, clc, slope=None, sinasp=None, cosasp=None, time_ch=None):
+    def pack_channels(self, value, mask, elev, clc, slope=None, sinasp=None, cosasp=None,
+                      time_ch=None, extras=None):
         v = np.where(mask > 0, (value - self.y_mean) / self.y_std, 0.0)
         z = (elev - self.z_mean) / max(self.z_std, 1.0)
         chans = [v, mask, z]
@@ -260,6 +287,9 @@ class CNNInterpolator:
         if time_ch:
             for t in time_ch:
                 chans.append(np.full(value.shape, float(t), dtype=np.float32))
+        if extras:
+            for ex in extras:
+                chans.append(np.asarray(ex, dtype=np.float32))
         packed = np.stack(chans, axis=0).astype(np.float32)
         if packed.shape[0] != int(self.in_ch):
             raise RuntimeError(
@@ -269,9 +299,10 @@ class CNNInterpolator:
         return packed
 
     def predict_raster(self, value, mask, elev, clc, slope=None, sinasp=None, cosasp=None,
-                       time_ch=None, two_step: bool = False, base=None) -> np.ndarray:
+                       time_ch=None, two_step: bool = False, base=None, extras=None,
+                       var: str = "") -> np.ndarray:
         self.net.eval()
-        ch = self.pack_channels(value, mask, elev, clc, slope, sinasp, cosasp, time_ch)
+        ch = self.pack_channels(value, mask, elev, clc, slope, sinasp, cosasp, time_ch, extras=extras)
         x = torch.from_numpy(ch).unsqueeze(0).to(self.device)
         with torch.no_grad():
             hat = self.net(x).cpu().numpy()[0]
@@ -281,9 +312,9 @@ class CNNInterpolator:
             if base is not None:
                 amt = amt + base
             amt = np.maximum(amt, 0.0)
-            return np.where(p >= self.cfg.tau_wet, amt, 0.0).astype(np.float32)
+            return clip_var(var, np.where(p >= self.cfg.tau_wet, amt, 0.0)).astype(np.float32)
         raw = hat[0] if hat.ndim == 3 else hat
         out = raw * self.y_std + self.y_mean
         if base is not None:
             out = out + base
-        return out.astype(np.float32)
+        return clip_var(var, out).astype(np.float32)

@@ -16,9 +16,20 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from paths import get_master_grid_path, get_nested_llocv_path, get_tps_tuned_params_path
+from paths import get_nested_llocv_path, get_tps_tuned_params_path
 from tps_core import TPSConfig, TPSInterpolator, attach_watershed, two_step_var
-from tps_data import data_sources, load_panel, load_tps_config, precip_trace, print_split_metrics, uses_two_step
+from tps_data import (
+    attach_pack_terrain,
+    attach_temperature,
+    data_sources,
+    load_panel,
+    load_tps_config,
+    pack_from_master,
+    precip_trace,
+    print_split_metrics,
+    subset_times,
+    uses_two_step,
+)
 
 
 def parse_split_arg(text: str) -> set[str]:
@@ -62,6 +73,9 @@ def cfg_to_tps(cfg, overrides=None) -> TPSConfig:
         min_stations=int(cfg.get("min_stations_per_field", 10)),
         predict_tile=int(t.get("predict_tile", 20000)),
         seed=int(t.get("seed", 22)),
+        rh_t_mode=str(o.get("rh_t_mode", t.get("rh_t_mode", "none"))),
+        wind_watershed=bool(t.get("wind_watershed", True)),
+        snow_terrain=bool(t.get("snow_terrain", True)),
     )
 
 
@@ -73,26 +87,7 @@ def load_tuned(var, time_res):
         return yaml.safe_load(f) or {}
 
 
-def pack_from_master(cfg, n_regions: int = 6):
-    try:
-        import xarray as xr
-    except ImportError:
-        return None
-    from shared.watersheds import WatershedConfig, build_pack
-    _, _, grid_method = data_sources(cfg)
-    res = int(cfg.get("resolutions_to_process", [1000])[0])
-    path = get_master_grid_path(grid_method, res)
-    if not path.exists():
-        return None
-    g = xr.open_dataset(path)
-    if "elev" not in g:
-        return None
-    return build_pack(
-        g["elev"].values.astype(np.float64),
-        g["x"].values,
-        g["y"].values,
-        WatershedConfig(n_regions=int(n_regions)),
-    )
+# pack_from_master imported from tps_data (adds slope/northness)
 
 
 def month_key(times) -> np.ndarray:
@@ -113,10 +108,49 @@ def monthly_from_panel(panel: pd.DataFrame, var: str, yearmonth: int) -> pd.Data
     )
 
 
+def _extras(df: pd.DataFrame, var: str, tcfg: TPSConfig):
+    cols = []
+    v = str(var).lower()
+    if v.startswith("snow") and tcfg.snow_terrain:
+        for c, fill in (("slope", 0.0), ("northness", 1.0)):
+            if c in df.columns:
+                x = df[c].to_numpy(dtype=float)
+                cols.append(np.where(np.isfinite(x), x, fill))
+            else:
+                cols.append(np.full(len(df), fill))
+    if v.startswith("rh") and tcfg.rh_t_mode in ("predicted", "observed") and "temp_mean" in df.columns:
+        x = df["temp_mean"].to_numpy(dtype=float)
+        mu = float(np.nanmean(x)) if np.isfinite(x).any() else 0.0
+        cols.append(np.where(np.isfinite(x), x, mu))
+    if not cols:
+        return None
+    return np.column_stack(cols)
+
+
 def predict_rows(model: TPSInterpolator, donors: pd.DataFrame, query: pd.DataFrame, var: str,
                  monthly_panel: pd.DataFrame | None = None, time_res: str = "monthly"):
     if donors.empty or query.empty:
         return np.full(len(query), np.nan)
+    if (
+        str(var).lower().startswith("rh")
+        and model.cfg.rh_t_mode == "predicted"
+        and "temp_mean" in donors.columns
+    ):
+        t_hat = model.predict_timestamp(
+            donors[["x", "y"]].to_numpy(),
+            donors["temp_mean"].to_numpy(),
+            donors["elev"].to_numpy(),
+            query["x"].to_numpy(),
+            query["y"].to_numpy(),
+            query["elev"].to_numpy(),
+            var="temp_mean",
+        )
+        query = query.copy()
+        query["temp_mean"] = t_hat
+    extra = _extras(donors, var, model.cfg)
+    extra_q = _extras(query, var, model.cfg)
+    region = donors["region"].to_numpy() if "region" in donors.columns else None
+    region_q = query["region"].to_numpy() if "region" in query.columns else None
     use_eobs = (
         model.cfg.protocol == "eobs"
         and time_res in ("daily", "weekly", "half_hourly")
@@ -132,6 +166,7 @@ def predict_rows(model: TPSInterpolator, donors: pd.DataFrame, query: pd.DataFra
             query["y"].to_numpy(),
             query["elev"].to_numpy(),
             var=var,
+            extra=extra, extra_q=extra_q, region=region, region_q=region_q,
         )
     qk = int(month_key(query["time"])[0])
     monthly = monthly_from_panel(monthly_panel, var, qk)
@@ -144,6 +179,7 @@ def predict_rows(model: TPSInterpolator, donors: pd.DataFrame, query: pd.DataFra
             query["y"].to_numpy(),
             query["elev"].to_numpy(),
             var=var,
+            extra=extra, extra_q=extra_q, region=region, region_q=region_q,
         )
     clc_s = donors["clc_group"].to_numpy() if "clc_group" in donors.columns else None
     clc_q = query["clc_group"].to_numpy() if "clc_group" in query.columns else None
@@ -201,21 +237,35 @@ def main():
     p.add_argument("--fit", default="train")
     p.add_argument("--score", default="dev,test")
     p.add_argument("--folds", type=int, default=None)
+    p.add_argument("--months", default=None)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     args = p.parse_args()
 
     cfg = load_tps_config()
     time_res = cfg["time_resolution"]
     variables = [args.variable] if args.variable else cfg["tps"].get("variables_to_process", ["temp_mean"])
     n_folds = args.folds or int(cfg["tps"].get("n_folds", 5))
+    months = args.months
+    if args.quick:
+        n_folds = args.folds or 2
+        months = months or "seasonal4"
     fit_splits = parse_split_arg(args.fit)
     score_splits = parse_split_arg(args.score)
 
     for var in variables:
         tuned = load_tuned(var, time_res)
         tuned["trace"] = precip_trace(cfg, time_res, var)
+        if args.rh_t_mode:
+            tuned["rh_t_mode"] = args.rh_t_mode
         tcfg = cfg_to_tps(cfg, tuned)
         panel = load_panel(cfg, var)
+        if str(var).lower().startswith("rh") and tcfg.rh_t_mode in ("predicted", "observed"):
+            panel = attach_temperature(panel, cfg)
         pack = pack_from_master(cfg, tcfg.n_regions)
+        panel = attach_pack_terrain(panel, pack)
+        if months:
+            panel = subset_times(panel, months)
         pred = run_llocv(panel, var, tcfg, n_folds, fit_splits, score_splits, pack, time_res)
         out = get_nested_llocv_path("TPS", var, time_res, domain="full")
         pred.to_parquet(out, index=False)

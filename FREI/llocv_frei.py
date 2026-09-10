@@ -18,7 +18,15 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_frei_tuned_params_path, get_master_grid_path, get_nested_llocv_path
 from frei_core import FreiConfig, FreiInterpolator, two_step_var
-from frei_data import data_sources, load_frei_config, load_panel, precip_trace, print_split_metrics
+from frei_data import (
+    attach_temperature,
+    data_sources,
+    load_frei_config,
+    load_panel,
+    precip_trace,
+    print_split_metrics,
+    subset_times,
+)
 
 
 def parse_split_arg(text: str) -> set[str]:
@@ -51,7 +59,7 @@ def cfg_to_frei(cfg, overrides=None) -> FreiConfig:
         k=int(o.get("k", f.get("k", 16))),
         power=float(o.get("power", f.get("power", 2.0))),
         across_w=float(o.get("across_w", f.get("across_w", 4.0))),
-        select_metric=bool(f.get("select_metric", True)),
+        select_metric=bool(o.get("select_metric", f.get("select_metric", True))),
         lam_z=float(o.get("lam_z", f.get("lam_z", 150.0))),
         two_step=bool(f.get("two_step", True)),
         tau_wet=float(o.get("tau_wet", f.get("tau_wet", 0.5))),
@@ -60,6 +68,9 @@ def cfg_to_frei(cfg, overrides=None) -> FreiConfig:
         predict_tile=int(f.get("predict_tile", 20000)),
         seed=int(f.get("seed", 22)),
         across_w_grid=tuple(f.get("search", {}).get("across_w", [2.0, 4.0, 8.0])),
+        rh_t_mode=str(o.get("rh_t_mode", f.get("rh_t_mode", "none"))),
+        snow_terrain=bool(f.get("snow_terrain", True)),
+        wind_elev_bg=bool(f.get("wind_elev_bg", True)),
     )
 
 
@@ -100,6 +111,7 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
     folds = station_folds(names, n_folds, fcfg.seed)
     model = FreiInterpolator(fcfg, pack=pack)
     use_profile = not two_step_var(var)
+    need_t = var.lower().startswith("rh") and fcfg.rh_t_mode in ("predicted", "observed")
     rows = []
     for hold in folds:
         hold_set = set(hold)
@@ -115,6 +127,8 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
             don = don_all[don_all["_t"] == ts]
             if don["station_name"].nunique() < fcfg.min_stations:
                 continue
+            t_obs = don["temp_mean"].to_numpy() if need_t and "temp_mean" in don.columns else None
+            t_obs_q = q["temp_mean"].to_numpy() if need_t and "temp_mean" in q.columns else None
             try:
                 hat, _ = model.predict_timestamp(
                     don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
@@ -122,6 +136,8 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
                     q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
                     use_profile=use_profile,
                     var=var,
+                    t_obs=t_obs,
+                    t_obs_q=t_obs_q,
                 )
             except Exception as exc:
                 print(f"  frei predict failed {ts}: {type(exc).__name__}: {exc}", flush=True)
@@ -141,22 +157,36 @@ def main():
     p.add_argument("--fit", default="train")
     p.add_argument("--score", default="dev,test")
     p.add_argument("--folds", type=int, default=None)
+    p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     args = p.parse_args()
     cfg = load_frei_config()
     time_res = cfg["time_resolution"]
     variables = [args.variable] if args.variable else cfg["frei"].get("variables_to_process", ["temp_mean"])
     n_folds = args.folds or int(cfg["frei"].get("n_folds", 5))
-    pack = pack_from_master(cfg)
+    months = args.months
+    if args.quick:
+        n_folds = args.folds or 2
+        months = months or "seasonal4"
     for var in variables:
         tuned = load_tuned(var, time_res)
         tuned["trace"] = precip_trace(cfg, time_res, var)
+        if args.rh_t_mode:
+            tuned["rh_t_mode"] = args.rh_t_mode
         fcfg = cfg_to_frei(cfg, tuned)
+        if args.quick:
+            fcfg.select_metric = False
         pack = pack_from_master(cfg, fcfg.n_regions)
         panel = load_panel(cfg, var)
+        if var.lower().startswith("rh") and fcfg.rh_t_mode in ("predicted", "observed"):
+            panel = attach_temperature(panel, cfg)
+        if months:
+            panel = subset_times(panel, months)
         pred = run_llocv(panel, var, fcfg, n_folds, parse_split_arg(args.fit), parse_split_arg(args.score), pack)
         out = get_nested_llocv_path("Frei", var, time_res, domain="full")
         pred.to_parquet(out, index=False)
-        print(f"{var} -> {out}")
+        print(f"{var} folds={n_folds} months={months or 'all'} rh_t={fcfg.rh_t_mode} -> {out}")
         print_split_metrics(pred)
 
 

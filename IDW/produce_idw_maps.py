@@ -38,7 +38,7 @@ from paths import (
     get_llocv_path,
     get_master_grid_path,
 )
-from idw_core import modified_idw, get_valid_targets
+from idw_core import get_valid_targets, interpolate_idw, modified_idw
 from loocv_optimizer import loocv_predictions
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -164,7 +164,7 @@ def process_one_time_step(args):
 
     tree = KDTree(df_t[["x", "y"]].values)
     chunk_size = 1_000_000 if param_group != "coarse" else None
-    interp_1d = modified_idw(
+    interp_1d = interpolate_idw(
         station_values=df_t[var].values,
         station_coords=df_t[["x", "y"]].values,
         station_elev=df_t["elev"].values,
@@ -173,6 +173,7 @@ def process_one_time_step(args):
         tree=tree,
         p=p, Fz=Fz, k=k,
         chunk_size=chunk_size,
+        var=var,
     )
 
     return {
@@ -189,6 +190,15 @@ def process_one_time_step(args):
 
 
 def main():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--variables", nargs="*", default=None)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--months", default=None)
+    args = p.parse_args()
+    global SAVE_LLOCV
+    if args.quick:
+        SAVE_LLOCV = False
     print("=" * 80)
     print(f"IDW Production (cluster params) | {DOMAIN} | {TIME_RES}")
     print(f"Period: {START_DATE.date()} → {END_DATE.date()} | cluster={CLUSTER_METHOD}")
@@ -220,8 +230,10 @@ def main():
 
         elev_2d = grid["elev"].values.astype(np.float32) if "elev" in grid else None
 
-        for var in ["precip_sum", "temp_mean", "temp_min", "temp_max",
-                    "wind_mean", "wind_max", "rh_mean", "snow_mean", "snow_max", "snow_min"]:
+        wanted = args.variables or [
+            "temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean",
+        ]
+        for var in wanted:
             if var not in station_data.columns:
                 continue
 
@@ -239,8 +251,9 @@ def main():
                           f"{len(params_cache[canonical])} clusters, "
                           f"{len(assignment_cache[canonical]):,} assignments")
                 except FileNotFoundError as e:
-                    print(f"  [SKIP] {var}: {e}")
-                    continue
+                    print(f"  [WARN] {var}: {e} — using fallback params")
+                    assignment_cache[canonical] = pd.Series(dtype=int)
+                    params_cache[canonical] = {}
 
             assignments = assignment_cache[canonical]
             cluster_params = params_cache[canonical]
@@ -269,6 +282,13 @@ def main():
                 continue
 
             time_steps = sorted(valid["time"].unique())
+            if args.quick or args.months:
+                from Kriging.kriging_data import subset_times
+                valid = subset_times(valid, args.months or "seasonal4")
+                if args.quick:
+                    ts = pd.to_datetime(valid["time"], utc=True)
+                    valid = valid.loc[ts >= pd.Timestamp("2024-01-01", tz="UTC")]
+                time_steps = sorted(valid["time"].unique())
             tasks = []
             n_fallback = 0
             for t in time_steps:

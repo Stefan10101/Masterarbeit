@@ -31,7 +31,7 @@ from paths import (
     get_domain_stations_path,
     get_nested_llocv_path,
 )
-from rfsi_core import RFSI, build_covariates, neighbor_width
+from rfsi_core import RFSI, build_covariates, extras_for_var, neighbor_width, two_step_var
 from rfsi_optimizer import compute_metrics
 
 import importlib.util as _ilu
@@ -67,12 +67,14 @@ def time_col_name(cfg, time_res):
         }.get(time_res, "time")
 
 
-def prepare_covariates(df, encoder=None, fit_encoder=False, use_elev=True, use_lc=True):
+def prepare_covariates(df, encoder=None, fit_encoder=False, use_elev=True, use_lc=True,
+                      extras=None):
     X = build_covariates(
         elev=df["elev"].to_numpy() if use_elev and "elev" in df.columns else None,
         clc_code=df["clc_code"].to_numpy() if use_lc and "clc_code" in df.columns else None,
         use_elev=use_elev and "elev" in df.columns,
         use_lc=use_lc and "clc_code" in df.columns,
+        extras=extras,
     )
     return X, None
 
@@ -113,7 +115,8 @@ def load_panel(cfg, var):
     return valid
 
 
-def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_every):
+def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_every,
+                 n_folds=0, months=None, pack=None):
     rfsi_cfg = cfg.get("rfsi", {})
     n_obs = int(rfsi_cfg.get("n_obs", 10))
     rf_fixed = dict(rfsi_cfg.get("rf_fixed", {"n_estimators": 250, "random_state": 22}))
@@ -129,8 +132,30 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
     use_elev = bool(rfsi_cfg.get("use_elevation", True))
     use_lc = bool(rfsi_cfg.get("use_landcover", True))
     min_stations = int(cfg.get("min_stations_per_field", 10))
+    rh_t_mode = str(rfsi_cfg.get("rh_t_mode", "none"))
+    two_step = bool(rfsi_cfg.get("two_step", True)) and two_step_var(var)
+    tau_wet = float(rfsi_cfg.get("tau_wet", 0.5))
 
     valid = load_panel(cfg, var)
+    if str(var).lower().startswith("rh") and rh_t_mode in ("predicted", "observed"):
+        try:
+            from Kriging.kriging_data import attach_temperature
+            valid = attach_temperature(valid, cfg)
+        except Exception:
+            tpanel = load_panel(cfg, "temp_mean")[["station_name", "time", "temp_mean"]]
+            valid = valid.merge(tpanel, on=["station_name", "time"], how="left")
+    if pack is not None:
+        try:
+            from Kriging.kriging_data import attach_pack_terrain
+            valid = attach_pack_terrain(valid, pack)
+        except Exception as exc:
+            print(f"  pack attach failed: {exc}")
+    if months:
+        try:
+            from Kriging.kriging_data import subset_times
+            valid = subset_times(valid, months)
+        except Exception:
+            pass
     if fit_splits != {"all"}:
         fit_mask = valid["split"].isin(fit_splits)
     else:
@@ -148,6 +173,13 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
     names = sorted(score_df["station_name"].unique())
     if max_stations:
         names = names[: int(max_stations)]
+    if n_folds and n_folds > 0:
+        rng = np.random.default_rng(22)
+        shuf = list(names)
+        rng.shuffle(shuf)
+        groups = [shuf[i::int(n_folds)] for i in range(int(n_folds))]
+    else:
+        groups = [[n] for n in names]
 
     print(f"\n{'=' * 60}\nVARIABLE {var}")
     print(f"  fit rows {len(fit_df):,}  score rows {len(score_df):,}")
@@ -155,21 +187,27 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
     print(f"  n_obs={n_obs}  trees={rf_params['n_estimators']}")
 
     _, encoder = prepare_covariates(
-        fit_df, fit_encoder=True, use_elev=use_elev, use_lc=use_lc
+        fit_df, fit_encoder=True, use_elev=use_elev, use_lc=use_lc,
+        extras=extras_for_var(fit_df, var, rh_t_mode),
     )
     out_path = get_nested_llocv_path("RFSI", var, cfg["time_resolution"], "full")
     records = []
     t0 = time.perf_counter()
 
-    for i, name in enumerate(tqdm(names, desc=var), start=1):
-        train = fit_df[fit_df["station_name"] != name]
-        hold = score_df[score_df["station_name"] == name]
+    for i, hold_names in enumerate(tqdm(groups, desc=var), start=1):
+        hold_set = set(hold_names)
+        train = fit_df[~fit_df["station_name"].isin(hold_set)]
+        hold = score_df[score_df["station_name"].isin(hold_set)]
         if hold.empty or train["station_name"].nunique() < min_stations:
             continue
         X_train, _ = prepare_covariates(
-            train, encoder=encoder, use_elev=use_elev, use_lc=use_lc
+            train, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+            extras=extras_for_var(train, var, rh_t_mode),
         )
-        model = RFSI(n_obs=n_obs, rf_params=rf_params)
+        model = RFSI(
+            n_obs=n_obs, rf_params=rf_params,
+            two_step=two_step, tau_wet=tau_wet, var_name=var,
+        )
         try:
             model.fit_pooled(
                 times=train["time"].to_numpy(),
@@ -181,7 +219,7 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
         except RuntimeError:
             continue
 
-        donors = valid[valid["station_name"] != name]
+        donors = valid[~valid["station_name"].isin(hold_set)]
         for t, hold_t in hold.groupby("time", sort=False):
             # Neighbours are same-timestamp other stations (any year).
             # The forest itself was fit on TRAIN times only.
@@ -189,7 +227,8 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
             if len(others) < max(min_stations, n_obs):
                 continue
             X_hold, _ = prepare_covariates(
-                hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc
+                hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+                extras=extras_for_var(hold_t, var, rh_t_mode),
             )
             pred = model.predict_field(
                 others[["x", "y"]].to_numpy(),
@@ -201,7 +240,7 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
                 records.append({
                     "time": row.time,
                     "split": row.split,
-                    "station_name": name,
+                    "station_name": row.station_name,
                     "variable": var,
                     "observed": float(getattr(row, var)),
                     "predicted": float(yhat),
@@ -255,6 +294,9 @@ def parse_args():
     )
     p.add_argument("--max-stations", type=int, default=0, help="Smoke test: first N stations")
     p.add_argument("--checkpoint-every", type=int, default=25)
+    p.add_argument("--folds", type=int, default=0, help=">0 uses station folds instead of leave-one")
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--months", default=None)
     return p.parse_args()
 
 
@@ -282,11 +324,23 @@ def main():
     print(f"  time_resolution={cfg['time_resolution']}")
     print(f"  fit={sorted(fit_splits)}  score={sorted(score_splits)}")
     print("=" * 72)
+    n_folds = args.folds
+    months = args.months
+    if args.quick:
+        n_folds = n_folds or 2
+        months = months or "seasonal4"
+    pack = None
+    try:
+        from Kriging.kriging_data import pack_from_master
+        pack = pack_from_master(cfg, 6)
+    except Exception:
+        pack = None
     for var in wanted:
         run_variable(
             cfg, var, fit_splits, score_splits,
             max_stations=args.max_stations,
             checkpoint_every=args.checkpoint_every,
+            n_folds=n_folds, months=months, pack=pack,
         )
     print("\nNested LLOCV finished.")
 

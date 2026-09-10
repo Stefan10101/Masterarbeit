@@ -28,7 +28,16 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_kriging_tuned_params_path, get_nested_llocv_path
 from kriging_core import KrigingConfig, KrigingInterpolator
-from kriging_data import load_config, load_panel, print_split_metrics
+from kriging_data import (
+    attach_pack_terrain,
+    attach_temperature,
+    compute_block,
+    load_config,
+    load_panel,
+    pack_from_master,
+    print_split_metrics,
+    subset_times,
+)
 
 
 def parse_split_arg(text: str) -> set[str]:
@@ -60,6 +69,11 @@ def cfg_to_kriging(cfg, overrides: dict | None = None) -> KrigingConfig:
         n_lags=int(k.get("n_lags", 12)),
         seed=int(k.get("seed", 22)),
         predict_tile=int(k.get("predict_tile", 8000)),
+        tau_wet=float(t.get("tau_wet", k.get("tau_wet", 0.5))),
+        rh_t_mode=str(t.get("rh_t_mode", k.get("rh_t_mode", "none"))),
+        snow_terrain=bool(k.get("snow_terrain", True)),
+        wind_watershed=bool(k.get("wind_watershed", True)),
+        across_w=float(k.get("across_w", 4.0)),
     )
 
 
@@ -81,8 +95,17 @@ def station_folds(names: list[str], n_folds: int, seed: int) -> list[list[str]]:
     return folds
 
 
-def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations, trend_override):
+def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations, trend_override,
+                 months=None, rh_t_mode=None, pack=None):
     panel = load_panel(cfg, var)
+    if months:
+        panel = subset_times(panel, months)
+    need_t = str(var).lower().startswith("rh") and (
+        (rh_t_mode or cfg.get("kriging", {}).get("rh_t_mode", "none")) in ("predicted", "observed")
+    )
+    if need_t:
+        panel = attach_temperature(panel, cfg)
+    panel = attach_pack_terrain(panel, pack)
     if fit_splits != {"all"}:
         fit_df = panel[panel["split"].isin(fit_splits)]
     else:
@@ -103,6 +126,8 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
     tuned = load_tuned(var, cfg["time_resolution"])
     if trend_override:
         tuned = {**tuned, "trend": trend_override}
+    if rh_t_mode:
+        tuned = {**tuned, "rh_t_mode": rh_t_mode}
     kcfg = cfg_to_kriging(cfg, tuned)
     tag = "ok" if kcfg.trend == "none" else "rk"
     out_path = get_nested_llocv_path("Kriging", f"{var}_{tag}", cfg["time_resolution"], "full")
@@ -121,12 +146,26 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
         if hold.empty or train["station_name"].nunique() < kcfg.min_stations:
             continue
         model = KrigingInterpolator(kcfg)
+        model.pack = pack
         model.fit(train, var, cfg["time_resolution"], cfg)
+        t_model = None
+        if str(var).lower().startswith("rh") and kcfg.rh_t_mode == "predicted" and "temp_mean" in train.columns:
+            t_model = KrigingInterpolator(kcfg)
+            t_model.pack = pack
+            try:
+                t_model.fit(train, "temp_mean", cfg["time_resolution"], cfg)
+            except Exception:
+                t_model = None
         for t, hold_t in hold.groupby("time", sort=False):
             others = panel[(panel["time"] == t) & (~panel["station_name"].isin(hold_set))]
             if len(others) < kcfg.min_stations:
                 continue
-            pred = model.predict_frame(others, hold_t, var)
+            ho_t = hold_t
+            if t_model is not None:
+                t_hat = t_model.predict_frame(others, hold_t, "temp_mean")
+                ho_t = hold_t.copy()
+                ho_t["temp_mean"] = t_hat
+            pred = model.predict_frame(others, ho_t, var)
             for row, yhat in zip(hold_t.itertuples(index=False), pred):
                 records.append({
                     "time": row.time,
@@ -161,6 +200,9 @@ def parse_args():
     p.add_argument("--max-stations", type=int, default=0)
     p.add_argument("--trend", choices=["linear", "none"], default=None,
                    help="override config trend (none = OK control)")
+    p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     return p.parse_args()
 
 
@@ -171,6 +213,12 @@ def main():
         "temp_mean", "precip_sum",
     ]
     n_folds = args.folds or int(cfg.get("kriging", {}).get("n_folds", 5))
+    months = args.months
+    if args.quick:
+        n_folds = args.folds or 2
+        months = months or "seasonal4"
+    pack = pack_from_master(cfg, int(cfg.get("kriging", {}).get("n_regions", 6)))
+    print(f"  months={months or 'all'}  pack={'yes' if pack else 'no'}")
     print("=" * 72)
     print("Kriging station LLOCV")
     print(f"  time_resolution={cfg['time_resolution']}")
@@ -183,6 +231,7 @@ def main():
             parse_split_arg(args.fit),
             parse_split_arg(args.score),
             args.mode, n_folds, args.max_stations, args.trend,
+            months=months, rh_t_mode=args.rh_t_mode, pack=pack,
         )
     print("\nKriging LLOCV finished.")
 

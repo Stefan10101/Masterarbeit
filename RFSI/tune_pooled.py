@@ -32,7 +32,7 @@ from paths import (
     get_medoids_path,
     get_rfsi_tuned_params_path,
 )
-from rfsi_core import RFSI, build_covariates
+from rfsi_core import RFSI, build_covariates, extras_for_var, two_step_var
 from rfsi_optimizer import compute_metrics
 
 _splits_path = CODE_DIR / "shared" / "splits" / "splits.py"
@@ -67,12 +67,14 @@ def load_config():
         return yaml.safe_load(f)
 
 
-def prepare_covariates(df, encoder=None, fit_encoder=False, use_elev=True, use_lc=True):
+def prepare_covariates(df, encoder=None, fit_encoder=False, use_elev=True, use_lc=True,
+                      extras=None):
     X = build_covariates(
         elev=df["elev"].to_numpy() if use_elev and "elev" in df.columns else None,
         clc_code=df["clc_code"].to_numpy() if use_lc and "clc_code" in df.columns else None,
         use_elev=use_elev and "elev" in df.columns,
         use_lc=use_lc and "clc_code" in df.columns,
+        extras=extras,
     )
     return X, None
 
@@ -142,7 +144,7 @@ def load_medoid_times(cfg, var, cluster_method: str):
 
 
 def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
-                min_stations, n_splits, primary):
+                min_stations, n_splits, primary, rh_t_mode="none", two_step=False, tau_wet=0.5):
     names = panel["station_name"].to_numpy()
     uniq = np.unique(names)
     if len(uniq) < n_splits * 2:
@@ -157,9 +159,13 @@ def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
         if train["station_name"].nunique() < min_stations:
             continue
         X_train, _ = prepare_covariates(
-            train, encoder=encoder, use_elev=use_elev, use_lc=use_lc
+            train, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+            extras=extras_for_var(train, var, rh_t_mode),
         )
-        model = RFSI(n_obs=n_obs, rf_params=rf_params)
+        model = RFSI(
+            n_obs=n_obs, rf_params=rf_params,
+            two_step=two_step, tau_wet=tau_wet, var_name=var,
+        )
         try:
             model.fit_pooled(
                 times=train["time"].to_numpy(),
@@ -175,7 +181,8 @@ def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
             if len(others) < max(min_stations, n_obs):
                 continue
             X_hold, _ = prepare_covariates(
-                hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc
+                hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+                extras=extras_for_var(hold_t, var, rh_t_mode),
             )
             pred = model.predict_field(
                 others[["x", "y"]].to_numpy(),
@@ -204,7 +211,7 @@ def param_grid(cfg):
     return list(itertools.product(n_obs_list, depths, leaves, feats))
 
 
-def run_variable(cfg, var, cluster_method, n_splits):
+def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
     rfsi = cfg.get("rfsi", {})
     use_elev = bool(rfsi.get("use_elevation", True))
     use_lc = bool(rfsi.get("use_landcover", True))
@@ -215,26 +222,45 @@ def run_variable(cfg, var, cluster_method, n_splits):
     seed = int(rfsi.get("rf_fixed", {}).get("random_state", 22))
 
     panel = load_panel(cfg, var)
-    medoid_times = load_medoid_times(cfg, var, cluster_method)
-    if len(medoid_times) == 0:
-        raise RuntimeError(
-            f"No DEV medoid months for {var}. "
-            "Re-run identify_regimes with --start-date/--end-date = DEV."
-        )
-    # month-match: medoid timestamps vs panel month starts
-    panel_months = pd.to_datetime(panel["time"]).dt.to_period("M")
-    med_months = pd.DatetimeIndex(medoid_times).tz_localize(None).to_period("M")
-    panel = panel[panel_months.isin(set(med_months))].copy()
-    print(f"  DEV medoid panel: {len(panel):,} rows | "
-          f"{panel['station_name'].nunique()} stations | "
-          f"{panel['time'].nunique()} months")
+    rh_t_mode = str(rfsi.get("rh_t_mode", "none"))
+    two_step = bool(rfsi.get("two_step", True)) and two_step_var(var)
+    tau_wet = float(rfsi.get("tau_wet", 0.5))
+    if quick:
+        from Kriging.kriging_data import subset_times
+        panel = subset_times(panel, months or "seasonal4")
+        spec = load_time_splits()
+        dev_start, dev_end = spec["windows"]["dev"]
+        panel = panel[(panel["time"] >= dev_start) & (panel["time"] <= dev_end)].copy()
+        print(f"  QUICK DEV panel: {len(panel):,} rows | "
+              f"{panel['station_name'].nunique()} stations | "
+              f"{panel['time'].nunique()} months")
+    else:
+        medoid_times = load_medoid_times(cfg, var, cluster_method)
+        if len(medoid_times) == 0:
+            raise RuntimeError(
+                f"No DEV medoid months for {var}. "
+                "Re-run identify_regimes with --start-date/--end-date = DEV."
+            )
+        panel_months = pd.to_datetime(panel["time"]).dt.to_period("M")
+        med_months = pd.DatetimeIndex(medoid_times).tz_localize(None).to_period("M")
+        panel = panel[panel_months.isin(set(med_months))].copy()
+        print(f"  DEV medoid panel: {len(panel):,} rows | "
+              f"{panel['station_name'].nunique()} stations | "
+              f"{panel['time'].nunique()} months")
 
     X_all, encoder = prepare_covariates(
-        panel, fit_encoder=True, use_elev=use_elev, use_lc=use_lc
+        panel, fit_encoder=True, use_elev=use_elev, use_lc=use_lc,
+        extras=extras_for_var(panel, var, rh_t_mode),
     )
     del X_all
 
-    grid = param_grid(cfg)
+    if quick:
+        n_est_search = min(n_est_search, 80)
+        grid = [(int(rfsi.get("n_obs", 10)), rfsi.get("rf_fixed", {}).get("max_depth"),
+                 int(rfsi.get("rf_fixed", {}).get("min_samples_leaf", 5)),
+                 rfsi.get("rf_fixed", {}).get("max_features", "sqrt"))]
+    else:
+        grid = param_grid(cfg)
     print(f"  search {len(grid)} combos × {n_splits} station folds, "
           f"{n_est_search} trees")
     rows = []
@@ -251,6 +277,7 @@ def run_variable(cfg, var, cluster_method, n_splits):
         met = score_combo(
             panel, var, int(n_obs), rf_params, encoder,
             use_elev, use_lc, min_stations, n_splits, primary,
+            rh_t_mode=rh_t_mode, two_step=two_step, tau_wet=tau_wet,
         )
         if met is None:
             continue
@@ -312,6 +339,8 @@ def parse_args():
     p.add_argument("--variables", nargs="*", default=None)
     p.add_argument("--cluster-method", default="gmm")
     p.add_argument("--n-splits", type=int, default=5)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--months", default=None)
     return p.parse_args()
 
 
@@ -330,7 +359,8 @@ def main():
     print("=" * 72)
     for var in wanted:
         print(f"\n{'=' * 60}\n{var}")
-        run_variable(cfg, var, args.cluster_method, args.n_splits)
+        n_splits = 2 if args.quick else args.n_splits
+        run_variable(cfg, var, args.cluster_method, n_splits, quick=args.quick, months=args.months)
     print("\nSearch finished.")
 
 

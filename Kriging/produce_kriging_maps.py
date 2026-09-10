@@ -10,6 +10,7 @@ Station parquet from this script is a frozen-model check, not nested LLOCV.
 from __future__ import annotations
 
 from pathlib import Path
+import argparse
 import sys
 import gc
 from datetime import datetime
@@ -33,11 +34,18 @@ from paths import (
 )
 from kriging_core import KrigingInterpolator
 from kriging_data import (
+    attach_pack_terrain,
+    attach_temperature,
     clc_group,
+    compute_block,
     compute_metrics,
     data_sources,
     load_config,
     load_panel,
+    pack_from_master,
+    subset_splits,
+    subset_times,
+    subset_years,
 )
 from llocv_kriging import cfg_to_kriging
 
@@ -62,7 +70,20 @@ def grid_clc(grid) -> np.ndarray | None:
     return None
 
 
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--variables", nargs="*", default=None)
+    p.add_argument("--years", default=None)
+    p.add_argument("--months", default=None)
+    p.add_argument("--split", default=None)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    p.add_argument("--skip-station-check", action="store_true")
+    return p.parse_args()
+
+
 def main():
+    args = parse_args()
     cfg = load_config()
     if xr is None:
         raise RuntimeError("xarray is required for produce_kriging_maps.py")
@@ -73,7 +94,12 @@ def main():
     end = pd.Timestamp(cfg["end_date"])
     resolutions = cfg.get("resolutions_to_process", [1000])
     kblock = cfg.get("kriging", {})
-    variables = kblock.get("variables_to_process") or ["temp_mean", "precip_sum"]
+    variables = args.variables or kblock.get("variables_to_process") or ["temp_mean", "precip_sum"]
+    comp = compute_block(cfg)
+    months = args.months or ("seasonal4" if args.quick else None)
+    splits = args.split or ("test" if args.quick else comp.get("produce_splits", "all"))
+    skip_station = bool(args.skip_station_check or args.quick)
+    pack = pack_from_master(cfg, int(kblock.get("n_regions", 6)))
     save_llocv = bool(kblock.get("save_llocv", True))
     save_model = bool(kblock.get("save_model", True))
     min_stations = int(cfg.get("min_stations_per_field", 10))
@@ -82,21 +108,46 @@ def main():
     print("=" * 72)
     print(f"Kriging production | {domain} | {time_res}")
     print(f"Period: {start.date()} → {end.date()}")
+    print(f"months={months or 'all'} split={splits} pack={'yes' if pack else 'no'}")
     print("=" * 72)
 
     for var in variables:
         panel = load_panel(cfg, var)
-        fit = panel[panel["split"].isin(("train", "dev"))]
+        tuned = load_tuned(var, time_res)
+        if args.rh_t_mode:
+            tuned["rh_t_mode"] = args.rh_t_mode
+        kcfg_preview = cfg_to_kriging(cfg, tuned)
+        if str(var).lower().startswith("rh") and kcfg_preview.rh_t_mode in ("predicted", "observed"):
+            panel = attach_temperature(panel, cfg)
+            if kcfg_preview.rh_t_mode == "observed":
+                print("produce: rh_t_mode=observed has no grid T; using predicted")
+                tuned["rh_t_mode"] = "predicted"
+        panel = attach_pack_terrain(panel, pack)
+        panel = subset_splits(panel, splits) if splits and splits != "all" else panel
+        # keep train+dev for the pooled fit even if maps are TEST-only
+        fit_panel = attach_pack_terrain(load_panel(cfg, var), pack)
+        if str(var).lower().startswith("rh") and kcfg_preview.rh_t_mode in ("predicted", "observed"):
+            fit_panel = attach_temperature(fit_panel, cfg)
+        fit = fit_panel[fit_panel["split"].isin(("train", "dev"))]
+        if months:
+            fit = subset_times(fit, months)
+            panel = subset_times(panel, months)
+        panel = subset_years(panel, args.years)
         if fit.empty:
             print(f"  [SKIP] {var}: no train/dev rows")
             continue
-        tuned = load_tuned(var, time_res)
         kcfg = cfg_to_kriging(cfg, tuned)
         print(f"\n>>> {var}  trend={kcfg.trend}  k={kcfg.k}  family={kcfg.family}  "
-              f"az={kcfg.alpha_z}  r={kcfg.aniso_ratio}  int={kcfg.interactions}")
+              f"az={kcfg.alpha_z}  r={kcfg.aniso_ratio}  int={kcfg.interactions}  rh_t={kcfg.rh_t_mode}")
         print(f"  fitting on {len(fit):,} train+dev rows")
         model = KrigingInterpolator(kcfg)
+        model.pack = pack
         info = model.fit(fit, var, time_res, cfg)
+        t_model = None
+        if str(var).lower().startswith("rh") and kcfg.rh_t_mode == "predicted" and "temp_mean" in fit.columns:
+            t_model = KrigingInterpolator(kcfg)
+            t_model.pack = pack
+            t_model.fit(fit, "temp_mean", time_res, cfg)
         print(f"  fit done  n_regimes={info['n_regimes']}  "
               f"vgm_pairs={info['vgm'].get('n_pairs')}  "
               f"range={info['vgm'].get('range'):.0f}")
@@ -157,28 +208,33 @@ def main():
                         "cluster_id": np.full(len(sl), int(df_t["cluster_id"].iloc[0])),
                         var: np.zeros(len(sl), dtype=np.float32),
                     })
+                    qry = attach_pack_terrain(qry, pack)
+                    if t_model is not None:
+                        qry["temp_mean"] = t_model.predict_frame(df_t, qry, "temp_mean")
                     pred_flat[sl] = model.predict_frame(df_t, qry, var)
                 i = len(kept)
                 data_3d[i] = pred_flat.reshape(ny, nx)
                 kept.append(t)
-                # frozen leave-one-station at this time (not nested LLOCV)
-                preds_st = []
-                names = df_t["station_name"].tolist()
-                for name in names:
-                    donors = df_t[df_t["station_name"] != name]
-                    qry = df_t[df_t["station_name"] == name]
-                    y1 = model.predict_frame(donors, qry, var)
-                    preds_st.append(float(y1[0]) if len(y1) else np.nan)
-                preds_st = np.asarray(preds_st, dtype=np.float32)
-                met = compute_metrics(df_t[var].to_numpy(), preds_st)
-                station_rmse.append(met["rmse"])
-                if save_llocv:
-                    for name, obs, pr in zip(df_t["station_name"], df_t[var], preds_st):
-                        llocv_records.append({
-                            "time": t, "station_name": name, "variable": var,
-                            "observed": float(obs), "predicted": float(pr),
-                            "resolution_m": int(res),
-                        })
+                if skip_station:
+                    station_rmse.append(np.nan)
+                else:
+                    preds_st = []
+                    names = df_t["station_name"].tolist()
+                    for name in names:
+                        donors = df_t[df_t["station_name"] != name]
+                        qry = df_t[df_t["station_name"] == name]
+                        y1 = model.predict_frame(donors, qry, var)
+                        preds_st.append(float(y1[0]) if len(y1) else np.nan)
+                    preds_st = np.asarray(preds_st, dtype=np.float32)
+                    met = compute_metrics(df_t[var].to_numpy(), preds_st)
+                    station_rmse.append(met["rmse"])
+                    if save_llocv:
+                        for name, obs, pr in zip(df_t["station_name"], df_t[var], preds_st):
+                            llocv_records.append({
+                                "time": t, "station_name": name, "variable": var,
+                                "observed": float(obs), "predicted": float(pr),
+                                "resolution_m": int(res),
+                            })
 
             n_kept = len(kept)
             data_3d = data_3d[:n_kept]

@@ -30,7 +30,12 @@ end_date:   "2025-12-31"
 resolutions_to_process: [1000]
 
 rgi:
-  variables_to_process: ["precip_sum"]
+  variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
+  two_step: true
+  tau_wet: 0.5
+  rh_t_mode: "predicted"
+  snow_terrain: true
+  wind_tpi: true
   save_model: true
   save_llocv: true
   primary_metric: "rmse"

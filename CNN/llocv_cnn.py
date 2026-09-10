@@ -62,6 +62,7 @@ def eval_parts(model, donors, queries, var, gx, gy, elev, clc, ccfg, slope, sina
         time_ch=tch,
         two_step=model.cfg.two_step and two_step_var(var),
         base=base,
+        var=var,
     )
     rows_q, cols_q = grid_index(queries["x"].to_numpy(), queries["y"].to_numpy(), gx, gy)
     return hat[rows_q, cols_q]
@@ -96,6 +97,8 @@ def main():
     p.add_argument("--loo", action="store_true")
     p.add_argument("--folds", type=int, default=None)
     p.add_argument("--score", default="dev,test")
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--months", default=None)
     args = p.parse_args()
     cfg = load_cnn_config()
     if xr is None:
@@ -115,10 +118,18 @@ def main():
     slope, sinasp, cosasp = grid_terrain(elev, gx, gy)
     variables = [args.variable] if args.variable else cfg["cnn"].get("variables_to_process", ["temp_mean"])
     n_folds = args.folds or int(cfg["cnn"].get("n_folds", 5))
+    if args.quick:
+        n_folds = args.folds or 2
+        cfg.setdefault("cnn", {})
+        cfg["cnn"]["epochs"] = min(int(cfg["cnn"].get("epochs", 40)), 8)
+        cfg["cnn"]["patience"] = min(int(cfg["cnn"].get("patience", 8)), 3)
     score = {s.strip() for s in args.score.split(",") if s.strip()}
 
     for var in variables:
         panel = load_panel(cfg, var)
+        if args.quick or args.months:
+            from Kriging.kriging_data import subset_times
+            panel = subset_times(panel, args.months or "seasonal4")
         ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))
         subdaily = is_subdaily(panel, time_res)
         trace = precip_trace(cfg, time_res, var)

@@ -99,6 +99,35 @@ def load_panel(cfg, var: str) -> pd.DataFrame:
     return valid
 
 
+def extra_cols_for_var(var: str, cfg: dict) -> tuple[str, ...]:
+    r = cfg.get("rgi", {})
+    v = str(var).lower()
+    cols = []
+    if v.startswith("snow") and r.get("snow_terrain", True):
+        cols.extend(["slope", "northness"])
+    if v.startswith("wind") and r.get("wind_tpi", True):
+        cols.append("tpi")
+    if v.startswith("rh") and str(r.get("rh_t_mode", "predicted")) in ("predicted", "observed"):
+        cols.append("temp_mean")
+    return tuple(cols)
+
+
+def attach_extras(panel: pd.DataFrame, cfg: dict, var: str) -> pd.DataFrame:
+    cols = extra_cols_for_var(var, cfg)
+    if "temp_mean" in cols and "temp_mean" not in panel.columns:
+        t = load_panel(cfg, "temp_mean")[["station_name", "time", "temp_mean"]]
+        panel = panel.merge(t, on=["station_name", "time"], how="left")
+    need_pack = any(c in cols for c in ("slope", "northness", "tpi"))
+    if need_pack:
+        try:
+            from Kriging.kriging_data import attach_pack_terrain, pack_from_master
+            pack = pack_from_master(cfg, int(cfg.get("rgi", {}).get("n_regions", 6)))
+            panel = attach_pack_terrain(panel, pack)
+        except Exception as exc:
+            print(f"  RGI pack attach failed: {exc}")
+    return panel
+
+
 def compute_metrics(obs, pred) -> dict:
     o = np.asarray(obs, dtype=float)
     p = np.asarray(pred, dtype=float)
@@ -144,6 +173,7 @@ class FeatureScaler:
     """z-score for value, x, y, elev. CLC kept as integer codes."""
 
     keys = ("value", "x", "y", "elev")
+    extra_keys: tuple = ()
 
     def __init__(self):
         self.mean = {k: 0.0 for k in self.keys}
@@ -158,6 +188,15 @@ class FeatureScaler:
             self.std[key] = s if s > 1e-8 else 1.0
         codes = sorted(set(int(c) for c in df["clc_code"].to_numpy().tolist()) | {0})
         self.clc_codes = codes
+        for key in self.extra_keys:
+            if key not in df.columns:
+                self.mean[key] = 0.0
+                self.std[key] = 1.0
+                continue
+            v = df[key].to_numpy(dtype=np.float64)
+            self.mean[key] = float(np.nanmean(v)) if np.isfinite(v).any() else 0.0
+            s = float(np.nanstd(v)) if np.isfinite(v).any() else 1.0
+            self.std[key] = s if s > 1e-8 else 1.0
         return self
 
     def transform_value(self, v) -> np.ndarray:
@@ -174,6 +213,20 @@ class FeatureScaler:
         e = (np.asarray(elev, dtype=np.float32) - self.mean["elev"]) / self.std["elev"]
         return np.column_stack([x, y, e]).astype(np.float32)
 
+    def extra_block(self, df: pd.DataFrame) -> np.ndarray | None:
+        if not self.extra_keys:
+            return None
+        cols = []
+        n = len(df)
+        for key in self.extra_keys:
+            if key in df.columns:
+                v = np.asarray(df[key], dtype=np.float32)
+            else:
+                v = np.zeros(n, dtype=np.float32)
+            v = np.where(np.isfinite(v), v, self.mean.get(key, 0.0))
+            cols.append((v - self.mean.get(key, 0.0)) / self.std.get(key, 1.0))
+        return np.column_stack(cols).astype(np.float32)
+
     def clc_index(self, codes) -> np.ndarray:
         table = {c: i for i, c in enumerate(self.clc_codes)}
         out = np.array([table.get(int(c), 0) for c in np.asarray(codes).ravel()], dtype=np.int64)
@@ -184,6 +237,7 @@ class FeatureScaler:
             "mean": self.mean,
             "std": self.std,
             "clc_codes": self.clc_codes,
+            "extra_keys": list(self.extra_keys),
         }
 
     @classmethod
@@ -192,4 +246,5 @@ class FeatureScaler:
         obj.mean = dict(state["mean"])
         obj.std = dict(state["std"])
         obj.clc_codes = list(state["clc_codes"])
+        obj.extra_keys = tuple(state.get("extra_keys") or ())
         return obj

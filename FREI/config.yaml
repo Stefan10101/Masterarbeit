@@ -1,4 +1,4 @@
-# config.yaml - Frei 2014 / SPARTACUS-style temperature interpolator
+# config.yaml - Frei 2014 / SPARTACUS-style interpolator
 # Station and grid files are reused from RFSI.
 
 paths:
@@ -29,7 +29,7 @@ end_date:   "2025-12-31"
 resolutions_to_process: [1000]
 
 frei:
-  variables_to_process: ["temp_mean", "precip_sum"]
+  variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
   save_model: true
   save_llocv: true
   primary_metric: "rmse"
@@ -50,9 +50,24 @@ frei:
   two_step: true
   tau_wet: 0.5
 
+  # RH auxiliary T: none | predicted | observed
+  # predicted = T from donor stations (fold-safe, same as maps)
+  # observed  = query-station T (LLOCV oracle only; maps fall back to predicted)
+  rh_t_mode: "predicted"
+  snow_terrain: true
+  wind_elev_bg: true
+
   seed: 22
   n_folds: 5
   predict_tile: 20000
+
+  # Cheap default: coordinate descent on Feb/May/Aug/Nov of every year in the panel.
+  # Full product search: set tune_mode: grid and tune_months: all.
+  compute:
+    tune_mode: "coord"
+    tune_months: "seasonal4"
+    tune_folds: 5
+    produce_splits: "all"
 
   search:
     n_regions: [4, 6, 8, 12]

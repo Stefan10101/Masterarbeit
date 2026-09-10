@@ -18,7 +18,17 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path, get_nested_llocv_path
 from gam_core import GAMConfig, GAMInterpolator
-from gam_data import load_gam_config, load_panel, precip_trace, print_split_metrics
+from gam_data import (
+    attach_pack_terrain,
+    attach_temperature,
+    compute_block,
+    load_gam_config,
+    load_panel,
+    pack_from_master,
+    precip_trace,
+    print_split_metrics,
+    subset_times,
+)
 
 
 def parse_split_arg(text: str) -> set[str]:
@@ -58,6 +68,8 @@ def cfg_to_gam(cfg, overrides=None) -> GAMConfig:
         seed=int(g.get("seed", 22)),
         trace=float(o.get("trace", g.get("trace", 0.1))),
         r_timeout=float(g.get("r_timeout", 600.0)),
+        rh_t_mode=str(o.get("rh_t_mode", g.get("rh_t_mode", "none"))),
+        wind_watershed=bool(g.get("wind_watershed", True)),
     )
 
 
@@ -69,7 +81,8 @@ def load_tuned(var, time_res):
         return yaml.safe_load(f) or {}
 
 
-def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, progress: str | None = None):
+def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, progress: str | None = None,
+              pack=None):
     import time
 
     names = sorted(panel["station_name"].unique())
@@ -100,6 +113,23 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, pr
             if don["station_name"].nunique() < gcfg.min_stations:
                 continue
             model = GAMInterpolator(gcfg)
+            use_t = str(var).lower().startswith("rh") and gcfg.rh_t_mode in ("predicted", "observed")
+            tmean = don["temp_mean"].to_numpy() if use_t and "temp_mean" in don.columns else None
+            tmean_q = q["temp_mean"].to_numpy() if use_t and "temp_mean" in q.columns else None
+            if use_t and gcfg.rh_t_mode == "predicted" and tmean is not None:
+                tmod = GAMInterpolator(gcfg)
+                tmean_q = tmod.predict_timestamp(
+                    don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
+                    tmean, q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
+                    clc=don["clc_group"].to_numpy(), clc_q=q["clc_group"].to_numpy(),
+                    slope=don["slope"].to_numpy() if "slope" in don.columns else None,
+                    slope_q=q["slope"].to_numpy() if "slope" in q.columns else None,
+                    sinasp=don["sinasp"].to_numpy() if "sinasp" in don.columns else None,
+                    sinasp_q=q["sinasp"].to_numpy() if "sinasp" in q.columns else None,
+                    cosasp=don["cosasp"].to_numpy() if "cosasp" in don.columns else None,
+                    cosasp_q=q["cosasp"].to_numpy() if "cosasp" in q.columns else None,
+                    var="temp_mean",
+                )
             try:
                 hat = model.predict_timestamp(
                     don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
@@ -115,6 +145,9 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, pr
                     cosasp_q=q["cosasp"].to_numpy() if "cosasp" in q.columns else None,
                     var=var,
                     trace=gcfg.trace,
+                    tmean=tmean, tmean_q=tmean_q,
+                    region=don["region"].to_numpy() if "region" in don.columns else None,
+                    region_q=q["region"].to_numpy() if "region" in q.columns else None,
                 )
             except Exception as exc:
                 n_fail += 1
@@ -149,17 +182,32 @@ def main():
     p.add_argument("--fit", default="train")
     p.add_argument("--score", default="dev,test")
     p.add_argument("--folds", type=int, default=None)
+    p.add_argument("--months", default=None)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     args = p.parse_args()
     cfg = load_gam_config()
     time_res = cfg["time_resolution"]
     variables = [args.variable] if args.variable else cfg["gam"].get("variables_to_process", ["temp_mean"])
     n_folds = args.folds or int(cfg["gam"].get("n_folds", 5))
+    months = args.months
+    if args.quick:
+        n_folds = args.folds or 2
+        months = months or "seasonal4"
+    pack = pack_from_master(cfg, int(cfg.get("gam", {}).get("n_regions", 6)))
     for var in variables:
         tuned = load_tuned(var, time_res)
         tuned["trace"] = precip_trace(cfg, time_res, var)
+        if args.rh_t_mode:
+            tuned["rh_t_mode"] = args.rh_t_mode
         gcfg = cfg_to_gam(cfg, tuned)
         panel = load_panel(cfg, var)
-        pred = run_llocv(panel, var, gcfg, n_folds, parse_split_arg(args.fit), parse_split_arg(args.score))
+        if str(var).lower().startswith("rh") and gcfg.rh_t_mode in ("predicted", "observed"):
+            panel = attach_temperature(panel, cfg)
+        panel = attach_pack_terrain(panel, pack)
+        if months:
+            panel = subset_times(panel, months)
+        pred = run_llocv(panel, var, gcfg, n_folds, parse_split_arg(args.fit), parse_split_arg(args.score), pack=pack)
         out = get_nested_llocv_path("GAM", var, time_res, domain="full")
         pred.to_parquet(out, index=False)
         print(f"{var} -> {out}")

@@ -29,7 +29,7 @@ end_date:   "2025-12-31"
 resolutions_to_process: [1000]
 
 tps:
-  variables_to_process: ["temp_mean", "precip_sum"]
+  variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
   save_model: true
   save_llocv: true
   primary_metric: "rmse"
@@ -51,6 +51,12 @@ tps:
 
   seed: 22
   n_folds: 5
+  rh_t_mode: "predicted"
+  wind_watershed: true
+  snow_terrain: true
+  compute:
+    tune_months: "seasonal4"
+    tune_folds: 5
   predict_tile: 20000
 
   search:

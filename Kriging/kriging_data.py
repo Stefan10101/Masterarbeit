@@ -115,6 +115,149 @@ def is_precip(var: str) -> bool:
     return uses_two_step(var)
 
 
+def clip_var(var: str, pred) -> np.ndarray:
+    v = str(var).lower()
+    out = np.asarray(pred, dtype=np.float64)
+    if v.startswith("precip") or v.startswith("snow") or v.startswith("wind"):
+        return np.maximum(out, 0.0)
+    if v.startswith("rh"):
+        return np.clip(out, 0.0, 100.0)
+    return out
+
+
+SEASONAL4_MONTHS = (2, 5, 8, 11)
+
+
+def attach_temperature(panel: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    if "temp_mean" in panel.columns:
+        return panel
+    tpanel = load_panel(cfg, "temp_mean")[["station_name", "time", "temp_mean"]]
+    return panel.merge(tpanel, on=["station_name", "time"], how="left")
+
+
+def _slope_northness(dem, xs, ys):
+    dem = np.asarray(dem, dtype=np.float64)
+    dx = abs(float(xs[1] - xs[0])) if len(xs) > 1 else 1000.0
+    dy = abs(float(ys[1] - ys[0])) if len(ys) > 1 else dx
+    gy, gx = np.gradient(dem, dy, dx)
+    slope = np.degrees(np.arctan(np.hypot(gx, gy)))
+    aspect = (np.degrees(np.arctan2(-gx, gy)) + 360.0) % 360.0
+    north = np.cos(np.deg2rad(aspect))
+    return slope.astype(np.float32), north.astype(np.float32)
+
+
+def ensure_pack_terrain(pack, dem=None):
+    """Older watershed packs have no slope/northness. Fill them in-place."""
+    if pack is None:
+        return pack
+    xs, ys = pack["xs"], pack["ys"]
+    if "slope" not in pack or "northness" not in pack:
+        if dem is None:
+            pack["slope"] = np.zeros((len(ys), len(xs)), dtype=np.float32)
+            pack["northness"] = np.ones((len(ys), len(xs)), dtype=np.float32)
+        else:
+            sl, no = _slope_northness(dem, xs, ys)
+            pack["slope"] = sl
+            pack["northness"] = no
+    return pack
+
+
+def attach_pack_terrain(panel: pd.DataFrame, pack) -> pd.DataFrame:
+    if pack is None or panel.empty:
+        for c, fill in (("slope", 0.0), ("northness", 1.0), ("region", 1)):
+            if c not in panel.columns:
+                panel[c] = fill
+        return panel
+    pack = ensure_pack_terrain(pack)
+    from shared.watersheds import sample_region
+    xs, ys = pack["xs"], pack["ys"]
+    out = panel.copy()
+    out["slope"] = sample_region(pack["slope"], xs, ys, out["x"], out["y"]).astype(np.float64)
+    out["northness"] = sample_region(pack["northness"], xs, ys, out["x"], out["y"]).astype(np.float64)
+    if "regions" in pack:
+        out["region"] = sample_region(pack["regions"], xs, ys, out["x"], out["y"]).astype(np.int32)
+    else:
+        out["region"] = 1
+    return out
+
+
+def subset_times(panel: pd.DataFrame, spec) -> pd.DataFrame:
+    if spec is None or spec == "" or spec == "all":
+        return panel
+    if isinstance(spec, (list, tuple)):
+        keys = {str(s).strip() for s in spec}
+        if keys == {"seasonal4"}:
+            spec = "seasonal4"
+        else:
+            stamp = pd.to_datetime(panel["time"]).dt.strftime("%Y-%m")
+            return panel.loc[stamp.isin(keys)].copy()
+    spec = str(spec).strip().lower()
+    if spec in ("all", "none"):
+        return panel
+    times = pd.to_datetime(panel["time"])
+    if spec == "seasonal4":
+        return panel.loc[times.dt.month.isin(SEASONAL4_MONTHS)].copy()
+    keys = {s.strip() for s in spec.split(",") if s.strip()}
+    stamp = times.dt.strftime("%Y-%m")
+    return panel.loc[stamp.isin(keys)].copy()
+
+
+def subset_years(panel: pd.DataFrame, years) -> pd.DataFrame:
+    if not years:
+        return panel
+    if isinstance(years, str):
+        years = [y.strip() for y in years.split(",") if y.strip()]
+    want = {int(y) for y in years}
+    return panel.loc[pd.to_datetime(panel["time"]).dt.year.isin(want)].copy()
+
+
+def subset_splits(panel: pd.DataFrame, splits) -> pd.DataFrame:
+    if splits is None or splits == "all" or splits == {"all"}:
+        return panel
+    if isinstance(splits, str):
+        splits = {s.strip() for s in splits.split(",") if s.strip()}
+    if not splits or splits == {"all"}:
+        return panel
+    return panel.loc[panel["split"].isin(splits)].copy()
+
+
+def pack_from_master(cfg, n_regions: int = 6):
+    try:
+        import xarray as xr
+    except ImportError:
+        return None
+    from paths import get_master_grid_path
+    from shared.watersheds import WatershedConfig, build_pack
+
+    _, _, grid_method = data_sources(cfg)
+    res = int(cfg.get("resolutions_to_process", [1000])[0])
+    path = get_master_grid_path(grid_method, res)
+    if not path.exists():
+        return None
+    g = xr.open_dataset(path)
+    if "elev" not in g:
+        return None
+    k = cfg.get("kriging", {})
+    wcfg = WatershedConfig(
+        n_regions=int(n_regions),
+        accum_pct=float(k.get("accum_pct", 96.0)),
+        summit_tpi=float(k.get("summit_tpi", 80.0)),
+        coldpool_tpi=float(k.get("coldpool_tpi", -60.0)),
+    )
+    dem = g["elev"].values.astype(np.float64)
+    pack = build_pack(dem, g["x"].values, g["y"].values, wcfg)
+    return ensure_pack_terrain(pack, dem=dem)
+
+
+def compute_block(cfg: dict) -> dict:
+    block = dict(cfg.get("kriging", {}).get("compute", {}) or {})
+    block.setdefault("tune_months", "seasonal4")
+    block.setdefault("tune_folds", 5)
+    block.setdefault("tune_phase", "1")
+    block.setdefault("produce_splits", "all")
+    return block
+
+
 def precip_trace(cfg, time_res: str, var: str = "precip_sum") -> float:
     kcfg = cfg.get("kriging", {})
     if str(var).lower().startswith("snow"):

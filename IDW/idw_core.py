@@ -17,6 +17,21 @@ import xarray as xr
 from typing import Optional, Tuple
 
 
+def two_step_var(var: str) -> bool:
+    v = str(var).lower()
+    return v.startswith("precip") or v.startswith("snow")
+
+
+def clip_var(var: str, pred) -> np.ndarray:
+    v = str(var).lower()
+    out = np.asarray(pred, dtype=np.float64)
+    if v.startswith("precip") or v.startswith("snow") or v.startswith("wind"):
+        return np.maximum(out, 0.0)
+    if v.startswith("rh"):
+        return np.clip(out, 0.0, 100.0)
+    return out
+
+
 def power_weight(d: np.ndarray, p: float) -> np.ndarray:
     """Power weight function: w = 1 / d^p"""
     with np.errstate(divide='ignore', invalid='ignore'):
@@ -91,6 +106,31 @@ def modified_idw(
                     interpolated[i] = np.average(vals[valid], weights=w[valid])
 
     return interpolated
+
+
+def interpolate_idw(
+    station_values, station_coords, station_elev,
+    target_coords, target_elev, tree,
+    p=2.0, Fz=0.3, k=12, min_dist=1e-6, chunk_size=None,
+    var: str = "", trace: float = 1.0, tau_wet: float = 0.5,
+) -> np.ndarray:
+    vals = np.asarray(station_values, dtype=np.float64)
+    if two_step_var(var):
+        wet = (vals > trace).astype(np.float64)
+        p_wet = modified_idw(
+            wet, station_coords, station_elev, target_coords, target_elev,
+            tree, p=p, Fz=Fz, k=k, min_dist=min_dist, chunk_size=chunk_size,
+        )
+        amt = modified_idw(
+            vals, station_coords, station_elev, target_coords, target_elev,
+            tree, p=p, Fz=Fz, k=k, min_dist=min_dist, chunk_size=chunk_size,
+        )
+        out = np.where(np.clip(p_wet, 0.0, 1.0) >= tau_wet, np.maximum(amt, 0.0), 0.0)
+        return clip_var(var, out)
+    return clip_var(var, modified_idw(
+        vals, station_coords, station_elev, target_coords, target_elev,
+        tree, p=p, Fz=Fz, k=k, min_dist=min_dist, chunk_size=chunk_size,
+    ))
 
 
 def load_grid(resolution_m: int, method: str = "IDW") -> xr.Dataset:

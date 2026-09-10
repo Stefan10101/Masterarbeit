@@ -30,7 +30,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_rgi_tuned_params_path
 from rgi_core import RGI, RGIConfig
-from rgi_data import compute_metrics, load_config, load_panel
+from rgi_data import attach_extras, compute_metrics, extra_cols_for_var, load_config, load_panel
 from llocv_rgi import cfg_to_rgi, station_folds
 
 
@@ -79,7 +79,10 @@ def _write_tuned(var, time_res, payload: dict) -> Path:
 
 
 def run_variable(cfg, var, phase: str):
-    panel = load_panel(cfg, var)
+    panel = attach_extras(load_panel(cfg, var), cfg, var)
+    if cfg.get("_quick_months"):
+        from Kriging.kriging_data import subset_times
+        panel = subset_times(panel, cfg["_quick_months"])
     rgi_cfg = cfg.get("rgi", {})
     search = rgi_cfg.get("search", {})
     expand = rgi_cfg.get("search_expand", {})
@@ -180,6 +183,9 @@ def parse_args():
     p = argparse.ArgumentParser(description="DEV search for RGI")
     p.add_argument("--variables", nargs="*", default=None)
     p.add_argument("--phase", choices=["1", "2", "3", "all"], default="all")
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--months", default=None)
+    p.add_argument("--folds", type=int, default=None)
     return p.parse_args()
 
 
@@ -195,6 +201,19 @@ def main():
     print(f"  phase={args.phase}  time_resolution={cfg['time_resolution']}")
     print(f"  device {describe_device(resolve_device(cfg.get('rgi', {}).get('device', 'auto')))}")
     print("=" * 72)
+    if args.quick:
+        cfg.setdefault("rgi", {})
+        cfg["rgi"]["epochs"] = min(int(cfg["rgi"].get("epochs", 80)), 15)
+        cfg["rgi"]["patience"] = min(int(cfg["rgi"].get("patience", 12)), 4)
+        cfg["rgi"]["n_folds"] = args.folds or 2
+        cfg["rgi"]["search"] = {
+            "k": [int(cfg["rgi"].get("k", 10))],
+            "n_layers": [int(cfg["rgi"].get("n_layers", 3))],
+            "alpha": [float(cfg["rgi"].get("alpha", 0.2))],
+            "alpha_z": [float(cfg["rgi"].get("alpha_z", 10.0))],
+        }
+        cfg["_quick_months"] = args.months or "seasonal4"
+        args.phase = "1"
     for var in wanted:
         run_variable(cfg, var, args.phase)
     print("\nRGI tune finished.")

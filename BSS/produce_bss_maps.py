@@ -40,9 +40,11 @@ from paths import (
     get_domain_grid_path,
 )
 from bss_core import (
+    clip_var,
     create_knot_grid,
     fit_bss,
     fit_bsse,
+    interpolate_bss,
     predict_surface,
     predict_bsse,
 )
@@ -218,9 +220,7 @@ def llocv_field(df_t, var, knot_x, knot_y, tau_d, tau_e, bss_method, clip_nn):
         else:
             fit = fit_bss(vals[mask], coords[mask], knot_x, knot_y, tau_d, tau_d)
             pred = predict_surface(fit["d"], coords[[i]], knot_x, knot_y)
-        yhat = float(pred[0])
-        if clip_nn:
-            yhat = max(yhat, 0.0)
+        yhat = float(clip_var(var, np.array([pred[0]]))[0])
         recs.append({
             "station_name": names[i],
             "x": float(coords[i, 0]),
@@ -249,22 +249,11 @@ def process_one_time_step(args):
 
     knot_x, knot_y = create_knot_grid(xmin, xmax, ymin, ymax, n_seg)
 
-    if bss_method == "bsse":
-        result = fit_bsse(
-            station_values, station_coords, station_elev,
-            knot_x, knot_y, tau_d=tau_d, tau_e=tau_e,
-        )
-        interp_1d = predict_bsse(
-            result["d"], result["e"], target_coords, target_elev, knot_x, knot_y
-        )
-    else:
-        result = fit_bss(
-            station_values, station_coords, knot_x, knot_y, tau_d, tau_d
-        )
-        interp_1d = predict_surface(result["d"], target_coords, knot_x, knot_y)
-
-    if var in NON_NEGATIVE_VARS:
-        interp_1d = np.clip(interp_1d, 0, None)
+    interp_1d = interpolate_bss(
+        station_values, station_coords, station_elev,
+        target_coords, target_elev, knot_x, knot_y,
+        tau_d, tau_e, method=bss_method, var=var,
+    )
 
     llocv_df = None
     if SAVE_LLOCV:
@@ -285,14 +274,23 @@ def process_one_time_step(args):
         "n_segments": n_seg,
         "tau_d": tau_d,
         "tau_e": tau_e,
-        "gcv": float(result.get("gcv", params.get("gcv", np.nan))),
-        "effective_df": float(result.get("effective_df", params.get("effective_df", np.nan))),
+        "gcv": float(params.get("gcv", np.nan)),
+        "effective_df": float(params.get("effective_df", np.nan)),
         "cluster_id": int(params.get("cluster_id", -1)),
         "llocv": llocv_df,
     }
 
 
 def main():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--variables", nargs="*", default=None)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--months", default=None)
+    args = p.parse_args()
+    global SAVE_LLOCV
+    if args.quick:
+        SAVE_LLOCV = False
     print("=" * 80)
     print(f"BSS/BSSE Production (cluster params) | {DOMAIN} | {BSS_METHOD.upper()}")
     print(f"Time resolution: {TIME_RES} | Period: {START_DATE.date()} → {END_DATE.date()}")
@@ -324,9 +322,10 @@ def main():
         target_elev = grid["elev"].values[mask]
         print(f"  Valid target cells: {len(target_coords):,}")
 
-        for var in ["precip_sum", "temp_mean", "temp_min", "temp_max",
-                    "wind_mean", "wind_max", "rh_mean",
-                    "snow_mean", "snow_max", "snow_min"]:
+        wanted = args.variables or [
+            "temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean",
+        ]
+        for var in wanted:
             if var not in station_data.columns:
                 continue
 
@@ -340,10 +339,9 @@ def main():
                     assignments = load_cluster_assignments(canonical)
                     params = load_cluster_params(canonical)
                 except FileNotFoundError as e:
-                    print(f"  [SKIP] {var}: {e}")
-                    assignment_cache[canonical] = None
-                    params_cache[canonical] = None
-                    continue
+                    print(f"  [WARN] {var}: {e} — using fallback params")
+                    assignments = pd.Series(dtype=int)
+                    params = {}
                 assignment_cache[canonical] = assignments
                 params_cache[canonical] = params
                 print(
@@ -353,8 +351,10 @@ def main():
 
             assignments = assignment_cache[canonical]
             cluster_params = params_cache[canonical]
-            if assignments is None or cluster_params is None:
-                continue
+            if assignments is None:
+                assignments = pd.Series(dtype=int)
+            if cluster_params is None:
+                cluster_params = {}
 
             out_file = get_interpolated_map_path(
                 "BSS", DOMAIN, var, res,
@@ -381,6 +381,13 @@ def main():
                 continue
 
             time_steps = sorted(valid["time"].unique())
+            if args.quick or args.months:
+                from Kriging.kriging_data import subset_times
+                valid = subset_times(valid, args.months or "seasonal4")
+                if args.quick:
+                    ts = pd.to_datetime(valid["time"], utc=True)
+                    valid = valid.loc[ts >= pd.Timestamp("2024-01-01", tz="UTC")]
+                time_steps = sorted(valid["time"].unique())
             tasks = []
             n_fallback = 0
             for t in time_steps:

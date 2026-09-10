@@ -65,6 +65,7 @@ def cfg_to_cnn(cfg, overrides=None) -> CNNConfig:
         device=str(c.get("device", "auto")),
         use_amp=bool(c.get("use_amp", True)),
         min_stations=int(cfg.get("min_stations_per_field", 10)),
+        rh_t_mode=str(c.get("rh_t_mode", "none")),
     )
 
 
@@ -130,39 +131,51 @@ def build_frames(panel, var, gx, gy, elev, clc, ccfg: CNNConfig, split, subdaily
 
 
 def pack_batch(frames, idx, elev, clc, model: CNNInterpolator, rng, mask_frac, train: bool,
-               slope=None, sinasp=None, cosasp=None):
-    """Hide a fraction of station pixels in the input. Loss uses those pixels.
+               slope=None, sinasp=None, cosasp=None, extras_fn=None):
+    """Hide a fraction of stations, rebuild IDW from the rest, lose on hidden pixels.
 
-    Using the full station mask as the loss (old code) lets the net copy the
-    visible residual channel and ignore interpolation.
+    Self-inclusive IDW made station residuals identically 0 and the net learned
+    nothing. Donor-only IDW is the actual interpolation residual.
     """
     chans, tgts, qmasks, wets, bases, fields = [], [], [], [], [], []
     for i in idx:
         fr = frames[i]
-        mask_in = fr["mask"].copy()
-        value = fr["value"].copy()
-        qmask = np.zeros_like(fr["mask"], dtype=np.float32)
-        r = fr["rows"]
-        c = fr["cols"]
+        r = np.asarray(fr["rows"])
+        c = np.asarray(fr["cols"])
+        obs = np.asarray(fr["obs"], dtype=np.float64)
+        field = np.asarray(fr["field"], dtype=np.float32)
+        ny, nx = field.shape
+        drop = np.zeros(len(r), dtype=bool)
         if mask_frac > 0 and len(r) >= 5:
-            drop = rng.random(len(r)) < mask_frac
-            if drop.any() and (~drop).sum() >= 4:
-                value[r[drop], c[drop]] = 0.0
-                mask_in[r[drop], c[drop]] = 0.0
-                qmask[r[drop], c[drop]] = 1.0
-        if qmask.sum() < 4:
-            qmask = fr["mask"].astype(np.float32)
+            cand = rng.random(len(r)) < mask_frac
+            if cand.any() and (~cand).sum() >= 4:
+                drop = cand
+        keep = ~drop
+        if keep.sum() < 4:
+            keep = np.ones(len(r), dtype=bool)
+            drop = ~keep
+        base = idw_raster(r[keep], c[keep], obs[keep], ny, nx, k=model.cfg.idw_k, exclude_self=True)
+        value = np.zeros_like(field)
+        mask_in = np.zeros_like(field)
+        value[r[keep], c[keep]] = field[r[keep], c[keep]] - base[r[keep], c[keep]]
+        mask_in[r[keep], c[keep]] = 1.0
+        qmask = np.zeros_like(field)
+        if drop.any():
+            qmask[r[drop], c[drop]] = 1.0
+        else:
+            qmask[r, c] = 1.0
+        extras = extras_fn(fr) if extras_fn is not None else None
         chans.append(model.pack_channels(
             value, mask_in, elev, clc,
             slope=slope, sinasp=sinasp, cosasp=cosasp,
-            time_ch=fr.get("time_ch"),
+            time_ch=fr.get("time_ch"), extras=extras,
         ))
-        tgt = (fr["target"] - model.y_mean) / model.y_std
+        tgt = ((field - base) - model.y_mean) / model.y_std
         tgts.append(tgt.astype(np.float32))
         qmasks.append(qmask.astype(np.float32))
         wets.append(fr.get("wet", np.zeros_like(fr["mask"])).astype(np.float32))
-        bases.append(np.asarray(fr["base"], dtype=np.float32))
-        fields.append(np.asarray(fr["field"], dtype=np.float32))
+        bases.append(np.asarray(base, dtype=np.float32))
+        fields.append(field)
     x = torch.from_numpy(np.stack(chans).astype(np.float32)).to(model.device)
     y = torch.from_numpy(np.stack(tgts)).to(model.device)
     m = torch.from_numpy(np.stack(qmasks)).to(model.device)
@@ -292,8 +305,13 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variable", default=None)
+    p.add_argument("--quick", action="store_true")
     args = p.parse_args()
     cfg = load_cnn_config()
+    if args.quick:
+        cfg.setdefault("cnn", {})
+        cfg["cnn"]["epochs"] = min(int(cfg["cnn"].get("epochs", 40)), 8)
+        cfg["cnn"]["patience"] = min(int(cfg["cnn"].get("patience", 8)), 3)
     if xr is None:
         raise RuntimeError("xarray required")
     time_res = cfg["time_resolution"]

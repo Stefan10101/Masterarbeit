@@ -35,7 +35,7 @@ from paths import (
     get_master_grid_path,
     get_rfsi_model_path,
 )
-from rfsi_core import RFSI, build_covariates, neighbor_width
+from rfsi_core import RFSI, build_covariates, extras_for_var, neighbor_width, two_step_var
 from rfsi_optimizer import compute_metrics
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -129,12 +129,14 @@ def get_all_stations() -> pd.DataFrame:
     return stations
 
 
-def prepare_covariates(df, encoder=None, fit_encoder=False, use_elev=True, use_lc=True):
+def prepare_covariates(df, encoder=None, fit_encoder=False, use_elev=True, use_lc=True,
+                      extras=None):
     X = build_covariates(
         elev=df["elev"].to_numpy() if use_elev and "elev" in df.columns else None,
         clc_code=df["clc_code"].to_numpy() if use_lc and "clc_code" in df.columns else None,
         use_elev=use_elev and "elev" in df.columns,
         use_lc=use_lc and "clc_code" in df.columns,
+        extras=extras,
     )
     return X, None
 
@@ -166,8 +168,14 @@ def grid_landcover_flat(grid_crop) -> np.ndarray:
 
 
 def main():
+    import argparse
     import xarray as xr
     from joblib import dump
+    p = argparse.ArgumentParser()
+    p.add_argument("--variables", nargs="*", default=None)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--months", default=None)
+    args = p.parse_args()
 
     print("=" * 80)
     print(f"RFSI pooled production | {DOMAIN} | {TIME_RES}")
@@ -195,7 +203,7 @@ def main():
         station_cols.append("clc_code")
     stations = stations[station_cols].drop_duplicates("station_name")
 
-    wanted = VARIABLES if VARIABLES else ALL_VARS
+    wanted = args.variables or VARIABLES or ALL_VARS
     wanted = [v for v in wanted if v in station_data.columns]
     if not wanted:
         raise RuntimeError(f"None of {VARIABLES} found in aggregated data.")
@@ -220,6 +228,17 @@ def main():
         valid = valid.dropna(subset=["x", "y", var])
         if "elev" in valid.columns:
             valid = valid.dropna(subset=["elev"])
+        rh_t_mode = str(rfsi_cfg.get("rh_t_mode", "none"))
+        if str(var).lower().startswith("rh") and rh_t_mode in ("predicted", "observed") and "temp_mean" in station_data.columns:
+            tjoin = station_data[["station_name", "time", "temp_mean"]]
+            valid = valid.merge(tjoin, on=["station_name", "time"], how="left")
+        if args.quick or args.months:
+            from Kriging.kriging_data import subset_times, subset_splits
+            valid = subset_times(valid, args.months or "seasonal4")
+            valid = subset_splits(valid.assign(split="test"), "test") if False else valid
+            if args.quick:
+                spec_start = pd.Timestamp("2024-01-01")
+                valid = valid[valid["time"] >= spec_start]
 
         n_times = valid["time"].nunique()
         n_stat = valid["station_name"].nunique()
@@ -229,9 +248,15 @@ def main():
             continue
 
         X_cov, encoder = prepare_covariates(
-            valid, fit_encoder=True, use_elev=use_elev, use_lc=use_lc
+            valid, fit_encoder=True, use_elev=use_elev, use_lc=use_lc,
+            extras=extras_for_var(valid, var, rh_t_mode),
         )
-        model = RFSI(n_obs=N_OBS, rf_params=rf_params)
+        model = RFSI(
+            n_obs=N_OBS, rf_params=rf_params,
+            two_step=bool(rfsi_cfg.get("two_step", True)) and two_step_var(var),
+            tau_wet=float(rfsi_cfg.get("tau_wet", 0.5)),
+            var_name=var,
+        )
         print("  fitting pooled forest …")
         model.fit_pooled(
             times=valid["time"].to_numpy(),
@@ -276,7 +301,26 @@ def main():
                 )
             else:
                 X_grid = None
-            if X_grid is not None and model.n_features_ is not None:
+            need_t_grid = (
+                str(var).lower().startswith("rh")
+                and rh_t_mode in ("predicted", "observed")
+                and "temp_mean" in valid.columns
+            )
+            t_model = None
+            if need_t_grid:
+                Xt, _ = prepare_covariates(
+                    valid, encoder=encoder, use_elev=use_elev, use_lc=use_lc
+                )
+                t_model = RFSI(n_obs=N_OBS, rf_params=rf_params, var_name="temp_mean")
+                t_model.fit_pooled(
+                    times=valid["time"].to_numpy(),
+                    coords=valid[["x", "y"]].to_numpy(),
+                    z=valid["temp_mean"].to_numpy(),
+                    X_cov=Xt,
+                    min_stations=MIN_STATIONS,
+                )
+                print(f"  RH T-model trained on {t_model.n_train_rows_:,} rows")
+            if X_grid is not None and model.n_features_ is not None and t_model is None:
                 expect = model.n_features_
                 got = neighbor_width(N_OBS) + X_grid.shape[1]
                 if got != expect:
@@ -305,10 +349,28 @@ def main():
                 coords = df_t[["x", "y"]].to_numpy()
                 z = df_t[var].to_numpy()
                 X_t, _ = prepare_covariates(
-                    df_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc
+                    df_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+                    extras=extras_for_var(df_t, var, rh_t_mode),
                 )
+                X_grid_t = X_grid
+                if t_model is not None and X_grid is not None:
+                    t_hat = t_model.predict_field(
+                        coords, df_t["temp_mean"].to_numpy(), grid_points, X_cov_pred=X_grid,
+                    )
+                    grid_df_t = grid_df.copy()
+                    grid_df_t["temp_mean"] = t_hat
+                    X_grid_t, _ = prepare_covariates(
+                        grid_df_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+                        extras=extras_for_var(grid_df_t, var, rh_t_mode),
+                    )
+                    expect = model.n_features_
+                    got = neighbor_width(N_OBS) + X_grid_t.shape[1]
+                    if got != expect:
+                        raise RuntimeError(
+                            f"RH covariate mismatch: train={expect} predict={got}"
+                        )
 
-                preds = predict_in_chunks(model, coords, z, grid_points, X_grid)
+                preds = predict_in_chunks(model, coords, z, grid_points, X_grid_t)
                 pred_map = preds.reshape(ny, nx)
                 pred_map.ravel()[~domain_mask_flat] = np.nan
                 idx = len(kept_times)

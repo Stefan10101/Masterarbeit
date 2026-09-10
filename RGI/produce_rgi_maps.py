@@ -32,8 +32,10 @@ from paths import (
 )
 from rgi_core import RGI
 from rgi_data import (
+    attach_extras,
     compute_metrics,
     data_sources,
+    extra_cols_for_var,
     load_config,
     load_panel,
 )
@@ -61,7 +63,19 @@ def grid_clc(grid) -> np.ndarray:
 
 
 def main():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--variables", nargs="*", default=None)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--months", default=None)
+    args = p.parse_args()
     cfg = load_config()
+    if args.quick:
+        cfg.setdefault("rgi", {})
+        cfg["rgi"]["epochs"] = min(int(cfg["rgi"].get("epochs", 80)), 15)
+        cfg["rgi"]["patience"] = min(int(cfg["rgi"].get("patience", 12)), 4)
+        cfg["rgi"]["save_llocv"] = False
+        cfg["_quick_months"] = args.months or "seasonal4"
     if xr is None:
         raise RuntimeError("xarray is required for produce_rgi_maps.py")
 
@@ -71,7 +85,9 @@ def main():
     end = pd.Timestamp(cfg["end_date"])
     resolutions = cfg.get("resolutions_to_process", [1000])
     rgi_cfg = cfg.get("rgi", {})
-    variables = rgi_cfg.get("variables_to_process") or ["temp_mean", "precip_sum"]
+    variables = args.variables or rgi_cfg.get("variables_to_process") or [
+        "temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean",
+    ]
     save_llocv = bool(rgi_cfg.get("save_llocv", True))
     save_model = bool(rgi_cfg.get("save_model", True))
     tile = int(rgi_cfg.get("predict_tile", 120000))
@@ -86,13 +102,21 @@ def main():
     print("=" * 72)
 
     for var in variables:
-        panel = load_panel(cfg, var)
+        panel = attach_extras(load_panel(cfg, var), cfg, var)
+        if cfg.get("_quick_months"):
+            from Kriging.kriging_data import subset_times, subset_splits
+            panel = subset_times(panel, cfg["_quick_months"])
         fit = panel[panel["split"].isin(("train", "dev"))]
         if fit.empty:
             print(f"  [SKIP] {var}: no train/dev rows")
             continue
         tuned = load_tuned(var, time_res)
+        tuned["extra_cols"] = extra_cols_for_var(var, cfg)
+        tuned["variable"] = var
         rcfg = cfg_to_rgi(cfg, tuned)
+        rcfg.two_step = bool(rgi_cfg.get("two_step", True)) and (
+            str(var).lower().startswith("precip") or str(var).lower().startswith("snow")
+        )
         print(f"\n>>> {var}  k={rcfg.k} L={rcfg.n_layers} "
               f"alpha={rcfg.alpha} az={rcfg.alpha_z}")
         print(f"  fitting on {len(fit):,} train+dev rows")

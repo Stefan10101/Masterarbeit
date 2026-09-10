@@ -45,11 +45,24 @@ class TPSConfig:
     min_stations: int = 10
     predict_tile: int = 20000
     seed: int = 22
+    rh_t_mode: str = "none"
+    wind_watershed: bool = True
+    snow_terrain: bool = True
 
 
 def two_step_var(var: str) -> bool:
     v = var.lower()
     return v.startswith("precip") or v.startswith("snow")
+
+
+def clip_var(var: str, pred: np.ndarray) -> np.ndarray:
+    v = str(var).lower()
+    out = np.asarray(pred, dtype=np.float64)
+    if v.startswith("precip") or v.startswith("snow") or v.startswith("wind"):
+        return np.maximum(out, 0.0)
+    if v.startswith("rh"):
+        return np.clip(out, 0.0, 100.0)
+    return out
 
 
 def estimate_region_alpha(x, y, elev, regions, default_az: float) -> dict:
@@ -134,10 +147,9 @@ def _phi(d: np.ndarray, kernel: str) -> np.ndarray:
     return d
 
 
-def fit_tps(coords, values, lam, nugget, extra_poly=None):
+def fit_tps(coords, values, lam, nugget, extra_poly=None, kernel: str = "3d"):
     n = coords.shape[0]
     d = np.sqrt(((coords[:, None, :] - coords[None, :, :]) ** 2).sum(-1))
-    kernel = "partial" if extra_poly is not None else "3d"
     A = _phi(d, kernel)
     np.fill_diagonal(A, float(lam) + float(nugget))
     if extra_poly is None:
@@ -210,39 +222,80 @@ class TPSInterpolator:
             return None
         return self.regions_fn(x, y)
 
-    def _poly(self, x, y, elev, coords):
-        if self.cfg.kernel != "partial":
-            return None
-        return np.column_stack([np.ones(len(x)), coords, np.asarray(elev, float)])
+    def _poly(self, x, y, elev, coords, extra=None):
+        if self.cfg.kernel == "partial":
+            P = np.column_stack([np.ones(len(x)), coords, np.asarray(elev, float)])
+        else:
+            P = np.column_stack([np.ones(len(x)), coords])
+        if extra is not None:
+            P = np.column_stack([P, np.asarray(extra, float)])
+        return P
 
-    def predict_field(self, x, y, elev, values, xq, yq, zq) -> np.ndarray:
+    def predict_field(self, x, y, elev, values, xq, yq, zq, extra=None, extra_q=None) -> np.ndarray:
         rs = self._regs(x, y)
         rq = self._regs(xq, yq)
         co = _coords(x, y, elev, self.cfg, rs)
         cq = _coords(xq, yq, zq, self.cfg, rq)
-        extra = self._poly(x, y, elev, co)
-        w, c, _ = fit_tps(co, np.asarray(values, float), self.cfg.lam, self.cfg.nugget, extra)
-        extra_q = None if extra is None else self._poly(xq, yq, zq, cq)
-        return eval_tps(co, w, c, cq, self.cfg.kernel, self.cfg.predict_tile, extra_q)
+        P = self._poly(x, y, elev, co, extra)
+        Pq = self._poly(xq, yq, zq, cq, extra_q)
+        w, c, _ = fit_tps(
+            co, np.asarray(values, float), self.cfg.lam, self.cfg.nugget, P, kernel=self.cfg.kernel,
+        )
+        return eval_tps(co, w, c, cq, self.cfg.kernel, self.cfg.predict_tile, Pq)
 
-    def predict_timestamp(self, stn, val, elev, xq, yq, zq, var: str = "temp_mean") -> np.ndarray:
+    def predict_timestamp(
+        self, stn, val, elev, xq, yq, zq, var: str = "temp_mean",
+        extra=None, extra_q=None, region=None, region_q=None,
+    ) -> np.ndarray:
         val = np.asarray(val, float)
+        if (
+            self.cfg.wind_watershed
+            and str(var).lower().startswith("wind")
+            and region is not None
+            and region_q is not None
+        ):
+            return clip_var(var, self._predict_by_region(
+                stn, val, elev, xq, yq, zq, var, extra, extra_q, region, region_q,
+            ))
+        return clip_var(var, self._predict_one(stn, val, elev, xq, yq, zq, var, extra, extra_q))
+
+    def _predict_by_region(self, stn, val, elev, xq, yq, zq, var, extra, extra_q, region, region_q):
+        region = np.asarray(region)
+        region_q = np.asarray(region_q)
+        out = np.empty(np.asarray(xq).size, dtype=np.float64)
+        elev = np.asarray(elev)
+        for r in np.unique(region_q):
+            qmask = region_q == r
+            dmask = region == r
+            if int(dmask.sum()) < max(self.cfg.min_stations, 5):
+                dmask = np.ones(len(stn), dtype=bool)
+            ex = None if extra is None else np.asarray(extra)[dmask]
+            exq = None if extra_q is None else np.asarray(extra_q)[qmask]
+            out[qmask] = self._predict_one(
+                stn[dmask], val[dmask], elev[dmask],
+                np.asarray(xq)[qmask], np.asarray(yq)[qmask], np.asarray(zq)[qmask],
+                var, ex, exq,
+            )
+        return out
+
+    def _predict_one(self, stn, val, elev, xq, yq, zq, var, extra, extra_q):
         if self.cfg.two_step and two_step_var(var):
             wet = (val > self.cfg.trace).astype(float)
-            p = np.clip(self.predict_field(stn[:, 0], stn[:, 1], elev, wet, xq, yq, zq), 0.0, 1.0)
+            p = np.clip(self.predict_field(stn[:, 0], stn[:, 1], elev, wet, xq, yq, zq, extra, extra_q), 0.0, 1.0)
             wet_m = val > self.cfg.trace
             if wet_m.sum() >= 5:
+                exw = None if extra is None else np.asarray(extra)[wet_m]
                 amt = np.maximum(
                     self.predict_field(
                         stn[wet_m, 0], stn[wet_m, 1], np.asarray(elev)[wet_m],
-                        val[wet_m], xq, yq, zq,
+                        val[wet_m], xq, yq, zq, exw, extra_q,
                     ),
                     0.0,
                 )
             else:
                 amt = np.zeros(np.asarray(xq).size)
             return np.where(p >= self.cfg.tau_wet, amt, 0.0)
-        return self.predict_field(stn[:, 0], stn[:, 1], elev, val, xq, yq, zq)
+        return self.predict_field(stn[:, 0], stn[:, 1], elev, val, xq, yq, zq, extra, extra_q)
 
     def _anom_krige(self, donors: dict, queries: dict, values, var: str):
         KrigingConfig, KrigingInterpolator = _kriging()
@@ -310,5 +363,5 @@ class TPSInterpolator:
             cq = _coords(xq, yq, zq, self.cfg, self._regs(xq, yq))
             hat = _idw(co, anom, cq, self.cfg.k)
         if is_zero:
-            return np.maximum(bg, 0.0) * np.maximum(hat, 0.0)
-        return bg + hat
+            return clip_var(var, np.maximum(bg, 0.0) * np.maximum(hat, 0.0))
+        return clip_var(var, bg + hat)

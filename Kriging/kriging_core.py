@@ -18,7 +18,7 @@ import pandas as pd
 from scipy.optimize import minimize
 from scipy.spatial import cKDTree
 
-from kriging_data import apply_clc_map, is_precip, merge_rare_clc, precip_trace
+from kriging_data import apply_clc_map, clip_var, is_precip, merge_rare_clc, precip_trace
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +40,11 @@ class KrigingConfig:
     n_lags: int = 12
     seed: int = 22
     predict_tile: int = 8000
+    tau_wet: float = 0.5
+    rh_t_mode: str = "none"
+    snow_terrain: bool = True
+    wind_watershed: bool = True
+    across_w: float = 4.0
 
 
 # ---------------------------------------------------------------------------
@@ -126,18 +131,16 @@ def _standardize_apply(x, y, elev, stats):
     return {"x": one(x, "x"), "y": one(y, "y"), "elev": one(elev, "elev")}
 
 
-def build_design(xn, yn, en, clc, clc_levels, interactions: str, trend: str) -> np.ndarray:
+def build_design(xn, yn, en, clc, clc_levels, interactions: str, trend: str,
+                 extras: list | None = None) -> np.ndarray:
     n = len(xn)
     if trend == "none":
         return np.ones((n, 1), dtype=np.float64)
     blocks = [np.ones(n), xn, yn, en]
-    names_extra = []
-    # CLC main effects always when trend is linear (Q4 A)
     for g in clc_levels:
         if g == 0:
             continue
         blocks.append((clc == g).astype(np.float64))
-        names_extra.append(f"clc_{g}")
     if interactions in ("elev_xy", "both"):
         blocks.append(en * xn)
         blocks.append(en * yn)
@@ -146,6 +149,9 @@ def build_design(xn, yn, en, clc, clc_levels, interactions: str, trend: str) -> 
             if g == 0:
                 continue
             blocks.append(en * (clc == g).astype(np.float64))
+    if extras:
+        for col in extras:
+            blocks.append(np.asarray(col, dtype=np.float64))
     return np.column_stack(blocks)
 
 
@@ -333,6 +339,41 @@ class KrigingInterpolator:
     trace: float = 0.0
     var_name: str = ""
     two_step: bool = False
+    pack: Optional[dict] = None
+    extra_stats: dict = field(default_factory=dict)
+
+    def extra_keys(self) -> list[str]:
+        v = self.var_name.lower()
+        keys = []
+        if v.startswith("snow") and self.cfg.snow_terrain:
+            keys.extend(["slope", "northness"])
+        if v.startswith("rh") and self.cfg.rh_t_mode in ("predicted", "observed"):
+            keys.append("temp_mean")
+        return keys
+
+    def _extras(self, df: pd.DataFrame, fit: bool = False) -> list:
+        keys = self.extra_keys()
+        cols = []
+        for k in keys:
+            if k not in df.columns:
+                if fit:
+                    continue
+                if k in self.extra_stats:
+                    cols.append(np.zeros(len(df), dtype=np.float64))
+                continue
+            v = np.asarray(df[k], dtype=np.float64)
+            v = np.where(np.isfinite(v), v, np.nan)
+            if fit:
+                mu = float(np.nanmean(v)) if np.isfinite(v).any() else 0.0
+                sd = float(np.nanstd(v)) if np.isfinite(v).any() else 1.0
+                if not np.isfinite(sd) or sd < 1e-8:
+                    sd = 1.0
+                self.extra_stats[k] = (mu, sd)
+            else:
+                mu, sd = self.extra_stats.get(k, (0.0, 1.0))
+            v = np.where(np.isfinite(v), v, mu)
+            cols.append((v - mu) / sd)
+        return cols
 
     def _metric(self, df: pd.DataFrame) -> np.ndarray:
         return metric_coords(
@@ -352,6 +393,7 @@ class KrigingInterpolator:
         return build_design(
             st["x"], st["y"], st["elev"], clc, self.clc_levels,
             self.cfg.interactions, self.cfg.trend,
+            extras=self._extras(df, fit=False),
         )
 
     def _trend(self, df: pd.DataFrame, beta, col_ok) -> np.ndarray:
@@ -386,6 +428,7 @@ class KrigingInterpolator:
             X = build_design(
                 st["x"], st["y"], st["elev"], remapped, self.clc_levels,
                 self.cfg.interactions, self.cfg.trend,
+                extras=self._extras(tmp, fit=True),
             )
             self.beta, self.col_ok = fit_ols(X, z)
             resid = z - (X @ self.beta)
@@ -403,6 +446,7 @@ class KrigingInterpolator:
                 X = build_design(
                     st["x"], st["y"], st["elev"], remapped, self.clc_levels,
                     self.cfg.interactions, self.cfg.trend,
+                    extras=self._extras(tmp, fit=False),
                 )
                 self.beta_ind, self.col_ok_ind = fit_ols(X, wet)
                 resid_i = wet - (X @ self.beta_ind)
@@ -421,6 +465,7 @@ class KrigingInterpolator:
                     (wet_df["elev"].to_numpy() - self.coord_stats["elev"][0]) / self.coord_stats["elev"][1],
                     wet_df["clc_group"].to_numpy(), self.clc_levels,
                     self.cfg.interactions, self.cfg.trend,
+                    extras=self._extras(wet_df, fit=False),
                 )
                 zw = wet_df[var].to_numpy(dtype=np.float64)
                 if self.cfg.trend == "linear":
@@ -469,6 +514,17 @@ class KrigingInterpolator:
     def predict_frame(self, donors: pd.DataFrame, queries: pd.DataFrame, var: str) -> np.ndarray:
         if len(donors) < 2:
             return np.full(len(queries), np.nan)
+        if (
+            self.pack is not None
+            and self.cfg.wind_watershed
+            and str(var).lower().startswith("wind")
+            and "region" in donors.columns
+            and "region" in queries.columns
+        ):
+            return clip_var(var, self._predict_by_region(donors, queries, var))
+        return clip_var(var, self._predict_plain(donors, queries, var))
+
+    def _predict_plain(self, donors, queries, var) -> np.ndarray:
         cid = int(donors["cluster_id"].iloc[0]) if "cluster_id" in donors.columns else 0
         q_c = self._metric(queries)
         if self.two_step:
@@ -479,6 +535,23 @@ class KrigingInterpolator:
         d_c = self._metric(donors)
         ehat = ordinary_krige(d_c, resid, q_c, self.cfg.k, self._pick_vgm(cid, False))
         return m_q + ehat
+
+    def _predict_by_region(self, donors, queries, var) -> np.ndarray:
+        out = np.full(len(queries), np.nan, dtype=np.float64)
+        rq = queries["region"].to_numpy()
+        rd = donors["region"].to_numpy()
+        for r in np.unique(rq):
+            qmask = rq == r
+            dmask = rd == r
+            if int(dmask.sum()) < max(self.cfg.min_stations, 2):
+                dmask = np.ones(len(donors), dtype=bool)
+            pred = self._predict_plain(
+                donors.iloc[np.flatnonzero(dmask)],
+                queries.iloc[np.flatnonzero(qmask)],
+                var,
+            )
+            out[np.flatnonzero(qmask)] = pred
+        return out
 
     def _predict_precip(self, donors, queries, var, cid, q_c) -> np.ndarray:
         wet_ind = (donors[var].to_numpy(dtype=np.float64) > self.trace).astype(np.float64)
@@ -499,7 +572,7 @@ class KrigingInterpolator:
             ehat = ordinary_krige(self._metric(wet), resid, q_c, self.cfg.k, self._pick_vgm(cid, False))
             amount = m_q + ehat
         amount = np.maximum(amount, 0.0)
-        out = np.where(p_wet >= 0.5, amount, 0.0)
+        out = np.where(p_wet >= float(self.cfg.tau_wet), amount, 0.0)
         return out
 
     def state_dict(self) -> dict:
@@ -519,6 +592,7 @@ class KrigingInterpolator:
             "trace": self.trace,
             "var_name": self.var_name,
             "two_step": self.two_step,
+            "extra_stats": self.extra_stats,
         }
 
     @classmethod

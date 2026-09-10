@@ -29,7 +29,8 @@ end_date:   "2025-12-31"
 resolutions_to_process: [1000]
 
 cnn:
-  variables_to_process: ["temp_mean", "precip_sum"]
+  variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
+  rh_t_mode: "none"
   save_model: true
   save_llocv: true
   primary_metric: "rmse"

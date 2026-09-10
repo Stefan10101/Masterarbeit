@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import argparse
 import sys
 import time
 import traceback
@@ -17,7 +18,19 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_interpolated_map_path, get_master_grid_path
 from gam_core import GAMInterpolator
-from gam_data import clc_group, data_sources, load_gam_config, load_panel, precip_trace
+from gam_data import (
+    attach_pack_terrain,
+    attach_temperature,
+    clc_group,
+    data_sources,
+    load_gam_config,
+    load_panel,
+    pack_from_master,
+    precip_trace,
+    subset_splits,
+    subset_times,
+    subset_years,
+)
 from llocv_gam import cfg_to_gam, load_tuned
 from shared.terrain import aspect_trig, slope_aspect_from_dem
 
@@ -35,7 +48,19 @@ def grid_terrain(elev, gx, gy):
     return slope, sinasp, cosasp
 
 
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--variable", default=None)
+    p.add_argument("--years", default=None)
+    p.add_argument("--months", default=None)
+    p.add_argument("--split", default=None)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    return p.parse_args()
+
+
 def main():
+    args = parse_args()
     print("produce_gam_maps start", flush=True)
     if xr is None:
         raise RuntimeError("xarray required")
@@ -43,7 +68,10 @@ def main():
     domain = cfg["domain"]["preset"]
     time_res = cfg["time_resolution"]
     _, _, grid_method = data_sources(cfg)
-    variables = cfg["gam"].get("variables_to_process") or ["temp_mean"]
+    variables = [args.variable] if args.variable else (cfg["gam"].get("variables_to_process") or ["temp_mean"])
+    months = args.months or ("seasonal4" if args.quick else None)
+    splits = args.split or ("test" if args.quick else "all")
+    pack = pack_from_master(cfg, int(cfg.get("gam", {}).get("n_regions", 6)))
     min_stations = int(cfg.get("min_stations_per_field", 10))
     print(
         f"domain={domain} time_res={time_res} vars={variables} "
@@ -75,10 +103,22 @@ def main():
             t_var = time.time()
             print(f"{var} load panel…", flush=True)
             panel = load_panel(cfg, var)
-            n_t = int(panel["time"].nunique())
             tuned = load_tuned(var, time_res)
             tuned["trace"] = precip_trace(cfg, time_res, var)
+            if args.rh_t_mode:
+                tuned["rh_t_mode"] = args.rh_t_mode
             gcfg = cfg_to_gam(cfg, tuned)
+            if str(var).lower().startswith("rh") and gcfg.rh_t_mode in ("predicted", "observed"):
+                panel = attach_temperature(panel, cfg)
+                if gcfg.rh_t_mode == "observed":
+                    print("produce: rh_t_mode=observed has no grid T; using predicted", flush=True)
+                    gcfg.rh_t_mode = "predicted"
+            panel = attach_pack_terrain(panel, pack)
+            panel = subset_splits(panel, splits)
+            if months:
+                panel = subset_times(panel, months)
+            panel = subset_years(panel, args.years)
+            n_t = int(panel["time"].nunique())
             print(
                 f"{var} rows={len(panel)} times={n_t} "
                 f"form={gcfg.formula} ns={gcfg.n_splines} tau={gcfg.tau_wet} "
@@ -94,6 +134,27 @@ def main():
                     continue
                 t0 = time.time()
                 model = GAMInterpolator(gcfg)
+                tmean = sl["temp_mean"].to_numpy() if "temp_mean" in sl.columns else None
+                tmean_q = None
+                if tmean is not None and gcfg.rh_t_mode == "predicted":
+                    tmod = GAMInterpolator(gcfg)
+                    tmean_q = tmod.predict_timestamp(
+                        sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(),
+                        tmean, xq, yq, zq,
+                        clc=sl["clc_group"].to_numpy(), clc_q=clc,
+                        slope=sl["slope"].to_numpy() if "slope" in sl.columns else None,
+                        slope_q=sl_q,
+                        sinasp=sl["sinasp"].to_numpy() if "sinasp" in sl.columns else None,
+                        sinasp_q=sa_q,
+                        cosasp=sl["cosasp"].to_numpy() if "cosasp" in sl.columns else None,
+                        cosasp_q=ca_q,
+                        var="temp_mean",
+                    )
+                region = sl["region"].to_numpy() if "region" in sl.columns else None
+                region_q = None
+                if pack is not None and "regions" in pack:
+                    from shared.watersheds import sample_region
+                    region_q = sample_region(pack["regions"], pack["xs"], pack["ys"], xq, yq)
                 hat = model.predict_timestamp(
                     sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(),
                     sl[var].to_numpy(), xq, yq, zq,
@@ -106,6 +167,8 @@ def main():
                     cosasp_q=ca_q,
                     var=var,
                     trace=gcfg.trace,
+                    tmean=tmean, tmean_q=tmean_q,
+                    region=region, region_q=region_q,
                 )
                 fields.append(hat.reshape(yy.shape).astype(np.float32))
                 used.append(np.datetime64(ts, "ns"))

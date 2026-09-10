@@ -25,6 +25,21 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 ELEV_SCALE = 1000.0
 
 
+def two_step_var(var: str) -> bool:
+    v = str(var).lower()
+    return v.startswith("precip") or v.startswith("snow")
+
+
+def clip_var(var: str, pred) -> np.ndarray:
+    v = str(var).lower()
+    out = np.asarray(pred, dtype=np.float64)
+    if v.startswith("precip") or v.startswith("snow") or v.startswith("wind"):
+        return np.maximum(out, 0.0)
+    if v.startswith("rh"):
+        return np.clip(out, 0.0, 100.0)
+    return out
+
+
 def create_knot_grid(xmin: float, xmax: float, ymin: float, ymax: float,
                      n_segments: int = 10) -> Tuple[np.ndarray, np.ndarray]:
     """Create a regular knot grid with small margin around the domain."""
@@ -280,6 +295,28 @@ def predict_bsse(d: np.ndarray, e: np.ndarray, target_coords: np.ndarray,
         + (np.asarray(target_elev, dtype=np.float64) / scale)
         * predict_surface(e, target_coords, knot_x, knot_y)
     )
+
+
+def interpolate_bss(
+    station_values, station_coords, station_elev,
+    target_coords, target_elev, knot_x, knot_y,
+    tau_d, tau_e, method="bsse",
+    var: str = "", trace: float = 1.0, tau_wet: float = 0.5,
+) -> np.ndarray:
+    vals = np.asarray(station_values, dtype=np.float64)
+
+    def _fit_pred(z):
+        if method == "bsse":
+            fit = fit_bsse(z, station_coords, station_elev, knot_x, knot_y, tau_d, tau_e)
+            return predict_bsse(fit["d"], fit["e"], target_coords, target_elev, knot_x, knot_y)
+        fit = fit_bss(z, station_coords, knot_x, knot_y, tau_d, tau_d)
+        return predict_surface(fit["d"], target_coords, knot_x, knot_y)
+
+    if two_step_var(var):
+        p_wet = np.clip(_fit_pred((vals > trace).astype(np.float64)), 0.0, 1.0)
+        amt = np.maximum(_fit_pred(vals), 0.0)
+        return clip_var(var, np.where(p_wet >= tau_wet, amt, 0.0))
+    return clip_var(var, _fit_pred(vals))
 
 
 def optimize_bss_gcv(station_values: np.ndarray,

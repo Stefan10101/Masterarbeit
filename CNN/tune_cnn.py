@@ -30,8 +30,19 @@ except ImportError:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variable", default=None)
+    p.add_argument("--quick", action="store_true")
     args = p.parse_args()
     cfg = load_cnn_config()
+    if args.quick:
+        cfg.setdefault("cnn", {})
+        cfg["cnn"]["epochs"] = min(int(cfg["cnn"].get("epochs", 40)), 8)
+        cfg["cnn"]["patience"] = min(int(cfg["cnn"].get("patience", 8)), 3)
+        cfg["cnn"]["search"] = {
+            "n_levels": [int(cfg["cnn"].get("n_levels", 4))],
+            "base_ch": [int(cfg["cnn"].get("base_ch", 32))],
+            "train_mask_frac": [float(cfg["cnn"].get("train_mask_frac", 0.40))],
+            "tau_wet": [float(cfg["cnn"].get("tau_wet", 0.5))],
+        }
     if xr is None:
         raise RuntimeError("xarray required")
     time_res = cfg["time_resolution"]

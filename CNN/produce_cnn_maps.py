@@ -28,14 +28,24 @@ except ImportError:
 
 
 def main():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--variable", default=None)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--months", default=None)
+    args = p.parse_args()
     print("produce_cnn_maps start", flush=True)
     cfg = load_cnn_config()
+    if args.quick:
+        cfg.setdefault("cnn", {})
+        cfg["cnn"]["epochs"] = min(int(cfg["cnn"].get("epochs", 40)), 8)
+        cfg["cnn"]["patience"] = min(int(cfg["cnn"].get("patience", 8)), 3)
     if xr is None:
         raise RuntimeError("xarray required")
     domain = cfg["domain"]["preset"]
     time_res = cfg["time_resolution"]
     _, _, grid_method = data_sources(cfg)
-    variables = cfg["cnn"].get("variables_to_process") or ["temp_mean"]
+    variables = [args.variable] if args.variable else (cfg["cnn"].get("variables_to_process") or ["temp_mean"])
     min_stations = int(cfg.get("min_stations_per_field", 10))
     print(f"domain={domain} time_res={time_res} vars={variables}", flush=True)
 
@@ -58,6 +68,9 @@ def main():
             t_var = time.time()
             print(f"{var} load panel…", flush=True)
             panel = load_panel(cfg, var)
+            if args.quick or args.months:
+                from Kriging.kriging_data import subset_times
+                panel = subset_times(panel, args.months or "seasonal4")
             ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))
             wpath = get_cnn_model_path(var, time_res)
             print(f"{var} weights={wpath} exists={wpath.exists()}", flush=True)
@@ -103,6 +116,7 @@ def main():
                     time_ch=tch,
                     two_step=model.cfg.two_step and two_step_var(var),
                     base=base,
+                    var=var,
                 )
                 fields.append(hat.astype(np.float32))
                 used.append(np.datetime64(ts, "ns"))

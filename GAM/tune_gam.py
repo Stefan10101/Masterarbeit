@@ -21,7 +21,16 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path
-from gam_data import compute_metrics, load_gam_config, load_panel
+from gam_data import (
+    attach_pack_terrain,
+    attach_temperature,
+    compute_block,
+    compute_metrics,
+    load_gam_config,
+    load_panel,
+    pack_from_master,
+    subset_times,
+)
 from gam_core import two_step_var
 from llocv_gam import cfg_to_gam, run_llocv
 
@@ -72,25 +81,43 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variable", default=None)
     p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4) - 1))
+    p.add_argument("--months", default=None)
+    p.add_argument("--folds", type=int, default=None)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     args = p.parse_args()
     cfg = load_gam_config()
     time_res = cfg["time_resolution"]
     block = cfg["gam"]
+    comp = compute_block(cfg)
     variables = [args.variable] if args.variable else block.get("variables_to_process", ["temp_mean"])
     search = block.get("search", {})
-    n_folds = int(block.get("n_folds", 5))
+    n_folds = args.folds or (2 if args.quick else int(comp.get("tune_folds", block.get("n_folds", 5))))
+    months = args.months or ("seasonal4" if args.quick else comp.get("tune_months", "seasonal4"))
     jobs = max(1, int(args.jobs))
+    pack = pack_from_master(cfg, int(block.get("n_regions", 6)))
 
     for var in variables:
         panel = load_panel(cfg, var)
-        print(var, "rows", len(panel), "splits", panel.groupby("split").size().to_dict(),
-              "jobs", jobs, flush=True)
-        formulas = list(search.get("formula", [block.get("formula", "te_xy_s_elev")]))
-        ns_list = list(search.get("n_splines", [block.get("n_splines", 10)]))
-        if two_step_var(var):
-            taus = list(search.get("tau_wet", [block.get("tau_wet", 0.5)]))
-        else:
+        rh_mode = args.rh_t_mode or block.get("rh_t_mode", "none")
+        if str(var).lower().startswith("rh") and rh_mode in ("predicted", "observed"):
+            panel = attach_temperature(panel, cfg)
+        panel = attach_pack_terrain(panel, pack)
+        panel = subset_times(panel, months)
+        print(var, "rows", len(panel), "times", panel["time"].nunique(),
+              "splits", panel.groupby("split").size().to_dict(),
+              "months", months, "folds", n_folds, "jobs", jobs, flush=True)
+        if args.quick:
+            formulas = [block.get("formula", "te_xy_s_elev")]
+            ns_list = [block.get("n_splines", 10)]
             taus = [float(block.get("tau_wet", 0.5))]
+        else:
+            formulas = list(search.get("formula", [block.get("formula", "te_xy_s_elev")]))
+            ns_list = list(search.get("n_splines", [block.get("n_splines", 10)]))
+            if two_step_var(var):
+                taus = list(search.get("tau_wet", [block.get("tau_wet", 0.5)]))
+            else:
+                taus = [float(block.get("tau_wet", 0.5))]
         cells = list(itertools.product(formulas, ns_list, taus))
         n_dev_t = int(panel.loc[panel["split"] == "dev", "time"].nunique())
         n_sta = int(panel["station_name"].nunique())
@@ -146,6 +173,8 @@ def main():
             )
             if best is None or row["rmse"] < best["rmse"]:
                 best = {k: row[k] for k in ("formula", "n_splines", "tau_wet", "rmse")}
+                best["rh_t_mode"] = rh_mode
+                best["tune_months"] = months
         path = get_gam_tuned_params_path(var, time_res)
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(best, f)

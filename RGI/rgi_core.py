@@ -22,6 +22,21 @@ from rgi_graph import knn_edges_fast
 from rgi_data import FeatureScaler
 
 
+def two_step_var(var: str) -> bool:
+    v = str(var).lower()
+    return v.startswith("precip") or v.startswith("snow")
+
+
+def clip_var(var: str, pred) -> np.ndarray:
+    v = str(var).lower()
+    out = np.asarray(pred, dtype=np.float64)
+    if v.startswith("precip") or v.startswith("snow") or v.startswith("wind"):
+        return np.maximum(out, 0.0)
+    if v.startswith("rh"):
+        return np.clip(out, 0.0, 100.0)
+    return out
+
+
 def scatter_mean(src: torch.Tensor, index: torch.Tensor, n: int) -> torch.Tensor:
     out = src.new_zeros((n, src.size(1)))
     cnt = src.new_zeros((n, 1))
@@ -64,20 +79,24 @@ class ResidualGNN(nn.Module):
         alpha: float = 0.2,
         dropout: float = 0.1,
         clc_embed_dim: int = 8,
+        extra_dim: int = 0,
     ):
         super().__init__()
         self.alpha = float(alpha)
         self.n_layers = int(n_layers)
         self.clc_emb = nn.Embedding(max(n_clc, 1), clc_embed_dim)
-        in_dim = 2 + 3 + clc_embed_dim  # value*mask, mask, xyz, clc
+        in_dim = 2 + 3 + clc_embed_dim + int(extra_dim)  # value*mask, mask, xyz, clc, extras
         self.in_proj = nn.Linear(in_dim, hidden)
         self.layers = nn.ModuleList([MixLayer(hidden) for _ in range(self.n_layers)])
         self.dropout = float(dropout)
         self.head = nn.Linear(hidden, 1)
 
-    def forward(self, value, mask, xyz, clc_idx, edge_index, edge_attr):
+    def forward(self, value, mask, xyz, clc_idx, edge_index, edge_attr, extra=None):
         clc = self.clc_emb(clc_idx)
-        x0 = torch.cat([value * mask, mask, xyz, clc], dim=-1)
+        parts = [value * mask, mask, xyz, clc]
+        if extra is not None:
+            parts.append(extra)
+        x0 = torch.cat(parts, dim=-1)
         h0 = self.in_proj(x0)
         h = h0
         a = self.alpha
@@ -108,6 +127,11 @@ class RGIConfig:
     min_stations: int = 10
     device: str = "auto"   # auto | cuda | cpu
     use_amp: bool = True
+    two_step: bool = False
+    tau_wet: float = 0.5
+    trace: float = 0.1
+    extra_cols: tuple = ()
+    var_name: str = ""
 
 
 def resolve_device(spec: str = "auto") -> torch.device:
@@ -137,6 +161,7 @@ class RGI:
         self.cfg = cfg
         self.scaler: Optional[FeatureScaler] = None
         self.net: Optional[ResidualGNN] = None
+        self.ind: Optional["RGI"] = None
         self.device = resolve_device(cfg.device)
         if self.device.type == "cuda":
             torch.backends.cudnn.benchmark = True
@@ -150,6 +175,7 @@ class RGI:
             alpha=self.cfg.alpha,
             dropout=self.cfg.dropout,
             clc_embed_dim=self.cfg.clc_embed_dim,
+            extra_dim=len(self.cfg.extra_cols),
         )
         return net.to(self.device)
 
@@ -174,11 +200,13 @@ class RGI:
         value = value * mask
         xyz = self.scaler.coord_block(frame["x"], frame["y"], elev)
         clc = self.scaler.clc_index(frame["clc_code"])
+        extra = self.scaler.extra_block(frame)
         t = {
             "value": torch.from_numpy(value).to(self.device),
             "mask": torch.from_numpy(mask).to(self.device),
             "xyz": torch.from_numpy(xyz).to(self.device),
             "clc": torch.from_numpy(clc).to(self.device),
+            "extra": None if extra is None else torch.from_numpy(extra).to(self.device),
             "edge_index": torch.from_numpy(ei).to(self.device),
             "edge_attr": torch.from_numpy(ea).to(self.device),
         }
@@ -192,7 +220,9 @@ class RGI:
         val_df=None,
         log=print,
     ) -> dict:
-        self.scaler = FeatureScaler().fit(train_df, var)
+        self.scaler = FeatureScaler()
+        self.scaler.extra_keys = tuple(self.cfg.extra_cols)
+        self.scaler.fit(train_df, var)
         self.net = self._build_net(len(self.scaler.clc_codes))
         if log:
             log(f"  device {describe_device(self.device)}  amp={self.cfg.use_amp and self.device.type=='cuda'}")
@@ -235,7 +265,7 @@ class RGI:
                 with amp_ctx:
                     pred = self.net(
                         batch["value"], batch["mask"], batch["xyz"], batch["clc"],
-                        batch["edge_index"], batch["edge_attr"],
+                        batch["edge_index"], batch["edge_attr"], extra=batch["extra"],
                     )
                     q_t = torch.from_numpy(q.astype(np.int64)).to(self.device)
                     loss = F.mse_loss(pred[q_t], y[q_t])
@@ -271,6 +301,16 @@ class RGI:
         if best_state is not None:
             self.net.load_state_dict(best_state)
         self.net.eval()
+        if self.cfg.two_step and two_step_var(var):
+            ind_cfg = RGIConfig(**{**self.cfg.__dict__, "two_step": False, "var_name": var})
+            self.ind = RGI(ind_cfg)
+            ind_df = train_df.copy()
+            ind_df[var] = (np.asarray(train_df[var], dtype=np.float64) > self.cfg.trace).astype(np.float32)
+            val_ind = None
+            if val_df is not None and len(val_df):
+                val_ind = val_df.copy()
+                val_ind[var] = (np.asarray(val_df[var], dtype=np.float64) > self.cfg.trace).astype(np.float32)
+            self.ind.fit(ind_df, var, val_df=val_ind, log=None)
         return {"best_val_mse": best_val, "epochs": history[-1]["epoch"] if history else 0}
 
     @torch.no_grad()
@@ -283,10 +323,15 @@ class RGI:
         batch, _y = self._tensors_for_frame(frame, q_idx, var)
         pred = self.net(
             batch["value"], batch["mask"], batch["xyz"], batch["clc"],
-            batch["edge_index"], batch["edge_attr"],
+            batch["edge_index"], batch["edge_attr"], extra=batch["extra"],
         )
         yhat = pred[len(obs):].detach().cpu().numpy()
-        return self.scaler.inverse_value(yhat)
+        yhat = self.scaler.inverse_value(yhat)
+        yhat = clip_var(var or self.cfg.var_name, yhat)
+        if self.ind is not None:
+            p_wet = np.clip(self.ind.predict_frame(obs_df, query_df, var), 0.0, 1.0)
+            yhat = np.where(p_wet >= self.cfg.tau_wet, np.maximum(yhat, 0.0), 0.0)
+        return yhat
 
     def predict_stations_at_time(self, df_t, var: str, hold_names) -> np.ndarray:
         hold_names = set(hold_names)

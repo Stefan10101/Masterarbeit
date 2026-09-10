@@ -42,11 +42,23 @@ class GAMConfig:
     lam: float = 1.0  # numpy fallback only
     trace: float = 0.1
     r_timeout: float = 600.0
+    rh_t_mode: str = "none"
+    wind_watershed: bool = True
 
 
 def two_step_var(var: str) -> bool:
     v = var.lower()
     return v.startswith("precip") or v.startswith("snow")
+
+
+def clip_var(var: str, pred: np.ndarray) -> np.ndarray:
+    v = str(var).lower()
+    out = np.asarray(pred, dtype=np.float64)
+    if v.startswith("precip") or v.startswith("snow") or v.startswith("wind"):
+        return np.maximum(out, 0.0)
+    if v.startswith("rh"):
+        return np.clip(out, 0.0, 100.0)
+    return out
 
 
 def _knots(x, n_basis, order):
@@ -106,7 +118,8 @@ class GAMInterpolator:
         self._r_tmp = None
         self._r_model = None
 
-    def _frame(self, x, y, elev, values=None, clc=None, slope=None, sinasp=None, cosasp=None):
+    def _frame(self, x, y, elev, values=None, clc=None, slope=None, sinasp=None, cosasp=None,
+               tmean=None):
         df = pd.DataFrame({
             "x": np.asarray(x, dtype=np.float64),
             "ycoord": np.asarray(y, dtype=np.float64),
@@ -114,6 +127,9 @@ class GAMInterpolator:
         })
         if values is not None:
             df["y"] = np.asarray(values, dtype=np.float64)
+        if tmean is not None:
+            v = np.asarray(tmean, dtype=np.float64)
+            df["tmean"] = np.where(np.isfinite(v), v, np.nanmean(v) if np.isfinite(v).any() else 0.0)
         if self.cfg.use_terrain:
             for name, arr, fill in (
                 ("slope", slope, 0.0),
@@ -259,21 +275,22 @@ class GAMInterpolator:
         return np.column_stack(parts), widths
 
     def fit_gaussian(self, x, y, elev, values, clc=None, slope=None, sinasp=None, cosasp=None,
-                     family: str = "gaussian"):
+                     family: str = "gaussian", tmean=None):
         self._fit_args = (
             np.asarray(x, float), np.asarray(y, float), np.asarray(elev, float),
             np.asarray(values, float), clc, slope, sinasp, cosasp,
         )
-        df = self._frame(x, y, elev, values, clc, slope, sinasp, cosasp)
+        df = self._frame(x, y, elev, values, clc, slope, sinasp, cosasp, tmean=tmean)
         if self._fit_r(df, family):
             self._backend = "mgcv"
             return self
         self._fit_numpy(*self._fit_args)
         return self
 
-    def predict_raw(self, x, y, elev, clc=None, slope=None, sinasp=None, cosasp=None) -> np.ndarray:
+    def predict_raw(self, x, y, elev, clc=None, slope=None, sinasp=None, cosasp=None,
+                    tmean=None) -> np.ndarray:
         if getattr(self, "_backend", None) == "mgcv":
-            df = self._frame(x, y, elev, None, clc, slope, sinasp, cosasp)
+            df = self._frame(x, y, elev, None, clc, slope, sinasp, cosasp, tmean=tmean)
             hat = self._predict_r(df)
             if hat is not None:
                 return hat
@@ -305,30 +322,86 @@ class GAMInterpolator:
         clc=None, clc_q=None, slope=None, slope_q=None,
         sinasp=None, sinasp_q=None, cosasp=None, cosasp_q=None,
         var: str = "temp_mean", trace: float | None = None,
+        tmean=None, tmean_q=None, region=None, region_q=None,
     ) -> np.ndarray:
         values = np.asarray(values, float)
         tr = self.cfg.trace if trace is None else float(trace)
+        if (
+            self.cfg.wind_watershed
+            and str(var).lower().startswith("wind")
+            and region is not None
+            and region_q is not None
+        ):
+            hat = self._predict_by_region(
+                x, y, elev, values, xq, yq, zq,
+                clc, clc_q, slope, slope_q, sinasp, sinasp_q, cosasp, cosasp_q,
+                var, tr, tmean, tmean_q, region, region_q,
+            )
+            return clip_var(var, hat)
         try:
-            if self.cfg.two_step and two_step_var(var):
-                wet = (values > tr).astype(float)
-                self.fit_gaussian(x, y, elev, wet, clc, slope, sinasp, cosasp, family="binomial")
-                p = np.clip(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q), 0.0, 1.0)
-                wet_m = values > tr
-                if wet_m.sum() >= 5:
-                    self.fit_gaussian(
-                        np.asarray(x)[wet_m], np.asarray(y)[wet_m], np.asarray(elev)[wet_m],
-                        values[wet_m],
-                        None if clc is None else np.asarray(clc)[wet_m],
-                        None if slope is None else np.asarray(slope)[wet_m],
-                        None if sinasp is None else np.asarray(sinasp)[wet_m],
-                        None if cosasp is None else np.asarray(cosasp)[wet_m],
-                        family="gaussian",
-                    )
-                    amt = np.maximum(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q), 0.0)
-                else:
-                    amt = np.zeros(np.asarray(xq).size)
-                return np.where(p >= self.cfg.tau_wet, amt, 0.0)
-            self.fit_gaussian(x, y, elev, values, clc, slope, sinasp, cosasp, family="gaussian")
-            return self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q)
+            hat = self._predict_one(
+                x, y, elev, values, xq, yq, zq,
+                clc, clc_q, slope, slope_q, sinasp, sinasp_q, cosasp, cosasp_q,
+                var, tr, tmean, tmean_q,
+            )
+            return clip_var(var, hat)
         finally:
             self.close()
+
+    def _predict_by_region(self, x, y, elev, values, xq, yq, zq,
+                           clc, clc_q, slope, slope_q, sinasp, sinasp_q, cosasp, cosasp_q,
+                           var, tr, tmean, tmean_q, region, region_q):
+        region = np.asarray(region)
+        region_q = np.asarray(region_q)
+        out = np.empty(np.asarray(xq).size, dtype=np.float64)
+        x = np.asarray(x); y = np.asarray(y); elev = np.asarray(elev)
+        for r in np.unique(region_q):
+            qmask = region_q == r
+            dmask = region == r
+            if int(dmask.sum()) < max(self.cfg.min_stations, 5):
+                dmask = np.ones(x.size, dtype=bool)
+            try:
+                out[qmask] = self._predict_one(
+                    x[dmask], y[dmask], elev[dmask], values[dmask],
+                    np.asarray(xq)[qmask], np.asarray(yq)[qmask], np.asarray(zq)[qmask],
+                    None if clc is None else np.asarray(clc)[dmask],
+                    None if clc_q is None else np.asarray(clc_q)[qmask],
+                    None if slope is None else np.asarray(slope)[dmask],
+                    None if slope_q is None else np.asarray(slope_q)[qmask],
+                    None if sinasp is None else np.asarray(sinasp)[dmask],
+                    None if sinasp_q is None else np.asarray(sinasp_q)[qmask],
+                    None if cosasp is None else np.asarray(cosasp)[dmask],
+                    None if cosasp_q is None else np.asarray(cosasp_q)[qmask],
+                    var, tr,
+                    None if tmean is None else np.asarray(tmean)[dmask],
+                    None if tmean_q is None else np.asarray(tmean_q)[qmask],
+                )
+            finally:
+                self.close()
+        return out
+
+    def _predict_one(self, x, y, elev, values, xq, yq, zq,
+                     clc, clc_q, slope, slope_q, sinasp, sinasp_q, cosasp, cosasp_q,
+                     var, tr, tmean, tmean_q):
+        if self.cfg.two_step and two_step_var(var):
+            wet = (values > tr).astype(float)
+            self.fit_gaussian(x, y, elev, wet, clc, slope, sinasp, cosasp, family="binomial", tmean=tmean)
+            p = np.clip(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q, tmean=tmean_q), 0.0, 1.0)
+            wet_m = values > tr
+            if wet_m.sum() >= 5:
+                self.fit_gaussian(
+                    np.asarray(x)[wet_m], np.asarray(y)[wet_m], np.asarray(elev)[wet_m],
+                    values[wet_m],
+                    None if clc is None else np.asarray(clc)[wet_m],
+                    None if slope is None else np.asarray(slope)[wet_m],
+                    None if sinasp is None else np.asarray(sinasp)[wet_m],
+                    None if cosasp is None else np.asarray(cosasp)[wet_m],
+                    family="gaussian",
+                    tmean=None if tmean is None else np.asarray(tmean)[wet_m],
+                )
+                amt = np.maximum(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q, tmean=tmean_q), 0.0)
+            else:
+                amt = np.zeros(np.asarray(xq).size)
+            return np.where(p >= self.cfg.tau_wet, amt, 0.0)
+        self.fit_gaussian(x, y, elev, values, clc, slope, sinasp, cosasp, family="gaussian", tmean=tmean)
+        return self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q, tmean=tmean_q)

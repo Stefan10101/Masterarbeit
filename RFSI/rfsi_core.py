@@ -40,8 +40,24 @@ def clc_level1(codes) -> np.ndarray:
     return out
 
 
-def build_covariates(elev=None, clc_code=None, use_elev: bool = True, use_lc: bool = True):
-    """elev in km + CLC level-1 one-hot (6 cols). Fixed width, no sklearn encoder."""
+def two_step_var(var: str) -> bool:
+    v = str(var).lower()
+    return v.startswith("precip") or v.startswith("snow")
+
+
+def clip_var(var: str, pred) -> np.ndarray:
+    v = str(var).lower()
+    out = np.asarray(pred, dtype=np.float64)
+    if v.startswith("precip") or v.startswith("snow") or v.startswith("wind"):
+        return np.maximum(out, 0.0)
+    if v.startswith("rh"):
+        return np.clip(out, 0.0, 100.0)
+    return out
+
+
+def build_covariates(elev=None, clc_code=None, use_elev: bool = True, use_lc: bool = True,
+                     extras: dict | None = None):
+    """elev in km + CLC level-1 one-hot (6 cols) + optional extras (fixed order)."""
     parts = []
     if use_elev and elev is not None:
         e = np.asarray(elev, dtype=np.float32).reshape(-1)
@@ -49,6 +65,19 @@ def build_covariates(elev=None, clc_code=None, use_elev: bool = True, use_lc: bo
     if use_lc and clc_code is not None:
         g = np.clip(clc_level1(clc_code).reshape(-1), 0, 5)
         parts.append(np.eye(6, dtype=np.float32)[g])
+    if extras:
+        for key in ("slope", "northness", "tpi", "tmean"):
+            if key not in extras or extras[key] is None:
+                continue
+            v = np.asarray(extras[key], dtype=np.float32).reshape(-1)
+            v = np.where(np.isfinite(v), v, 0.0)
+            if key == "tmean":
+                v = v / 10.0
+            elif key == "tpi":
+                v = v / 100.0
+            elif key == "slope":
+                v = v / 45.0
+            parts.append(v[:, None])
     if not parts:
         return None
     return np.hstack(parts).astype(np.float32)
@@ -159,7 +188,9 @@ def assemble_pooled_training(
 
 
 class RFSI:
-    def __init__(self, n_obs: int = 12, rf_params: Optional[dict] = None):
+    def __init__(self, n_obs: int = 12, rf_params: Optional[dict] = None,
+                 two_step: bool = False, tau_wet: float = 0.5, trace: float = 0.1,
+                 var_name: str = ""):
         self.n_obs = int(n_obs)
         self.rf_params = rf_params or {
             "n_estimators": 400,
@@ -169,7 +200,12 @@ class RFSI:
             "random_state": 42,
             "n_jobs": -1,
         }
+        self.two_step = bool(two_step)
+        self.tau_wet = float(tau_wet)
+        self.trace = float(trace)
+        self.var_name = str(var_name)
         self.model = None
+        self.model_ind = None
         self.n_features_: Optional[int] = None
         self.n_train_rows_: int = 0
         self.coords_train = None
@@ -193,9 +229,29 @@ class RFSI:
     ) -> "RFSI":
         """Fit one forest on all station–time rows (paper architecture)."""
         self._import_sklearn()
-        X, y, n = assemble_pooled_training(
-            times, coords, z, self.n_obs, X_cov=X_cov, min_stations=min_stations,
-        )
+        z = np.asarray(z, dtype=np.float64)
+        if self.two_step:
+            wet = (z > self.trace).astype(np.float64)
+            Xi, yi, n = assemble_pooled_training(
+                times, coords, wet, self.n_obs, X_cov=X_cov, min_stations=min_stations,
+            )
+            self.model_ind = self.RandomForestRegressor(**self.rf_params)
+            self.model_ind.fit(Xi, yi)
+            wet_m = z > self.trace
+            if int(wet_m.sum()) >= max(min_stations * 3, 30):
+                Xc = None if X_cov is None else np.asarray(X_cov)[wet_m]
+                X, y, n = assemble_pooled_training(
+                    np.asarray(times)[wet_m], np.asarray(coords)[wet_m], z[wet_m],
+                    self.n_obs, X_cov=Xc, min_stations=max(4, min_stations // 2),
+                )
+            else:
+                X, y, n = assemble_pooled_training(
+                    times, coords, z, self.n_obs, X_cov=X_cov, min_stations=min_stations,
+                )
+        else:
+            X, y, n = assemble_pooled_training(
+                times, coords, z, self.n_obs, X_cov=X_cov, min_stations=min_stations,
+            )
         self.n_train_rows_ = n
         self.n_features_ = int(X.shape[1])
         self.model = self.RandomForestRegressor(**self.rf_params)
@@ -241,7 +297,17 @@ class RFSI:
             raise RuntimeError(
                 f"Feature width {X.shape[1]} != trained width {self.n_features_}"
             )
-        return self.model.predict(X)
+        hat = np.asarray(self.model.predict(X), dtype=np.float64)
+        if self.two_step and self.model_ind is not None:
+            z_ind = (z_obs > self.trace).astype(np.float64)
+            X_nb_i = build_neighbor_features(
+                coords_obs, z_ind, coords_pred,
+                n_obs=self.n_obs, exclude_self=False,
+            )
+            Xi = np.hstack([X_nb_i, np.asarray(X_cov_pred)]) if X_cov_pred is not None else X_nb_i
+            p = np.clip(self.model_ind.predict(Xi), 0.0, 1.0)
+            hat = np.where(p >= self.tau_wet, np.maximum(hat, 0.0), 0.0)
+        return clip_var(self.var_name, hat)
 
     def predict_stations(
         self,
@@ -259,7 +325,22 @@ class RFSI:
             n_obs=self.n_obs, exclude_self=True,
         )
         X = np.hstack([X_nb, np.asarray(X_cov_obs)]) if X_cov_obs is not None else X_nb
-        return self.model.predict(X)
+        hat = np.asarray(self.model.predict(X), dtype=np.float64)
+        return clip_var(self.var_name, hat)
+
+
+def extras_for_var(df, var: str, rh_t_mode: str = "none") -> dict | None:
+    v = str(var).lower()
+    out = {}
+    if v.startswith("snow"):
+        for c in ("slope", "northness"):
+            if c in df.columns:
+                out[c] = df[c].to_numpy()
+    if v.startswith("wind") and "tpi" in df.columns:
+        out["tpi"] = df["tpi"].to_numpy()
+    if v.startswith("rh") and rh_t_mode in ("predicted", "observed") and "temp_mean" in df.columns:
+        out["tmean"] = df["temp_mean"].to_numpy()
+    return out or None
 
     def predict(
         self,

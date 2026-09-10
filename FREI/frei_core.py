@@ -9,6 +9,9 @@ on divide buffers.
 
 Residuals: IDW with valley-axis cost distance from shared.watersheds.
 Precip/snow: two-step (no temperature profile), p_wet >= tau.
+Snow amount: linear elev + slope + northness background, then residual.
+Wind: linear elev background, residual with the same watershed metric.
+RH: rh_t_mode none | predicted | observed.
 """
 
 from __future__ import annotations
@@ -45,6 +48,9 @@ class FreiConfig:
     predict_tile: int = 20000
     seed: int = 22
     across_w_grid: tuple = (2.0, 4.0, 8.0)
+    rh_t_mode: str = "none"          # none | predicted | observed
+    snow_terrain: bool = True
+    wind_elev_bg: bool = True
 
 
 def two_step_var(var: str) -> bool:
@@ -52,10 +58,43 @@ def two_step_var(var: str) -> bool:
     return v.startswith("precip") or v.startswith("snow")
 
 
+def uses_profile(var: str) -> bool:
+    v = var.lower()
+    return v.startswith("temp")
+
+
+def clip_var(var: str, pred: np.ndarray) -> np.ndarray:
+    v = var.lower()
+    out = np.asarray(pred, dtype=np.float64)
+    if v.startswith("precip") or v.startswith("snow") or v.startswith("wind"):
+        return np.maximum(out, 0.0)
+    if v.startswith("rh"):
+        return np.clip(out, 0.0, 100.0)
+    return out
+
+
 def _linear_tz(z, t):
     A = np.column_stack([np.ones_like(z), z])
     coef, *_ = np.linalg.lstsq(A, t, rcond=None)
     return coef, A @ coef
+
+
+def _lstsq_bg(t, *cols):
+    A = np.column_stack([np.ones(len(t), dtype=np.float64), *[np.asarray(c, dtype=np.float64) for c in cols]])
+    coef, *_ = np.linalg.lstsq(A, np.asarray(t, dtype=np.float64), rcond=None)
+    return coef, A @ coef
+
+
+def _apply_bg(coef, *cols):
+    out = np.full(len(cols[0]), float(coef[0]), dtype=np.float64) if cols else np.array([], dtype=np.float64)
+    if not cols:
+        return out
+    out = np.full(np.asarray(cols[0]).size, float(coef[0]), dtype=np.float64)
+    for i, c in enumerate(cols):
+        if i + 1 >= len(coef):
+            break
+        out = out + float(coef[i + 1]) * np.asarray(c, dtype=np.float64)
+    return out
 
 
 def _profile(z, t0, z0, g_lo, z1, z2, g_hi):
@@ -128,6 +167,19 @@ class FreiInterpolator:
         summit = sample_region(self.pack["summit"].astype(int), self.pack["xs"], self.pack["ys"], x, y) > 0
         cold = sample_region(self.pack["coldpool"].astype(int), self.pack["xs"], self.pack["ys"], x, y) > 0
         return summit, cold
+
+    def _terrain(self, x, y):
+        n = len(np.asarray(x))
+        if self.pack is None or "slope" not in self.pack:
+            return np.zeros(n, dtype=np.float64), np.ones(n, dtype=np.float64)
+        from shared.watersheds import sample_region
+        sl = sample_region(self.pack["slope"], self.pack["xs"], self.pack["ys"], x, y)
+        no = sample_region(self.pack["northness"], self.pack["xs"], self.pack["ys"], x, y)
+        sl = np.asarray(sl, dtype=np.float64)
+        no = np.asarray(no, dtype=np.float64)
+        sl = np.where(np.isfinite(sl), sl, 0.0)
+        no = np.where(np.isfinite(no), no, 1.0)
+        return sl, no
 
     def _weights(self, x, y):
         n = len(np.asarray(x))
@@ -238,26 +290,41 @@ class FreiInterpolator:
                 best = (mse, float(aw))
         return best[1]
 
-    def _field(self, x, y, z, t, xq, yq, zq, use_profile: bool):
-        if use_profile:
+    def _field(self, x, y, z, t, xq, yq, zq, bg="mean", extra_s=None, extra_q=None):
+        info = {}
+        if bg == "profile":
             bg_s, params, _ = self._background(x, y, z, t)
-            resid = t - bg_s
             bg_q = self._bg_at(xq, yq, zq, params)
+            info["params"] = params
+        elif bg == "linear":
+            cols_s = [z] + list(extra_s or [])
+            coef, bg_s = _lstsq_bg(t, *cols_s)
+            cols_q = [zq] + list(extra_q or [])
+            bg_q = _apply_bg(coef, *cols_q)
+            info["lin_coef"] = coef
         else:
-            resid = t - float(np.mean(t))
-            bg_q = np.full(xq.size, float(np.mean(t)))
-            params = None
+            mu = float(np.mean(t))
+            bg_s = np.full(t.size, mu)
+            bg_q = np.full(xq.size, mu)
+        resid = t - bg_s
         aw = self._pick_across(x, y, z, resid)
+        info["across_w"] = aw
         n = xq.size
         out = np.empty(n)
         tile = self.cfg.predict_tile
         for i0 in range(0, n, tile):
             sl = slice(i0, i0 + tile)
             out[sl] = bg_q[sl] + self._residual_idw(x, y, z, resid, xq[sl], yq[sl], zq[sl], aw)
-        return out, {"across_w": aw, "params": params}
+        return out, info
+
+    def _predict_t(self, x, y, z, t_obs, xq, yq, zq):
+        ok = np.isfinite(t_obs)
+        if ok.sum() < self.cfg.min_stations:
+            return None, {}
+        return self._field(x[ok], y[ok], z[ok], t_obs[ok], xq, yq, zq, bg="profile")
 
     def predict_timestamp(self, x, y, elev, values, xq, yq, zq, use_profile: bool = True,
-                          var: str = "temp_mean"):
+                          var: str = "temp_mean", t_obs=None, t_obs_q=None):
         x = np.asarray(x, float)
         y = np.asarray(y, float)
         z = np.asarray(elev, float)
@@ -265,18 +332,87 @@ class FreiInterpolator:
         xq = np.asarray(xq, float)
         yq = np.asarray(yq, float)
         zq = np.asarray(zq, float)
+        v = var.lower()
+
         if self.cfg.two_step and two_step_var(var):
-            wet = (t > self.cfg.trace).astype(float)
-            p, info = self._field(x, y, z, wet, xq, yq, zq, use_profile=False)
-            p = np.clip(p, 0.0, 1.0)
-            wet_m = t > self.cfg.trace
-            if wet_m.sum() >= 5:
-                amt, info2 = self._field(
-                    x[wet_m], y[wet_m], z[wet_m], t[wet_m], xq, yq, zq, use_profile=False,
-                )
-                amt = np.maximum(amt, 0.0)
-                info = {**info, "amount_across_w": info2.get("across_w")}
+            hat, info = self._two_step(x, y, z, t, xq, yq, zq, var)
+            return clip_var(var, hat), info
+
+        if v.startswith("rh"):
+            hat, info = self._predict_rh(x, y, z, t, xq, yq, zq, t_obs, t_obs_q)
+            return clip_var(var, hat), info
+
+        if v.startswith("wind"):
+            bg = "linear" if self.cfg.wind_elev_bg else "mean"
+            hat, info = self._field(x, y, z, t, xq, yq, zq, bg=bg)
+            return clip_var(var, hat), info
+
+        bg = "profile" if (use_profile and uses_profile(var)) else "mean"
+        hat, info = self._field(x, y, z, t, xq, yq, zq, bg=bg)
+        return clip_var(var, hat), info
+
+    def _two_step(self, x, y, z, t, xq, yq, zq, var):
+        wet = (t > self.cfg.trace).astype(float)
+        p, info = self._field(x, y, z, wet, xq, yq, zq, bg="mean")
+        p = np.clip(p, 0.0, 1.0)
+        wet_m = t > self.cfg.trace
+        extra_s = extra_q = None
+        bg = "mean"
+        if var.lower().startswith("snow") and self.cfg.snow_terrain and wet_m.sum() >= 5:
+            sl_s, no_s = self._terrain(x[wet_m], y[wet_m])
+            sl_q, no_q = self._terrain(xq, yq)
+            extra_s = [sl_s, no_s]
+            extra_q = [sl_q, no_q]
+            bg = "linear"
+        if wet_m.sum() >= 5:
+            amt, info2 = self._field(
+                x[wet_m], y[wet_m], z[wet_m], t[wet_m], xq, yq, zq,
+                bg=bg, extra_s=extra_s, extra_q=extra_q,
+            )
+            amt = np.maximum(amt, 0.0)
+            info = {**info, "amount_across_w": info2.get("across_w"), "amount_bg": bg}
+        else:
+            amt = np.zeros(xq.size)
+        return np.where(p >= self.cfg.tau_wet, amt, 0.0), info
+
+    def _predict_rh(self, x, y, z, rh, xq, yq, zq, t_obs, t_obs_q):
+        mode = str(self.cfg.rh_t_mode or "none").lower()
+        if mode not in ("predicted", "observed") or t_obs is None:
+            hat, info = self._field(x, y, z, rh, xq, yq, zq, bg="profile")
+            info["rh_t_mode"] = "none"
+            return hat, info
+
+        t_obs = np.asarray(t_obs, dtype=np.float64)
+        ok = np.isfinite(t_obs) & np.isfinite(rh)
+        if ok.sum() < max(self.cfg.min_stations, 5):
+            hat, info = self._field(x, y, z, rh, xq, yq, zq, bg="profile")
+            info["rh_t_mode"] = "none_fallback"
+            return hat, info
+
+        if mode == "observed" and t_obs_q is not None:
+            t_q = np.asarray(t_obs_q, dtype=np.float64)
+            if not np.isfinite(t_q).all():
+                t_hat, tinfo = self._predict_t(x, y, z, t_obs, xq, yq, zq)
+                t_q = np.where(np.isfinite(t_q), t_q, t_hat if t_hat is not None else np.nanmean(t_obs))
+                tinfo_used = tinfo
             else:
-                amt = np.zeros(xq.size)
-            return np.where(p >= self.cfg.tau_wet, amt, 0.0), info
-        return self._field(x, y, z, t, xq, yq, zq, use_profile)
+                tinfo_used = {"across_w": None}
+        else:
+            t_hat, tinfo_used = self._predict_t(x, y, z, t_obs, xq, yq, zq)
+            if t_hat is None:
+                hat, info = self._field(x, y, z, rh, xq, yq, zq, bg="profile")
+                info["rh_t_mode"] = "none_fallback"
+                return hat, info
+            t_q = t_hat
+
+        coef, bg_s = _lstsq_bg(rh[ok], z[ok], t_obs[ok])
+        bg_q = _apply_bg(coef, zq, t_q)
+        resid = rh[ok] - bg_s
+        hat, info = self._field(
+            x[ok], y[ok], z[ok], resid + bg_s, xq, yq, zq,
+            bg="linear", extra_s=[t_obs[ok]], extra_q=[t_q],
+        )
+        info["rh_t_mode"] = mode
+        info["t_across_w"] = tinfo_used.get("across_w")
+        info["lin_coef"] = coef
+        return hat, info

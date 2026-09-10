@@ -22,6 +22,19 @@ print_split_metrics = _kd.print_split_metrics
 data_sources = _kd.data_sources
 clc_group = _kd.clc_group
 precip_trace = _kd.precip_trace
+attach_temperature = _kd.attach_temperature
+attach_pack_terrain = _kd.attach_pack_terrain
+pack_from_master = _kd.pack_from_master
+subset_times = _kd.subset_times
+subset_years = _kd.subset_years
+subset_splits = _kd.subset_splits
+
+
+def compute_block(cfg: dict) -> dict:
+    block = dict(cfg.get("gam", {}).get("compute", {}) or {})
+    block.setdefault("tune_months", "seasonal4")
+    block.setdefault("tune_folds", 5)
+    return block
 
 
 def load_panel(cfg, var):
@@ -45,6 +58,8 @@ def load_panel(cfg, var):
                 extra = extra[keep].drop_duplicates("station_name")
                 sta = sta.merge(extra, on="station_name", how="left", suffixes=("", "_meta"))
         panel = attach_terrain_to_panel(panel, sta)
+        if "cosasp" in panel.columns and "northness" not in panel.columns:
+            panel["northness"] = panel["cosasp"]
     except Exception as exc:
         print(f"  terrain attach failed ({type(exc).__name__}: {exc}); using flat defaults", flush=True)
         for c, fill in (("slope", 0.0), ("sinasp", 0.0), ("cosasp", 1.0)):

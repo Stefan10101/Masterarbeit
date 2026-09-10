@@ -26,7 +26,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_nested_llocv_path, get_rgi_tuned_params_path
 from rgi_core import RGI, RGIConfig
-from rgi_data import load_config, load_panel, print_split_metrics
+from rgi_data import attach_extras, extra_cols_for_var, load_config, load_panel, print_split_metrics
 import yaml
 
 
@@ -61,6 +61,10 @@ def cfg_to_rgi(cfg, overrides: dict | None = None) -> RGIConfig:
         min_stations=int(cfg.get("min_stations_per_field", 10)),
         device=str(r.get("device", "auto")),
         use_amp=bool(r.get("use_amp", True)),
+        two_step=bool(tuned.get("two_step", r.get("two_step", True))),
+        tau_wet=float(r.get("tau_wet", 0.5)),
+        extra_cols=tuple(tuned.get("extra_cols") or r.get("extra_cols") or ()),
+        var_name=str(tuned.get("variable") or ""),
     )
 
 
@@ -83,7 +87,10 @@ def station_folds(names: list[str], n_folds: int, seed: int) -> list[list[str]]:
 
 
 def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations):
-    panel = load_panel(cfg, var)
+    panel = attach_extras(load_panel(cfg, var), cfg, var)
+    if cfg.get("_quick_months"):
+        from Kriging.kriging_data import subset_times
+        panel = subset_times(panel, cfg["_quick_months"])
     if fit_splits != {"all"}:
         fit_df = panel[panel["split"].isin(fit_splits)]
     else:
@@ -102,7 +109,12 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
         folds = station_folds(names, n_folds, int(cfg.get("rgi", {}).get("seed", 22)))
 
     tuned = load_tuned(var, cfg["time_resolution"])
+    tuned["extra_cols"] = extra_cols_for_var(var, cfg)
+    tuned["variable"] = var
     rcfg = cfg_to_rgi(cfg, tuned)
+    rcfg.two_step = bool(cfg.get("rgi", {}).get("two_step", True)) and (
+        var.lower().startswith("precip") or var.lower().startswith("snow")
+    )
     out_path = get_nested_llocv_path("RGI", var, cfg["time_resolution"], "full")
     records = []
     t0 = time.perf_counter()
@@ -157,6 +169,8 @@ def parse_args():
     p.add_argument("--mode", choices=["folds", "leave_one"], default="folds")
     p.add_argument("--folds", type=int, default=None)
     p.add_argument("--max-stations", type=int, default=0)
+    p.add_argument("--quick", action="store_true")
+    p.add_argument("--months", default=None)
     return p.parse_args()
 
 
@@ -167,6 +181,15 @@ def main():
         "temp_mean", "precip_sum",
     ]
     n_folds = args.folds or int(cfg.get("rgi", {}).get("n_folds", 5))
+    if args.quick:
+        n_folds = args.folds or 2
+        cfg.setdefault("rgi", {})
+        cfg["rgi"]["epochs"] = min(int(cfg["rgi"].get("epochs", 80)), 15)
+        cfg["rgi"]["patience"] = min(int(cfg["rgi"].get("patience", 12)), 4)
+        if args.months or True:
+            from Kriging.kriging_data import subset_times
+            # applied inside run after load — store on cfg
+            cfg["_quick_months"] = args.months or "seasonal4"
     from rgi_core import describe_device, resolve_device
     print("=" * 72)
     print("RGI station LLOCV")
