@@ -17,6 +17,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_tuned_params_path, get_master_grid_path
+from shared.time_res import add_time_res_arg, apply_time_res
 from cnn_core import grid_terrain, two_step_var
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace
 from train_cnn import cfg_to_cnn, train_one
@@ -31,8 +32,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variable", default=None)
     p.add_argument("--quick", action="store_true")
+    add_time_res_arg(p)
     args = p.parse_args()
     cfg = load_cnn_config()
+    apply_time_res(cfg, args)
     if args.quick:
         cfg.setdefault("cnn", {})
         cfg["cnn"]["epochs"] = min(int(cfg["cnn"].get("epochs", 40)), 8)

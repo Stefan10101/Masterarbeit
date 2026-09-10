@@ -37,6 +37,7 @@ from paths import (
 )
 from rfsi_core import RFSI, build_covariates, extras_for_var, neighbor_width, two_step_var
 from rfsi_optimizer import compute_metrics
+from shared.time_res import add_time_res_arg, apply_time_res
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
@@ -175,7 +176,10 @@ def main():
     p.add_argument("--variables", nargs="*", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
+    add_time_res_arg(p)
     args = p.parse_args()
+    global TIME_RES
+    TIME_RES = apply_time_res(cfg, args)
 
     print("=" * 80)
     print(f"RFSI pooled production | {DOMAIN} | {TIME_RES}")

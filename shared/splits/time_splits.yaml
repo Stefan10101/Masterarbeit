@@ -7,7 +7,8 @@
 #
 # purge_days: drop this many calendar days after each window end before
 # the next window starts. Stops half-hourly autocorrelation leaking across
-# the cut. Leave 0 for monthly / daily / weekly.
+# the cut. Leave 0 for monthly / daily / weekly. For half-hourly use 3
+# when that suite starts (policy lock 2026-09-10).
 
 timezone: UTC
 

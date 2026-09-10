@@ -34,6 +34,7 @@ from paths import (
 )
 from rfsi_core import RFSI, build_covariates, extras_for_var, two_step_var
 from rfsi_optimizer import compute_metrics
+from shared.time_res import add_time_res_arg, apply_time_res
 
 _splits_path = CODE_DIR / "shared" / "splits" / "splits.py"
 _spec = _ilu.spec_from_file_location("thesis_time_splits", _splits_path)
@@ -341,12 +342,14 @@ def parse_args():
     p.add_argument("--n-splits", type=int, default=5)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
+    add_time_res_arg(p)
     return p.parse_args()
 
 
 def main():
     args = parse_args()
     cfg = load_config()
+    apply_time_res(cfg, args)
     wanted = args.variables or cfg.get("rfsi", {}).get("variables_to_process") or [
         "temp_mean", "precip_sum",
     ]

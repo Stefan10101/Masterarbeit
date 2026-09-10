@@ -25,6 +25,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_nested_llocv_path, get_rgi_tuned_params_path
+from shared.time_res import add_time_res_arg, apply_time_res
 from rgi_core import RGI, RGIConfig
 from rgi_data import attach_extras, extra_cols_for_var, load_config, load_panel, print_split_metrics
 import yaml
@@ -171,12 +172,14 @@ def parse_args():
     p.add_argument("--max-stations", type=int, default=0)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
+    add_time_res_arg(p)
     return p.parse_args()
 
 
 def main():
     args = parse_args()
     cfg = load_config()
+    apply_time_res(cfg, args)
     wanted = args.variables or cfg.get("rgi", {}).get("variables_to_process") or [
         "temp_mean", "precip_sum",
     ]

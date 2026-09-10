@@ -17,6 +17,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path, get_nested_llocv_path
+from shared.time_res import add_time_res_arg, apply_time_res
 from gam_core import GAMConfig, GAMInterpolator
 from gam_data import (
     attach_pack_terrain,
@@ -185,9 +186,10 @@ def main():
     p.add_argument("--months", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    add_time_res_arg(p)
     args = p.parse_args()
     cfg = load_gam_config()
-    time_res = cfg["time_resolution"]
+    time_res = apply_time_res(cfg, args)
     variables = [args.variable] if args.variable else cfg["gam"].get("variables_to_process", ["temp_mean"])
     n_folds = args.folds or int(cfg["gam"].get("n_folds", 5))
     months = args.months

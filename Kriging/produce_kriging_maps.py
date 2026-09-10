@@ -48,6 +48,7 @@ from kriging_data import (
     subset_years,
 )
 from llocv_kriging import cfg_to_kriging
+from shared.time_res import add_time_res_arg, apply_time_res
 
 try:
     import xarray as xr
@@ -79,17 +80,18 @@ def parse_args():
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     p.add_argument("--skip-station-check", action="store_true")
+    add_time_res_arg(p)
     return p.parse_args()
 
 
 def main():
     args = parse_args()
     cfg = load_config()
+    time_res = apply_time_res(cfg, args)
     if xr is None:
         raise RuntimeError("xarray is required for produce_kriging_maps.py")
 
     domain = cfg["domain"]["preset"]
-    time_res = cfg["time_resolution"]
     start = pd.Timestamp(cfg["start_date"])
     end = pd.Timestamp(cfg["end_date"])
     resolutions = cfg.get("resolutions_to_process", [1000])

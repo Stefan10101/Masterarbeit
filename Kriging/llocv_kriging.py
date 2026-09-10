@@ -27,6 +27,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_kriging_tuned_params_path, get_nested_llocv_path
+from shared.time_res import add_time_res_arg, apply_time_res
 from kriging_core import KrigingConfig, KrigingInterpolator
 from kriging_data import (
     attach_pack_terrain,
@@ -203,12 +204,14 @@ def parse_args():
     p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    add_time_res_arg(p)
     return p.parse_args()
 
 
 def main():
     args = parse_args()
     cfg = load_config()
+    apply_time_res(cfg, args)
     wanted = args.variables or cfg.get("kriging", {}).get("variables_to_process") or [
         "temp_mean", "precip_sum",
     ]

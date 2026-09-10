@@ -48,6 +48,7 @@ from bss_core import (
     predict_surface,
     predict_bsse,
 )
+from shared.time_res import add_time_res_arg, apply_time_res
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
@@ -287,8 +288,10 @@ def main():
     p.add_argument("--variables", nargs="*", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
+    add_time_res_arg(p)
     args = p.parse_args()
-    global SAVE_LLOCV
+    global SAVE_LLOCV, TIME_RES
+    TIME_RES = apply_time_res(cfg, args)
     if args.quick:
         SAVE_LLOCV = False
     print("=" * 80)

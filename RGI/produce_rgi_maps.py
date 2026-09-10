@@ -40,6 +40,7 @@ from rgi_data import (
     load_panel,
 )
 from llocv_rgi import cfg_to_rgi
+from shared.time_res import add_time_res_arg, apply_time_res
 
 try:
     import xarray as xr
@@ -68,8 +69,10 @@ def main():
     p.add_argument("--variables", nargs="*", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
+    add_time_res_arg(p)
     args = p.parse_args()
     cfg = load_config()
+    apply_time_res(cfg, args)
     if args.quick:
         cfg.setdefault("rgi", {})
         cfg["rgi"]["epochs"] = min(int(cfg["rgi"].get("epochs", 80)), 15)

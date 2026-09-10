@@ -71,6 +71,12 @@ def parse_args():
         default="half_hourly",
         choices=["half_hourly", "daily", "weekly", "monthly", "seasonal"],
     )
+    p.add_argument(
+        "--time-resolution",
+        default=None,
+        choices=["half_hourly", "daily", "weekly", "monthly", "seasonal"],
+        help="Alias for --resolution.",
+    )
     p.add_argument("--cluster-method", default="gmm", choices=["gmm", "kmeans", "som"])
     p.add_argument(
         "--variables",
@@ -240,7 +246,7 @@ def main():
     cfg = load_config()
 
     method = args.method.upper()
-    resolution = args.resolution
+    resolution = args.time_resolution or args.resolution
     cluster_method = args.cluster_method
     domain = cfg.get("domain", {}).get("preset", "full")
     param_grid = cfg["param_grid"]["power"]

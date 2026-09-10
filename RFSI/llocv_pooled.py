@@ -33,6 +33,7 @@ from paths import (
 )
 from rfsi_core import RFSI, build_covariates, extras_for_var, neighbor_width, two_step_var
 from rfsi_optimizer import compute_metrics
+from shared.time_res import add_time_res_arg, apply_time_res
 
 import importlib.util as _ilu
 _splits_path = Path(__file__).resolve().parents[1] / "shared" / "splits" / "splits.py"
@@ -297,6 +298,7 @@ def parse_args():
     p.add_argument("--folds", type=int, default=0, help=">0 uses station folds instead of leave-one")
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
+    add_time_res_arg(p)
     return p.parse_args()
 
 
@@ -314,6 +316,7 @@ def parse_split_arg(text: str) -> set[str]:
 def main():
     args = parse_args()
     cfg = load_config()
+    apply_time_res(cfg, args)
     wanted = args.variables or cfg.get("rfsi", {}).get("variables_to_process") or [
         "temp_mean", "precip_sum",
     ]

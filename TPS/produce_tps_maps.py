@@ -32,6 +32,7 @@ from tps_data import (
     uses_two_step,
 )
 from llocv_tps import cfg_to_tps, load_tuned, month_key, pack_from_master, predict_rows
+from shared.time_res import add_time_res_arg, apply_time_res
 
 try:
     import xarray as xr
@@ -47,16 +48,17 @@ def parse_args():
     p.add_argument("--split", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    add_time_res_arg(p)
     return p.parse_args()
 
 
 def main():
     args = parse_args()
     cfg = load_tps_config()
+    time_res = apply_time_res(cfg, args)
     if xr is None:
         raise RuntimeError("xarray required")
     domain = cfg["domain"]["preset"]
-    time_res = cfg["time_resolution"]
     start = str(cfg["start_date"]).replace("-", "")
     end = str(cfg["end_date"]).replace("-", "")
     _, _, grid_method = data_sources(cfg)

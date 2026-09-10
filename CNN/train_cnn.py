@@ -28,6 +28,7 @@ from cnn_core import (
     two_step_var,
 )
 from cnn_data import data_sources, load_cnn_config, load_panel, precip_trace
+from shared.time_res import add_time_res_arg, apply_time_res
 
 try:
     import xarray as xr
@@ -306,8 +307,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variable", default=None)
     p.add_argument("--quick", action="store_true")
+    add_time_res_arg(p)
     args = p.parse_args()
     cfg = load_cnn_config()
+    apply_time_res(cfg, args)
     if args.quick:
         cfg.setdefault("cnn", {})
         cfg["cnn"]["epochs"] = min(int(cfg["cnn"].get("epochs", 40)), 8)

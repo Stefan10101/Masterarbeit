@@ -15,6 +15,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_interpolated_map_path, get_master_grid_path
+from shared.time_res import add_time_res_arg, apply_time_res
 from frei_core import FreiInterpolator, two_step_var
 from frei_data import (
     attach_temperature,
@@ -43,13 +44,14 @@ def main():
     p.add_argument("--split", default=None, help="all | test | dev,test")
     p.add_argument("--quick", action="store_true")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    add_time_res_arg(p)
     args = p.parse_args()
 
     cfg = load_frei_config()
+    time_res = apply_time_res(cfg, args)
     if xr is None:
         raise RuntimeError("xarray required")
     domain = cfg["domain"]["preset"]
-    time_res = cfg["time_resolution"]
     _, _, grid_method = data_sources(cfg)
     variables = [args.variable] if args.variable else (cfg["frei"].get("variables_to_process") or ["temp_mean"])
     min_stations = int(cfg.get("min_stations_per_field", 10))

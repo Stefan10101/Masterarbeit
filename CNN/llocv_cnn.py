@@ -26,6 +26,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_model_path, get_master_grid_path, get_nested_llocv_path
+from shared.time_res import add_time_res_arg, apply_time_res
 from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_raster, station_to_raster, two_step_var
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, print_split_metrics
 from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned, train_one
@@ -99,11 +100,12 @@ def main():
     p.add_argument("--score", default="dev,test")
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
+    add_time_res_arg(p)
     args = p.parse_args()
     cfg = load_cnn_config()
+    time_res = apply_time_res(cfg, args)
     if xr is None:
         raise RuntimeError("xarray required")
-    time_res = cfg["time_resolution"]
     _, _, grid_method = data_sources(cfg)
     res = int(cfg.get("resolutions_to_process", [1000])[0])
     grid = xr.open_dataset(get_master_grid_path(grid_method, res))

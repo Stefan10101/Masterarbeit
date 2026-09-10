@@ -50,9 +50,12 @@ def parse_args():
                    choices=["BSS", "IDW", "RFSI", "COMMON"],
                    help="One or more methods. Clustering runs once; results are "
                         "written into every listed method's clusters folder.")
-    p.add_argument("--resolution", required=True,
+    p.add_argument("--resolution", required=False, default=None,
                    choices=["half_hourly", "daily", "weekly", "monthly", "seasonal"],
                    help="Which aggregated file to read")
+    p.add_argument("--time-resolution", default=None,
+                   choices=["half_hourly", "daily", "weekly", "monthly", "seasonal"],
+                   help="Alias for --resolution")
     p.add_argument("--variables", nargs="+", default=None,
                    help="Subset of variables (default = all known)")
     p.add_argument("--k-min", type=int, default=3)
@@ -225,7 +228,9 @@ def _write_variable_outputs(result, var, out_roots):
 def main():
     args = parse_args()
     methods = [m.upper() for m in args.method]
-    resolution = args.resolution
+    resolution = args.time_resolution or args.resolution
+    if not resolution:
+        raise SystemExit("need --resolution or --time-resolution")
     time_col = _time_col_name(resolution)
 
     print("=" * 78)
