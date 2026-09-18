@@ -48,7 +48,7 @@ from kriging_data import (
     subset_years,
 )
 from llocv_kriging import cfg_to_kriging
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 
 try:
     import xarray as xr

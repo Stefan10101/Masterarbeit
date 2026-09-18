@@ -17,27 +17,21 @@ import re
 import multiprocessing as mp
 
 from pathlib import Path
+import sys
 
-# ===============================================
-# PATHS UPDATED TO RELATIVE (Daten root)
-# ===============================================
-SCRIPT = Path(__file__).resolve()
+CODE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CODE_DIR))
+from shared.ingest_paths import pipeline_output_dirs
+from shared.qc_grid import interpolate_micro_gaps_keep_index, reindex_full_30min
 
-PROJECT_ROOT = SCRIPT
-while PROJECT_ROOT.name != "Daten":
-    PROJECT_ROOT = PROJECT_ROOT.parent
-
-DATA_ROOT = PROJECT_ROOT
-
+_DIRS = pipeline_output_dirs("Wind")
+INPUT_FULL_DIR = _DIRS["full"]
+PAKET_ROOT = _DIRS["root"]
+OUTPUT_QC_DIR = _DIRS["qc"]
 
 # ==================== CONFIG (adapted for pipeline v3) ====================
 
 VARIABLE_SUFFIX = "_wind"
-
-INPUT_FULL_DIR = Path(DATA_ROOT / "wind" / "data" / "data" / "full_2020-2025")
-PAKET_ROOT     = Path(DATA_ROOT / "wind" / "paket")
-OUTPUT_QC_DIR  = PAKET_ROOT / "full_2020_2025_qc"
-OUTPUT_QC_DIR.mkdir(parents=True, exist_ok=True)
 
 FREQ_MINUTES      = 30
 STEPS_PER_HOUR    = 60 // FREQ_MINUTES
@@ -174,7 +168,7 @@ def apply_wind_qc(df: pd.DataFrame, logger=None, station_name: str = "") -> pd.D
             return df
 
     df.index = pd.to_datetime(df.index, utc=True).sort_values()
-    df = df.dropna(subset=["value"])
+    df = df.sort_index()
     if df.empty:
         return df.reset_index() if isinstance(df.index, pd.DatetimeIndex) else df
 
@@ -235,8 +229,8 @@ def apply_wind_qc(df: pd.DataFrame, logger=None, station_name: str = "") -> pd.D
 
     # === MICRO-GAP INTERPOLATION (after all QC) ===
     if len(df) > 0:
-        df, n_gaps, n_pts = interpolate_micro_gaps(df, max_gap_hours=2.0, col="value",
-                                                   logger=logger, station_name=station_name)
+        df, n_pts = interpolate_micro_gaps_keep_index(df, max_gap_hours=2.0, col="value")
+        n_gaps = int(n_pts > 0)
         if n_pts > 0 and logger:
             logger.info(f"  [{station_name}] Micro-gap interpolation: {n_gaps} gaps filled, {n_pts} points interpolated (<=2h)")
 
@@ -268,9 +262,8 @@ def process_one_station(args):
     try:
         df = pd.read_parquet(pq_path)
 
-        # === COLUMN NORMALIZATION for pipeline v3 ("height" -> "hoehe") ===
-        if "height" in df.columns:
-            df = df.rename(columns={"height": "hoehe"})
+        if "hoehe" in df.columns and "height" not in df.columns:
+            df = df.rename(columns={"hoehe": "height"})
 
         station = df["station"].iloc[0] if "station" in df.columns else pq_path.stem.split("_")[0]
 

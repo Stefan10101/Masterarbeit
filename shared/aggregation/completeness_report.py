@@ -21,7 +21,7 @@ sys.path.insert(0, str(CODE_DIR))
 from paths import get_aggregated_data_path, get_plots_root, ensure_dir
 from shared.time_res import TIME_RESOLUTIONS, add_time_res_arg
 
-VARS = ("temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean")
+VARS = ("temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean", "slr", "swe", "snow_density")
 MIN_STATIONS = 10
 TRACE = {
     "precip_sum": {
@@ -35,6 +35,24 @@ TRACE = {
         "daily": 0.5,
         "weekly": 1.0,
         "monthly": 1.0,
+    },
+    "slr": {
+        "half_hourly": 2.0,
+        "daily": 2.0,
+        "weekly": 2.0,
+        "monthly": 2.0,
+    },
+    "swe": {
+        "half_hourly": 1.0,
+        "daily": 1.0,
+        "weekly": 1.0,
+        "monthly": 1.0,
+    },
+    "snow_density": {
+        "half_hourly": 50.0,
+        "daily": 50.0,
+        "weekly": 50.0,
+        "monthly": 50.0,
     },
 }
 

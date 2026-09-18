@@ -33,9 +33,9 @@ DATA_ROOT = PROJECT_ROOT
 
 # ==================== CONFIG ====================
 
-ORIGINAL_ROOT = Path(DATA_ROOT / "luftfeuchte" / "data" / "data" / "full_2020-2025")
-FINAL_ROOT    = Path(DATA_ROOT / "luftfeuchte" / "paket" / "full_2020_2025_qc")
-PLOT_DIR      = Path(DATA_ROOT / "plots" / "luftfeuchte")
+ORIGINAL_ROOT = Path(DATA_ROOT / "QC" / "Luftfeuchte" / "full_2020_2025")
+FINAL_ROOT    = Path(DATA_ROOT / "QC" / "Luftfeuchte" / "full_2020_2025_qc")
+PLOT_DIR      = Path(DATA_ROOT / "Plots" / "Luftfeuchte")
 
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 

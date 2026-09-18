@@ -48,13 +48,17 @@ def get_season(month: int) -> str:
     return "Unknown"
 
 
+MIN_PERIOD_COVERAGE = 0.80  # GPCC/REGEN use 0.70; lock >=0.80 as requested
+
+
 def process_station_parquet(
     parquet_path: Path,
     station_name: str,
     targets: Dict,
     resolution: str,
     time_col_name: Optional[str] = None,
-    seasonal_mode: str = "across_years"
+    seasonal_mode: str = "across_years",
+    min_coverage: float = MIN_PERIOD_COVERAGE,
 ) -> pd.DataFrame:
 
     if time_col_name is None:
@@ -138,16 +142,24 @@ def process_station_parquet(
         for stat in spec["stats"]:
             col_name = spec["output_names"][spec["stats"].index(stat)]
 
+            src = df[raw_col]
+            count = src.resample(resample_rule).count()
+            expected = src.resample(resample_rule).size()
+            enough = (count / expected.replace(0, np.nan)) >= min_coverage
+            if resolution == "half_hourly":
+                enough[:] = True
+
             if stat == "sum":
-                resampled = df[raw_col].resample(resample_rule).sum(min_count=1)
+                resampled = src.resample(resample_rule).sum(min_count=1)
             elif stat == "mean":
-                resampled = df[raw_col].resample(resample_rule).mean()
+                resampled = src.resample(resample_rule).mean()
             elif stat == "min":
-                resampled = df[raw_col].resample(resample_rule).min()
+                resampled = src.resample(resample_rule).min()
             elif stat == "max":
-                resampled = df[raw_col].resample(resample_rule).max()
+                resampled = src.resample(resample_rule).max()
             else:
                 continue
+            resampled = resampled.where(enough)
 
             agg_df = resampled.to_frame(name=col_name)
             agg_df["station_name"] = station_name

@@ -25,20 +25,27 @@ from datetime import datetime
 import json
 import re
 from scipy.spatial.distance import cdist
+import sys
+
+CODE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CODE_DIR))
+from paths import DATA_ROOT, get_raw_data_dir, get_metadata_path
+from shared.ingest_paths import pipeline_output_dirs, variable_source_dir, canonical_network_name
 
 # ==================== CONFIG ====================
-BASE = Path(DATA_ROOT)
+BASE = get_raw_data_dir()
 
 VAR_FOLDERS = {
-    "relative_humidity": BASE / "Luftfeuchte" / "Paket" / "full_2020_2025_qc",
-    "precipitation":     BASE / "Niederschlag" / "Paket" / "full_2020_2025_qc",
-    "snow_height":       BASE / "Schneehoehe" / "Paket" / "full_2020_2025_qc",
-    "temperature":       BASE / "Temperatur" / "Paket" / "full_2020_2025_qc",
-    "wind_speed":        BASE / "Wind" / "Paket" / "full_2020_2025_qc",
+    "relative_humidity": pipeline_output_dirs("Luftfeuchte")["qc"],
+    "precipitation":     pipeline_output_dirs("Niederschlag")["qc"],
+    "snow_height":       pipeline_output_dirs("Schneehoehe")["qc"],
+    "temperature":       pipeline_output_dirs("Temperatur")["qc"],
+    "wind_speed":        pipeline_output_dirs("Wind")["qc"],
 }
 
-OUTPUT_DIR = BASE / "Kombiniert"
+OUTPUT_DIR = BASE
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+CATALOG_CSV = get_metadata_path()
 
 RADIUS_M = 10.0
 ROUND_DECIMALS = 2
@@ -129,15 +136,18 @@ def build_provider_lookup_from_raw_data():
     seen = set()
 
     for var_name in RAW_VARIABLE_FOLDERS:
-        var_path = BASE / var_name
+        var_path = variable_source_dir(var_name)
         if not var_path.exists():
             continue
 
         for provider_dir in var_path.iterdir():
-            if not provider_dir.is_dir() or provider_dir.name not in VALID_PROVIDER_FOLDERS:
+            if not provider_dir.is_dir() or provider_dir.name.lower() not in {n.lower() for n in VALID_PROVIDER_FOLDERS}:
                 continue
 
-            provider_name = PROVIDER_MAP.get(provider_dir.name, provider_dir.name)
+            provider_name = PROVIDER_MAP.get(
+                canonical_network_name(provider_dir.name),
+                canonical_network_name(provider_dir.name),
+            )
 
             for station_dir in provider_dir.iterdir():
                 if not station_dir.is_dir():
@@ -186,20 +196,6 @@ def _check_parquet_engine():
     except ImportError:
         try:
             import fastparquet  # noqa: F401
-
-from pathlib import Path
-
-# ===============================================
-# PATHS UPDATED TO RELATIVE (Daten root)
-# ===============================================
-SCRIPT = Path(__file__).resolve()
-
-PROJECT_ROOT = SCRIPT
-while PROJECT_ROOT.name != "Daten":
-    PROJECT_ROOT = PROJECT_ROOT.parent
-
-DATA_ROOT = PROJECT_ROOT
-
             return "fastparquet"
         except ImportError:
             logger.error(
@@ -222,16 +218,19 @@ def collect_station_metadata():
             continue
         for pq in folder.glob("*_final_qc.parquet"):   # UPDATED
             try:
-                meta = pd.read_parquet(pq, columns=["station", "name", "lat", "lon", "hoehe", "parameter"])
+                peek = pd.read_parquet(pq)
+                cols = [c for c in ["station", "name", "lat", "lon", "height", "hoehe", "parameter"] if c in peek.columns]
+                meta = peek[cols]
                 if meta.empty:
                     continue
                 row = meta.iloc[0]
                 lat = float(row["lat"]) if pd.notna(row["lat"]) else np.nan
                 lon = float(row["lon"]) if pd.notna(row["lon"]) else np.nan
+                elev = row["height"] if "height" in row.index else row.get("hoehe", np.nan)
 
                 # Sanity check: flipped coordinates
                 if pd.notna(lat) and pd.notna(lon) and lat < lon:
-                    logger.warning(f"FLIPPED COORDS â†’ swapped: {pq.name} ({lat:.4f}, {lon:.4f})")
+                    logger.warning(f"FLIPPED COORDS swapped: {pq.name} ({lat:.4f}, {lon:.4f})")
                     lat, lon = lon, lat
 
                 records.append({
@@ -240,7 +239,7 @@ def collect_station_metadata():
                     "name": str(row["name"]) if pd.notna(row["name"]) else "",
                     "lat": lat,
                     "lon": lon,
-                    "hoehe": float(row["hoehe"]) if pd.notna(row["hoehe"]) else np.nan,
+                    "hoehe": float(elev) if pd.notna(elev) else np.nan,
                     "parameter": str(row.get("parameter", var_name)),
                     "file_path": pq
                 })

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Master Thesis - Snowheight Data Pipeline (v3.0)
 Strict exact regrid, 30% coverage, new folder structure, thorough logging.
@@ -19,33 +19,28 @@ import re
 from typing import Optional, Dict, List, Callable
 
 from pathlib import Path
+import sys
 
-# ===============================================
-# PATHS UPDATED TO RELATIVE (Daten root)
-# ===============================================
-SCRIPT = Path(__file__).resolve()
-
-PROJECT_ROOT = SCRIPT
-while PROJECT_ROOT.name != "Daten":
-    PROJECT_ROOT = PROJECT_ROOT.parent
-
-DATA_ROOT = PROJECT_ROOT
-
+CODE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CODE_DIR))
+from shared.ingest_paths import (
+    variable_source_dir,
+    pipeline_output_dirs,
+    list_network_jsons,
+    canonical_network_name,
+)
+from paths import DATA_ROOT
 
 # ==================== CONFIG ====================
 VARIABLE = "SNOW"
 PARAMETER = "HS"
-ROOT = Path(DATA_ROOT / "schneehoehe")
-LOG_DIR = Path(DATA_ROOT / "code" / "logs" / "schneehoehe")
-
-DATA_ROOT = ROOT / "Data"
-AAAData = DATA_ROOT / "Data"
-FULL_DIR = AAAData / "Full_2020-2025"
-REJECTED_DIR = AAAData / "rejected_stations"
-STATS_DIR = AAAData / "Statistics"
-
-for d in [FULL_DIR, REJECTED_DIR, STATS_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
+ROOT = variable_source_dir("Schneehoehe")
+_DIRS = pipeline_output_dirs("Schneehoehe")
+AAAData = _DIRS["root"]
+FULL_DIR = _DIRS["full"]
+REJECTED_DIR = _DIRS["rejected"]
+STATS_DIR = _DIRS["stats"]
+LOG_DIR = DATA_ROOT / "Plots" / "logs" / "schneehoehe"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 COVERAGE_THRESHOLD = 20.0
@@ -63,9 +58,9 @@ logger = logging.getLogger(__name__)
 # ==================== HELPERS (identical) ====================
 
 def safe_station_name(name: str) -> str:
-    name = re.sub(r'[^a-zA-Z0-9Ã¤Ã¶Ã¼Ã„Ã–ÃœÃŸ]', '_', name)
-    name = name.replace('Ã¤', 'a').replace('Ã¶', 'o').replace('Ã¼', 'u')
-    name = name.replace('Ã„', 'A').replace('Ã–', 'O').replace('Ãœ', 'U')
+    name = re.sub(r'[^a-zA-Z0-9äöüÄÖÜß]', '_', name)
+    name = name.replace('ä', 'a').replace('ö', 'o').replace('ü', 'u')
+    name = name.replace('Ä', 'A').replace('Ö', 'O').replace('Ü', 'U')
     name = re.sub(r'_+', '_', name).strip('_')
     return name or "unknown_station"
 
@@ -76,7 +71,7 @@ def check_and_fix_coordinates(lat: float, lon: float, station: str, network: str
     if pd.isna(lat) or pd.isna(lon):
         return lat, lon
     if lon > lat:
-        logger.warning(f"COORDINATE SWAP | {network}/{station} | lon={lon} > lat={lat} â†’ swapping")
+        logger.warning(f"COORDINATE SWAP | {network}/{station} | lon={lon} > lat={lat} → swapping")
         return lon, lat
     return lat, lon
 
@@ -100,7 +95,7 @@ def ensure_utc(df: pd.DataFrame, network: str) -> pd.DataFrame:
         df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=1)
         df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
     else:
-        logger.warning(f"Unknown network for tz handling: {network} â†’ assuming UTC")
+        logger.warning(f"Unknown network for tz handling: {network} → assuming UTC")
         df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
     return df
 
@@ -133,7 +128,7 @@ def regrid_to_30min_snow(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestam
     regridded = regridded.reset_index()
     regridded["is_missing"] = regridded["value"].isna()
 
-    for col in ["station", "name", "hoehe", "lat", "lon", "parameter", "source_file"]:
+    for col in ["station", "name", "height", "lat", "lon", "parameter", "source_file"]:
         if col in df.columns and not df[col].empty:
             regridded[col] = df[col].iloc[0]
 
@@ -166,7 +161,7 @@ def parse_dwd(path: Path) -> Optional[pd.DataFrame]:
     df.loc[df["value"] == -999, "value"] = np.nan
 
     df["name"] = meta.get("name")
-    df["hoehe"] = pd.to_numeric(meta.get("hoehe"), errors="coerce")
+    df["height"] = pd.to_numeric(meta.get("hoehe") or meta.get("height"), errors="coerce")
     df["lat"] = pd.to_numeric(meta.get("breite"), errors="coerce")
     df["lon"] = pd.to_numeric(meta.get("laenge"), errors="coerce")
     return df
@@ -264,10 +259,10 @@ NETWORK_PARSERS: Dict[str, Callable[[Path], Optional[pd.DataFrame]]] = {
 
 def read_station_json(json_path: Path) -> Optional[pd.DataFrame]:
     station_raw = json_path.parent.name.strip()
-    network = json_path.parent.parent.name.strip()
+    network = canonical_network_name(json_path.parent.parent.name.strip())
     safe_name = safe_station_name(station_raw)
 
-    logger.info(f"READ | {network}/{station_raw} â†’ {json_path.name}")
+    logger.info(f"READ | {network}/{station_raw} → {json_path.name}")
 
     parser = NETWORK_PARSERS.get(network)
     if parser is None:
@@ -287,7 +282,7 @@ def read_station_json(json_path: Path) -> Optional[pd.DataFrame]:
         n_unreasonable = unreasonable_mask.sum()
         if n_unreasonable > 0:
             df.loc[unreasonable_mask, "value"] = np.nan
-            logger.info(f"QC | {network}/{station_raw} â†’ {n_unreasonable} values set to NaN ( <0 or >600 cm )")
+            logger.info(f"QC | {network}/{station_raw} → {n_unreasonable} values set to NaN ( <0 or >600 cm )")
 
         df = ensure_utc(df, network)
 
@@ -304,7 +299,7 @@ def read_station_json(json_path: Path) -> Optional[pd.DataFrame]:
 
         df = df.dropna(subset=["timestamp"]).sort_values("timestamp").drop_duplicates(subset="timestamp", keep="first")
         valid = df["value"].notna().sum()
-        logger.info(f"READ OK | {network}/{station_raw} â†’ {len(df):,} rows ({valid} valid)")
+        logger.info(f"READ OK | {network}/{station_raw} → {len(df):,} rows ({valid} valid)")
         return df
 
     except Exception as e:
@@ -339,7 +334,7 @@ def save_cleaned(df: pd.DataFrame, station_folder: Path, variable: str):
 
 def process_station(json_path: Path) -> Dict:
     station = json_path.parent.name.strip()
-    network = json_path.parent.parent.name.strip()
+    network = canonical_network_name(json_path.parent.parent.name.strip())
     logger.info(f"Processing {network}/{station}")
 
     stats = {
@@ -374,7 +369,7 @@ def process_station(json_path: Path) -> Dict:
 
     if exact_only or (stats["full_coverage_pct"] >= COVERAGE_THRESHOLD):
         stats["accepted_full"] = True
-        save_cleaned(df_full, FULL_DIR / f"{safe_station}_full_2020_2025", "full")
+        save_cleaned(df_full, FULL_DIR / safe_station, "snow")
     else:
         stats["rejected_reasons"].append(f"full coverage {stats['full_coverage_pct']:.1f}% < {COVERAGE_THRESHOLD}%")
 
@@ -419,11 +414,7 @@ def main():
     logger.info(f"=== {VARIABLE} PIPELINE START (strict exact regrid, 30% threshold) ===")
     logger.info(f"Input: {ROOT} | Output Data folder: {AAAData}")
 
-    json_files = []
-    for net in NETWORK_PARSERS.keys():
-        net_dir = ROOT / net
-        if net_dir.exists():
-            json_files.extend(list(net_dir.rglob("*.json")))
+    json_files = list_network_jsons(ROOT, list(NETWORK_PARSERS.keys()))
 
     seen, unique_files = {}, []
     for jf in json_files:
@@ -443,7 +434,7 @@ def main():
         results = pool.map(process_station, unique_files)
 
     save_statistics(results)
-    accepted = sum(r.get("accepted", False) for r in results)
+    accepted = sum(bool(r.get("accepted_full", r.get("accepted", False))) for r in results)
     logger.info(f"=== {VARIABLE} PIPELINE FINISHED | Accepted: {accepted}/{len(results)} ===")
     logger.info(f"Log: {LOG_FILE}")
 

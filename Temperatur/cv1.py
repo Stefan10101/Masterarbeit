@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Temperature Final Cleaner (Parallel) - v1.2 - PIPELINE v3 ADAPTED
@@ -17,27 +17,22 @@ import re
 import multiprocessing as mp
 
 from pathlib import Path
+import sys
 
-# ===============================================
-# PATHS UPDATED TO RELATIVE (Daten root)
-# ===============================================
-SCRIPT = Path(__file__).resolve()
+CODE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CODE_DIR))
+from paths import DATA_ROOT
+from shared.ingest_paths import pipeline_output_dirs, variable_source_dir
+from shared.qc_grid import interpolate_micro_gaps_keep_index, reindex_full_30min
 
-PROJECT_ROOT = SCRIPT
-while PROJECT_ROOT.name != "Daten":
-    PROJECT_ROOT = PROJECT_ROOT.parent
-
-DATA_ROOT = PROJECT_ROOT
-
+_DIRS = pipeline_output_dirs("Temperatur")
+INPUT_FULL_DIR = _DIRS["full"]
+PAKET_ROOT = _DIRS["root"]
+OUTPUT_QC_DIR = _DIRS["qc"]
 
 # ==================== CONFIG (adapted for pipeline v3) ====================
 
 VARIABLE_SUFFIX = "_temp"
-
-INPUT_FULL_DIR = Path(DATA_ROOT / "temperatur" / "data" / "data" / "full_2020-2025")
-PAKET_ROOT     = Path(DATA_ROOT / "temperatur" / "paket")
-OUTPUT_QC_DIR  = PAKET_ROOT / "full_2020_2025_qc"
-OUTPUT_QC_DIR.mkdir(parents=True, exist_ok=True)
 
 FREQ_MINUTES      = 30
 STEPS_PER_HOUR    = 60 // FREQ_MINUTES
@@ -60,7 +55,9 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 # COORDINATE SWAP FIX (kept 100% unchanged - update path if report moved)
-SWAP_REPORT_PATH = Path(DATA_ROOT / "temperatur" / "coordinate_swap_report.csv")
+SWAP_REPORT_PATH = variable_source_dir("Temperatur") / "coordinate_swap_report.csv"
+if not SWAP_REPORT_PATH.exists():
+    SWAP_REPORT_PATH = _DIRS["root"] / "coordinate_swap_report.csv"
 
 def load_swapped_coordinates():
     if not SWAP_REPORT_PATH.exists():
@@ -172,7 +169,7 @@ def apply_temperature_qc(df: pd.DataFrame, logger=None, station_name: str = "") 
             return df
 
     df.index = pd.to_datetime(df.index, utc=True).sort_values()
-    df = df.dropna(subset=["value"])
+    df = df.sort_index()
     if df.empty:
         return df.reset_index() if isinstance(df.index, pd.DatetimeIndex) else df
 
@@ -223,8 +220,8 @@ def apply_temperature_qc(df: pd.DataFrame, logger=None, station_name: str = "") 
 
     # === MICRO-GAP INTERPOLATION (after all QC) ===
     if len(df) > 0:
-        df, n_gaps, n_pts = interpolate_micro_gaps(df, max_gap_hours=2.0, col="value",
-                                                   logger=logger, station_name=station_name)
+        df, n_pts = interpolate_micro_gaps_keep_index(df, max_gap_hours=2.0, col="value")
+        n_gaps = int(n_pts > 0)
         if n_pts > 0 and logger:
             logger.info(f"  [{station_name}] Micro-gap interpolation: {n_gaps} gaps filled, {n_pts} points interpolated (<=2h)")
 
@@ -256,9 +253,8 @@ def process_one_station(args):
     try:
         df = pd.read_parquet(pq_path)
 
-        # === COLUMN NORMALIZATION for pipeline v3 ("height" -> "hoehe") ===
-        if "height" in df.columns:
-            df = df.rename(columns={"height": "hoehe"})
+        if "hoehe" in df.columns and "height" not in df.columns:
+            df = df.rename(columns={"hoehe": "height"})
 
         station = df["station"].iloc[0] if "station" in df.columns else pq_path.stem.split("_")[0]
 
@@ -270,8 +266,8 @@ def process_one_station(args):
                 if (abs(current_lat - orig_lat) < 0.0005 and abs(current_lon - orig_lon) < 0.0005):
                     df["lat"] = orig_lon
                     df["lon"] = orig_lat
-                    logger.info(f"  â†’ Swapped coordinates for station (detected by coords): "
-                                f"{current_lat:.4f}, {current_lon:.4f} â†’ {orig_lon:.4f}, {orig_lat:.4f}")
+                    logger.info(f"  → Swapped coordinates for station (detected by coords): "
+                                f"{current_lat:.4f}, {current_lon:.4f} → {orig_lon:.4f}, {orig_lat:.4f}")
                     break
 
         df_clean = apply_temperature_qc(df, logger=logger, station_name=station)

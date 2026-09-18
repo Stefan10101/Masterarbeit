@@ -16,33 +16,28 @@ import re
 from typing import Optional, Dict, List, Callable
 
 from pathlib import Path
+import sys
 
-# ===============================================
-# PATHS UPDATED TO RELATIVE (Daten root)
-# ===============================================
-SCRIPT = Path(__file__).resolve()
-
-PROJECT_ROOT = SCRIPT
-while PROJECT_ROOT.name != "Daten":
-    PROJECT_ROOT = PROJECT_ROOT.parent
-
-DATA_ROOT = PROJECT_ROOT
-
+CODE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CODE_DIR))
+from shared.ingest_paths import (
+    variable_source_dir,
+    pipeline_output_dirs,
+    list_network_jsons,
+    canonical_network_name,
+)
+from paths import DATA_ROOT
 
 # ==================== CONFIG ====================
 VARIABLE = "WIND"
 PARAMETER = "FF"
-ROOT = Path(DATA_ROOT / "wind")
-LOG_DIR = Path(DATA_ROOT / "code" / "logs" / "wind")
-
-DATA_ROOT = ROOT / "Data"
-AAAData = DATA_ROOT / "Data"
-FULL_DIR = AAAData / "Full_2020-2025"
-REJECTED_DIR = AAAData / "rejected_stations"
-STATS_DIR = AAAData / "Statistics"
-
-for d in [FULL_DIR, REJECTED_DIR, STATS_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
+ROOT = variable_source_dir("Wind")
+_DIRS = pipeline_output_dirs("Wind")
+AAAData = _DIRS["root"]
+FULL_DIR = _DIRS["full"]
+REJECTED_DIR = _DIRS["rejected"]
+STATS_DIR = _DIRS["stats"]
+LOG_DIR = DATA_ROOT / "Plots" / "logs" / "wind"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 COVERAGE_THRESHOLD = 20.0
@@ -241,7 +236,7 @@ NETWORK_PARSERS: Dict[str, Callable[[Path], Optional[pd.DataFrame]]] = {
 
 def read_station_json(json_path: Path) -> Optional[pd.DataFrame]:
     station_raw = json_path.parent.name.strip()
-    network = json_path.parent.parent.name.strip()
+    network = canonical_network_name(json_path.parent.parent.name.strip())
     safe_name = safe_station_name(station_raw)
 
     logger.info(f"READ | {network}/{station_raw} â†’ {json_path.name}")
@@ -316,7 +311,7 @@ def save_cleaned(df: pd.DataFrame, station_folder: Path, variable: str):
 
 def process_station(json_path: Path) -> Dict:
     station_raw = json_path.parent.name.strip()
-    network = json_path.parent.parent.name.strip()
+    network = canonical_network_name(json_path.parent.parent.name.strip())
     safe_name = safe_station_name(station_raw)
     station_folder = FULL_DIR / safe_name
 
@@ -380,11 +375,7 @@ def main():
     logger.info(f"=== {VARIABLE} PIPELINE START (strict exact regrid, 30% threshold) ===")
     logger.info(f"Input: {ROOT} | Output Data folder: {AAAData}")
 
-    json_files = []
-    for net in NETWORK_PARSERS.keys():
-        net_dir = ROOT / net
-        if net_dir.exists():
-            json_files.extend(list(net_dir.rglob("*.json")))
+    json_files = list_network_jsons(ROOT, list(NETWORK_PARSERS.keys()))
 
     seen, unique_files = {}, []
     for jf in json_files:

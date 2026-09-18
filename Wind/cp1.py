@@ -37,9 +37,9 @@ DATA_ROOT = PROJECT_ROOT
 
 # ==================== CONFIG ====================
 
-ORIGINAL_ROOT = Path(DATA_ROOT / "wind" / "data" / "data" / "full_2020-2025")
-FINAL_ROOT    = Path(DATA_ROOT / "wind" / "paket" / "full_2020_2025_qc")
-PLOT_DIR      = Path(DATA_ROOT / "plots" / "wind")
+ORIGINAL_ROOT = Path(DATA_ROOT / "QC" / "Wind" / "full_2020_2025")
+FINAL_ROOT    = Path(DATA_ROOT / "QC" / "Wind" / "full_2020_2025_qc")
+PLOT_DIR      = Path(DATA_ROOT / "Plots" / "Wind")
 
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 

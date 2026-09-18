@@ -53,7 +53,7 @@ DATA_ROOT = PROJECT_ROOT
 # =============================================================================
 # CONFIGURATION - edit only these paths if needed
 # =============================================================================
-SOURCE_STATIONS_CSV = Path(DATA_ROOT / "kombiniert" / "stations_overview.csv")
+SOURCE_STATIONS_CSV = Path(DATA_ROOT / "QC" / "stations_overview.csv")
 DEM_TAR_GZ = Path(DATA_ROOT / "maps" / "map_source" / "rasters_cop30" / "rasters_cop30.tar.gz")
 
 TARGET_BASE_DIR = Path(DATA_ROOT / "map_station")

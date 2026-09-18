@@ -1,0 +1,22 @@
+# Shared aggregation targets. Column names match the master parquet.
+targets:
+  precipitation:
+    raw_col: precipitation
+    stats: [sum]
+    output_names: [precip_sum]
+  temperature:
+    raw_col: temperature
+    stats: [mean, min, max]
+    output_names: [temp_mean, temp_min, temp_max]
+  wind_speed:
+    raw_col: wind_speed
+    stats: [mean, max]
+    output_names: [wind_mean, wind_max]
+  relative_humidity:
+    raw_col: relative_humidity
+    stats: [mean]
+    output_names: [rh_mean]
+  snow_height:
+    raw_col: snow_height
+    stats: [mean, max, min]
+    output_names: [snow_mean, snow_max, snow_min]

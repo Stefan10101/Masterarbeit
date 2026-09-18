@@ -17,32 +17,30 @@ import re
 import multiprocessing as mp
 
 from pathlib import Path
+import sys
 
-# ===============================================
-# PATHS UPDATED TO RELATIVE (Daten root)
-# ===============================================
-SCRIPT = Path(__file__).resolve()
+CODE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CODE_DIR))
+from shared.ingest_paths import pipeline_output_dirs
+from shared.qc_grid import interpolate_micro_gaps_keep_index, reindex_full_30min
 
-PROJECT_ROOT = SCRIPT
-while PROJECT_ROOT.name != "Daten":
-    PROJECT_ROOT = PROJECT_ROOT.parent
-
-DATA_ROOT = PROJECT_ROOT
-
+_DIRS = pipeline_output_dirs("Luftfeuchte")
+INPUT_FULL_DIR = _DIRS["full"]
+PAKET_ROOT = _DIRS["root"]
+OUTPUT_QC_DIR = _DIRS["qc"]
 
 # ==================== CONFIG (adapted for pipeline v3) ====================
 
 VARIABLE_SUFFIX = "_rh"
 
-INPUT_FULL_DIR = Path(DATA_ROOT / "luftfeuchte" / "data" / "data" / "full_2020-2025")
-PAKET_ROOT     = Path(DATA_ROOT / "luftfeuchte" / "paket")
-OUTPUT_QC_DIR  = PAKET_ROOT / "full_2020_2025_qc"
-OUTPUT_QC_DIR.mkdir(parents=True, exist_ok=True)
-
 STUCK_HOURS      = 8.0
 SATURATION_HOURS = 12.0
 DRY_HOURS        = 18.0
 SPIKE_THRESHOLD  = 25.0
+STUCK_NEIGHBOUR_KM = 25.0
+STUCK_NEIGHBOUR_TOL = 5.0
+
+_RH_META = None  # DataFrame path,lat,lon,station — set in worker init
 
 LOG_FILE = PAKET_ROOT / f"rh_final_cleaner_v1.3_pipeline3_{datetime.now():%Y%m%d_%H%M%S}.log"
 logging.basicConfig(level=logging.INFO,
@@ -111,8 +109,78 @@ def get_station_coords(pq_path):
     try:
         df = pd.read_parquet(pq_path, columns=["lat", "lon"])
         return (round(df["lat"].iloc[0], 4), round(df["lon"].iloc[0], 4))
-    except:
+    except Exception:
         return None
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    r = 6371.0
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    dlat = np.radians(lat2 - lat1)
+    dlon = np.radians(lon2 - lon1)
+    a = np.sin(dlat / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dlon / 2) ** 2
+    return 2 * r * np.arcsin(np.sqrt(a))
+
+
+def _build_rh_meta(files):
+    rows = []
+    for pq in files:
+        try:
+            m = pd.read_parquet(pq, columns=["lat", "lon", "station"])
+            rows.append({
+                "path": pq,
+                "lat": float(m["lat"].iloc[0]),
+                "lon": float(m["lon"].iloc[0]),
+                "station": str(m["station"].iloc[0]) if "station" in m.columns else pq.stem,
+            })
+        except Exception:
+            continue
+    return pd.DataFrame(rows)
+
+
+def _init_rh_worker(meta_df):
+    global _RH_META
+    _RH_META = meta_df
+
+
+def _neighbour_confirms_rh(df, stuck_mask, long_run_ids) -> pd.Series:
+    """True where a nearby station is within STUCK_NEIGHBOUR_TOL over the same run."""
+    keep = pd.Series(False, index=df.index)
+    if _RH_META is None or _RH_META.empty or "lat" not in df.columns:
+        return keep
+    lat0 = df["lat"].iloc[0]
+    lon0 = df["lon"].iloc[0]
+    if pd.isna(lat0) or pd.isna(lon0):
+        return keep
+    dist = _haversine_km(lat0, lon0, _RH_META["lat"].to_numpy(), _RH_META["lon"].to_numpy())
+    neigh = _RH_META.loc[dist <= STUCK_NEIGHBOUR_KM].copy()
+    self_name = str(df["station"].iloc[0]) if "station" in df.columns else ""
+    neigh = neigh[neigh["station"] != self_name]
+    if neigh.empty:
+        return keep
+    series = []
+    for _, row in neigh.iterrows():
+        try:
+            nd = pd.read_parquet(row["path"], columns=["timestamp", "value"])
+            nd["timestamp"] = pd.to_datetime(nd["timestamp"], utc=True)
+            series.append(nd.set_index("timestamp")["value"])
+        except Exception:
+            continue
+    if not series:
+        return keep
+    panel = pd.concat(series, axis=1)
+    for rid in long_run_ids:
+        run_idx = df.index[df["run_id"] == rid]
+        if len(run_idx) == 0:
+            continue
+        own = df.loc[run_idx, "value"]
+        aligned = panel.reindex(run_idx)
+        if aligned.dropna(how="all").empty:
+            continue
+        med_abs = (aligned.sub(own, axis=0)).abs().median()
+        if (med_abs <= STUCK_NEIGHBOUR_TOL).any():
+            keep.loc[run_idx] = True
+    return keep
 
 
 # ==================== UPDATED QC FUNCTION (unchanged logic) ====================
@@ -136,7 +204,7 @@ def apply_final_rh_qc(df: pd.DataFrame, logger=None, station_name: str = "") -> 
             return df
 
     df.index = pd.to_datetime(df.index, utc=True).sort_values()
-    df = df.dropna(subset=["value"])
+    df = df.sort_index()
     if df.empty:
         return df.reset_index() if isinstance(df.index, pd.DatetimeIndex) else df
 
@@ -157,6 +225,9 @@ def apply_final_rh_qc(df: pd.DataFrame, logger=None, station_name: str = "") -> 
     stuck_in_run = (is_small_change == 1) & (run_len >= min_stuck_steps)
     long_run_ids = df.loc[stuck_in_run, "run_id"].unique()
     stuck_mask = df["run_id"].isin(long_run_ids) & df["value"].notna()
+    if stuck_mask.any():
+        keep = _neighbour_confirms_rh(df, stuck_mask, long_run_ids)
+        stuck_mask = stuck_mask & ~keep
     flagged["stuck"] = int(stuck_mask.sum())
     df.loc[stuck_mask, "value"] = np.nan
 
@@ -186,8 +257,8 @@ def apply_final_rh_qc(df: pd.DataFrame, logger=None, station_name: str = "") -> 
 
     # === MICRO-GAP INTERPOLATION (after all QC) ===
     if len(df) > 0:
-        df, n_gaps, n_pts = interpolate_micro_gaps(df, max_gap_hours=2.0, col="value",
-                                                   logger=logger, station_name=station_name)
+        df, n_pts = interpolate_micro_gaps_keep_index(df, max_gap_hours=2.0, col="value")
+        n_gaps = int(n_pts > 0)
         if n_pts > 0 and logger:
             logger.info(f"  [{station_name}] Micro-gap interpolation: {n_gaps} gaps filled, {n_pts} points interpolated (<=2h)")
 
@@ -219,9 +290,8 @@ def process_one_station(args):
     try:
         df = pd.read_parquet(pq_path)
 
-        # === COLUMN NORMALIZATION for pipeline v3 ("height" -> "hoehe") ===
-        if "height" in df.columns:
-            df = df.rename(columns={"height": "hoehe"})
+        if "hoehe" in df.columns and "height" not in df.columns:
+            df = df.rename(columns={"hoehe": "height"})
 
         station = df["station"].iloc[0] if "station" in df.columns else pq_path.stem.split("_")[0]
 
@@ -237,7 +307,7 @@ def process_one_station(args):
         out_path = output_dir / f"{safe_name}{output_suffix}"
 
         if not df_clean.empty:
-            cols = ["timestamp", "value", "is_missing", "station", "name", "hoehe", "lat", "lon", "parameter", "source_file"]
+            cols = ["timestamp", "value", "is_missing", "station", "name", "height", "lat", "lon", "parameter", "source_file"]
             existing = [c for c in cols if c in df_clean.columns]
             df_clean[existing].to_parquet(out_path.with_suffix(".parquet"), compression="snappy", index=False)
 
@@ -293,8 +363,10 @@ def main():
 
     logger.info(f"Processing {len(files_to_process)} unique stations in parallel...")
 
+    meta = _build_rh_meta(files_to_process)
+    logger.info(f"RH neighbour table: {len(meta)} stations, radius={STUCK_NEIGHBOUR_KM} km, tol={STUCK_NEIGHBOUR_TOL} %")
     tasks = [(f, OUTPUT_QC_DIR, "_final_qc") for f in files_to_process]
-    with mp.Pool(mp.cpu_count() - 1) as pool:
+    with mp.Pool(max(1, mp.cpu_count() - 1), initializer=_init_rh_worker, initargs=(meta,)) as pool:
         results = pool.map(process_one_station, tasks)
 
     for r in results:
