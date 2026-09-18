@@ -174,7 +174,7 @@ def build_feature_matrix(
 
         # temperature companion for humidity – align by station_name
         temp_values = None
-        if has_temp and var in ("relative_humidity", "humidity"):
+        if has_temp and var in ("relative_humidity", "humidity", "slr"):
             rh_stations = meta_extra["station_name"].values
             temp_merged = (
                 df_t[["station_name", temp_col]]
@@ -210,7 +210,7 @@ def build_feature_matrix(
             prev_coords=prev_coords if use_lag else None,
         )
         # humidity is the only function that currently uses temp_values
-        if temp_values is not None and var in ("relative_humidity", "humidity"):
+        if temp_values is not None and var in ("relative_humidity", "humidity", "slr"):
             kwargs["temp_values"] = temp_values
 
         feat = feature_func(**kwargs)

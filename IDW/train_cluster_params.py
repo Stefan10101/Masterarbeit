@@ -54,6 +54,9 @@ VAR_TO_COL = {
     "wind_speed": "wind_mean",
     "relative_humidity": "rh_mean",
     "snow_height": "snow_mean",
+    "slr": "slr",
+    "swe": "swe",
+    "snow_density": "snow_density",
 }
 
 

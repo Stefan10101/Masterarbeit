@@ -12,12 +12,14 @@ through paths.py.
 from __future__ import annotations
 
 import argparse
+import importlib.util as _ilu
 import sys
 from pathlib import Path
-import yaml
-import pandas as pd
-import numpy as np
 from typing import List, Optional
+
+import numpy as np
+import pandas as pd
+import yaml
 
 # ---------------------------------------------------------------------------
 # Make the shared package and the project root importable
@@ -68,10 +70,23 @@ def parse_args():
                    help="PCA variance to retain before clustering "
                         "(0 to disable, default 0.95)")
     p.add_argument("--filter", default="all", choices=["all", "day", "night"])
-    p.add_argument("--start-date", type=str, default=None)
-    p.add_argument("--end-date", type=str, default=None)
+    p.add_argument("--start-date", type=str, default=None,
+                   help="Override window start (default = DEV from time_splits.yaml)")
+    p.add_argument("--end-date", type=str, default=None,
+                   help="Override window end (default = DEV from time_splits.yaml)")
+    p.add_argument("--split", default="dev", choices=["train", "dev", "test"],
+                   help="Which time_splits.yaml window to use when dates are omitted")
     p.add_argument("--random-state", type=int, default=42)
     return p.parse_args()
+
+
+def _window_from_splits(split: str) -> tuple[str, str]:
+    spec_path = CODE_DIR / "shared" / "splits" / "splits.py"
+    spec = _ilu.spec_from_file_location("thesis_time_splits", spec_path)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    start, end = mod.load_time_splits()["windows"][split]
+    return str(start.date()), str(end.date())
 
 
 def _time_col_name(resolution: str) -> str:
@@ -231,6 +246,11 @@ def main():
     resolution = args.time_resolution or args.resolution
     if not resolution:
         raise SystemExit("need --resolution or --time-resolution")
+    if not args.start_date or not args.end_date:
+        d0, d1 = _window_from_splits(args.split)
+        args.start_date = args.start_date or d0
+        args.end_date = args.end_date or d1
+        print(f"Using {args.split} window from time_splits.yaml: {args.start_date} → {args.end_date}")
     time_col = _time_col_name(resolution)
 
     print("=" * 78)

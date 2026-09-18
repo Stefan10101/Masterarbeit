@@ -303,12 +303,45 @@ def features_snow_height(
 # Registry
 # ---------------------------------------------------------------------------
 
+def features_slr(
+    values: np.ndarray,
+    elev: np.ndarray,
+    coords: np.ndarray,
+    time: pd.Timestamp,
+    meta_extra: Optional[pd.DataFrame] = None,
+    prev_values: Optional[np.ndarray] = None,
+    prev_elev: Optional[np.ndarray] = None,
+    prev_coords: Optional[np.ndarray] = None,
+    temp_values: Optional[np.ndarray] = None,
+) -> Dict[str, float]:
+    """Event-day SLR field. Callers already drop non-events."""
+    doy = time.dayofyear
+    doy_sin, doy_cos = _cyclic_encode(np.array([doy]), 365.25)
+    feat = {
+        "n_events": float(np.isfinite(values).sum()),
+        "mean": float(np.nanmean(values)),
+        "std": float(np.nanstd(values)),
+        "elev_corr": _safe_corr(values, elev),
+        "spatial_autocorr": _spatial_autocorr(values, coords),
+        "doy_sin": float(doy_sin[0]),
+        "doy_cos": float(doy_cos[0]),
+    }
+    if temp_values is not None and len(temp_values) == len(values):
+        feat["temp_corr"] = _safe_corr(values, temp_values)
+    else:
+        feat["temp_corr"] = np.nan
+    return feat
+
+
 FEATURE_FUNCS = {
     "temperature": features_temperature,
     "precipitation": features_precipitation,
     "wind_speed": features_wind,
     "relative_humidity": features_humidity,
     "snow_height": features_snow_height,
+    "slr": features_slr,
+    "swe": features_snow_height,
+    "snow_density": features_snow_height,
 }
 
 # Any column name that may appear in an aggregated parquet → canonical key
@@ -345,6 +378,9 @@ NAME_MAP = {
     "snow_min": "snow_height",
     "snow_max": "snow_height",
     "SH": "snow_height",
+    "slr": "slr",
+    "swe": "swe",
+    "snow_density": "snow_density",
 }
 
 # Preferred column to use when several candidates exist for the same variable
@@ -354,6 +390,9 @@ PREFERRED_COLUMNS = {
     "wind_speed": ["wind_mean", "wind_speed", "wind"],
     "relative_humidity": ["rh_mean", "relative_humidity", "humidity", "rh"],
     "snow_height": ["snow_mean", "snow_height", "snow"],
+    "slr": ["slr"],
+    "swe": ["swe"],
+    "snow_density": ["snow_density"],
 }
 
 
