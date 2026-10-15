@@ -1,10 +1,8 @@
-﻿import requests
+import requests
 import json
 import time
 import re
 from datetime import datetime
-from pathlib import Path
-
 from pathlib import Path
 
 # ===============================================
@@ -25,13 +23,13 @@ DATA_ROOT = PROJECT_ROOT
 BASE_URL = "https://dataset.api.hub.geosphere.at/v1"
 RESOURCE_ID = "klima-v2-10min"
 
-# Geographic filter: all stations west of 17Â° longitude (western Austria)
-LON_CUTOFF = 13.5
+# Geographic filter: all stations in Austria (no lon cutoff)
+# LON_CUTOFF = None   # previously 13.5 for western Austria only
 
 TEST_LIMIT = None          # Set to e.g. 5 for testing, None for full run
 YEARS = range(2020, 2026)
 
-# --- NEW: central log location ---
+# --- central log location ---
 LOG_DIR = Path(DATA_ROOT / "code" / "logs" / "zamg" / "api")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "zamg_download_log.txt"
@@ -42,17 +40,17 @@ OUTPUT_BASES = {
     "FF": Path(DATA_ROOT / "wind" / "zamg"),             # Wind speed
     "RF": Path(DATA_ROOT / "luftfeuchte" / "zamg"),      # Relative humidity
     "SH": Path(DATA_ROOT / "schneehoehe" / "zamg"),      # Snow height
-    "tl": Path(DATA_ROOT / "temperatur" / "zamg")        # Air temperature (2m) - NEW
+    "tl": Path(DATA_ROOT / "temperatur" / "zamg")        # Air temperature (2m)
 }
 
-# Parameter mapping: API code â†’ filename suffix
+# Parameter mapping: API code → filename suffix
 # TL = Lufttemperatur 2m (air temperature at 2 m height) - confirmed for klima-v2-10min
 PARAMETERS = {
     "RR": "precip",
     "FF": "windspeed",
     "RF": "relative_humidity",
     "SH": "snowheight",
-    "tl": "air_temperature"          # NEW
+    "tl": "air_temperature"
 }
 
 
@@ -66,17 +64,17 @@ def log(msg: str) -> None:
 def sanitize_name(name: str) -> str:
     """Clean station name for folder and filename"""
     name = name.strip()
-    name = re.sub(r'[^a-zA-Z0-9Ã¤Ã¶Ã¼Ã„Ã–ÃœÃŸ -]', '', name)
-    name = (name.replace('Ã¤', 'ae').replace('Ã¶', 'oe').replace('Ã¼', 'ue')
-            .replace('Ã„', 'Ae').replace('Ã–', 'Oe').replace('Ãœ', 'Ue').replace('ÃŸ', 'ss'))
+    name = re.sub(r'[^a-zA-Z0-9äöüÄÖÜß -]', '', name)
+    name = (name.replace('ä', 'ae').replace('ö', 'oe').replace('ü', 'ue')
+            .replace('Ä', 'Ae').replace('Ö', 'Oe').replace('Ü', 'Ue').replace('ß', 'ss'))
     name = re.sub(r'\s+', '_', name)
     return name
 
 
-def get_filtered_station_map() -> dict:
+def get_station_map() -> dict:
     """
-    Fetch station metadata and return only stations west of LON_CUTOFF.
-    Dynamic filtering â†’ no hardcoded ID list needed.
+    Fetch station metadata and return all stations in Austria.
+    No geographic cutoff (dataset is Austria-only).
     """
     url = f"{BASE_URL}/station/historical/{RESOURCE_ID}/metadata"
     log(f"Fetching station metadata...")
@@ -107,9 +105,6 @@ def get_filtered_station_map() -> dict:
         except (ValueError, TypeError):
             continue
 
-        if lon >= LON_CUTOFF:
-            continue
-
         raw_name = s.get("name", f"Station_{sid}")
         clean_name = sanitize_name(raw_name)
 
@@ -122,7 +117,7 @@ def get_filtered_station_map() -> dict:
             "altitude": altitude
         }
 
-    log(f"Found {len(station_map)} matching stations west of {LON_CUTOFF}Â° (western Austria)")
+    log(f"Found {len(station_map)} stations in Austria")
     return station_map
 
 
@@ -137,7 +132,7 @@ def download_variable(station_id: str, station_info: dict, param_code: str) -> b
     output_file = station_folder / f"{clean_name}_{var_name}.json"
 
     if output_file.exists():
-        log(f"Already exists â†’ skipping {clean_name} / {var_name}")
+        log(f"Already exists → skipping {clean_name} / {var_name}")
         return True
 
     url = f"{BASE_URL}/station/historical/{RESOURCE_ID}"
@@ -151,7 +146,7 @@ def download_variable(station_id: str, station_info: dict, param_code: str) -> b
         "end": end
     }
 
-    log(f"Downloading {clean_name} â†’ {var_name} (ID {station_id})")
+    log(f"Downloading {clean_name} → {var_name} (ID {station_id})")
 
     try:
         r = requests.get(url, params=params, timeout=180)
@@ -185,14 +180,14 @@ if __name__ == "__main__":
 
     log("=== Starting ZAMG Geosphere download ===")
     log("Variables: Precipitation (RR), Wind (FF), Relative Humidity (RF), Snow height (SH), Air Temperature (TL)")
-    log("Geographic scope: ALL stations west of 17Â° longitude (western Austria)")
+    log("Geographic scope: ALL stations in Austria")
     log("Logs saved to: " + str(LOG_DIR))
-    log("Station selection is dynamic (lon < 17.0)")
+    log("Station selection is dynamic (full Austria metadata)")
 
-    station_map = get_filtered_station_map()
+    station_map = get_station_map()
 
     if not station_map:
-        log("No stations found â†’ exit")
+        log("No stations found → exit")
     else:
         items = list(station_map.items())
         if TEST_LIMIT is not None:

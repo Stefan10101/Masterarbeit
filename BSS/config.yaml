@@ -8,20 +8,12 @@ paths:
 
 domain:
   preset: "full"
-  custom_bbox: [100000, 275000, 395000, 400000]
+  custom_bbox: [-53065, 211149, 420782, 593933]
   buffer_m: 15000
 
 predefined_bboxes:
-  # Full extent of the available DEM (recommended)
-  full:            [-60000, 200000, 460000, 620000]
-
-  # Major regions (more generous and better aligned)
-  central_alps:    [120000, 260000, 340000, 420000]
-  inn_valley:      [150000, 300000, 290000, 390000]
-  rhine_valley:    [40000,  280000, 130000, 380000]
-  etsch_valley:    [200000, 220000, 300000, 320000]
-  northern_edge:   [80000,  350000, 380000, 480000]
-  alpine_foreland: [80000,  380000, 400000, 500000]
+  # Study domain (lonlat 7.5–13.6 E, 45.8–49.1 N) in EPSG:31287
+  full: [-53065, 211149, 420782, 593933]
 time_resolution: "monthly"
 start_date: "2020-01-01"
 end_date:   "2025-12-31"
