@@ -36,8 +36,10 @@ BASE_URL = "https://public-api.meteofrance.fr/public/DPClim/v1"
 TOKEN_URL = "https://portail-api.meteofrance.fr/token"
 
 CLIENT_AUTH = os.environ.get("METEOFRANCE_CLIENT_AUTH", "")
-if not CLIENT_AUTH:
-    raise RuntimeError("Set METEOFRANCE_CLIENT_AUTH environment variable (Basic auth string from API portal)")
+API_TOKEN = os.environ.get("METEOFRANCE_TOKEN", "")  # direct Bearer token / API key
+
+if not CLIENT_AUTH and not API_TOKEN:
+    raise RuntimeError("Set METEOFRANCE_TOKEN (direct API key) or METEOFRANCE_CLIENT_AUTH")
 
 YEARS = range(2020, 2026)
 STEP = "1h"  # "1h" or "1d"
@@ -66,6 +68,10 @@ def log(msg: str) -> None:
 
 
 def get_token() -> str:
+    if API_TOKEN:
+        return API_TOKEN
+    if not CLIENT_AUTH:
+        raise RuntimeError("No METEOFRANCE_TOKEN or METEOFRANCE_CLIENT_AUTH set")
     headers = {"Authorization": f"Basic {CLIENT_AUTH}"}
     data = {"grant_type": "client_credentials"}
     r = requests.post(TOKEN_URL, headers=headers, data=data, timeout=30)
@@ -77,9 +83,18 @@ def list_stations(token: str, dept: str, step: str = "1h") -> list:
     freq = {"6m": "infrahoraire-6m", "1h": "horaire", "1d": "quotidienne"}[step]
     url = f"{BASE_URL}/liste-stations/{freq}"
     params = {"id-departement": dept}
-    headers = {"Authorization": f"Bearer {token}"}
-    r = requests.get(url, params=params, headers=headers, timeout=60)
-    r.raise_for_status()
+    # try both common auth styles
+    for headers in (
+        {"Authorization": f"Bearer {token}"},
+        {"apikey": token, "Authorization": f"Bearer {token}"},
+        {"Authorization": token},
+    ):
+        r = requests.get(url, params=params, headers=headers, timeout=60)
+        if r.status_code == 200:
+            break
+    if r.status_code != 200:
+        log(f"list_stations {dept} failed {r.status_code}: {r.text[:300]}")
+        r.raise_for_status()
     data = r.json()
     # API can return a list directly, or a dict wrapping the list
     if isinstance(data, list):
@@ -106,6 +121,9 @@ def get_station_info(token: str, station_id: str) -> dict:
 def order_and_download(token: str, station_id: str, step: str, date_deb: str, date_fin: str, out_path: Path) -> bool:
     if out_path.exists():
         return True
+    fail_marker = out_path.with_suffix(".fail")
+    if fail_marker.exists():
+        return False  # already known to fail; skip
     freq_map = {"6m": "infrahoraire-6m", "1h": "horaire", "1d": "quotidienne"}
     freq = freq_map[step]
     order_url = f"{BASE_URL}/commande-station/{freq}"
@@ -115,20 +133,32 @@ def order_and_download(token: str, station_id: str, step: str, date_deb: str, da
         "date-fin-periode": date_fin,
     }
     headers = {"Authorization": f"Bearer {token}"}
-    r = requests.get(order_url, params=params, headers=headers, timeout=60)
+    try:
+        r = requests.get(order_url, params=params, headers=headers, timeout=60)
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+        log(f"Order request failed {station_id}: {type(e).__name__}")
+        return False
     if r.status_code != 202:
         log(f"Order failed {station_id}: {r.status_code} {r.text[:200]}")
+        # permanent-looking failures: mark so we don't retry forever
+        if r.status_code in (400, 404):
+            fail_marker.touch()
         return False
     order_id = r.json().get("elaboreProduitAvecDemandeResponse", {}).get("return")
     if not order_id:
         log(f"No order id for {station_id}")
+        fail_marker.touch()
         return False
 
     # poll for file
     dl_url = f"{BASE_URL}/commande/fichier"
-    for _ in range(60):  # ~5 min max
+    for attempt in range(60):  # ~5 min max
         time.sleep(5)
-        dr = requests.get(dl_url, params={"id-cmde": order_id}, headers=headers, timeout=120, stream=True)
+        try:
+            dr = requests.get(dl_url, params={"id-cmde": order_id}, headers=headers, timeout=60, stream=True)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            log(f"Poll timeout/conn error {station_id} attempt {attempt}: {type(e).__name__}")
+            continue
         if dr.status_code == 201:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             with open(out_path, "wb") as f:
@@ -137,6 +167,8 @@ def order_and_download(token: str, station_id: str, step: str, date_deb: str, da
             return True
         elif dr.status_code >= 400:
             log(f"Download poll failed {station_id}: {dr.status_code}")
+            if dr.status_code in (400, 404):
+                fail_marker.touch()
             return False
     log(f"Timeout waiting for {station_id}")
     return False
@@ -212,16 +244,40 @@ def main():
                 json.dump(info, f, ensure_ascii=False, indent=2)
 
         year_ok = 0
+        fail_count = 0
         for year in YEARS:
             out_csv = RAW_DIR / f"{sid}_{STEP}_{year}.csv"
+            fail_marker = out_csv.with_suffix(".fail")
             if out_csv.exists():
                 year_ok += 1
+                continue
+            if fail_marker.exists():
+                fail_count += 1
+                if fail_count >= 3:
+                    log(f"Skipping rest of {sid}: already {fail_count} failures")
+                    break
                 continue
             date_deb = f"{year}-01-01T00:00:00Z"
             date_fin = f"{year}-12-31T23:59:59Z"
             log(f"Processing {info['name']} ({sid}) year {year}")
-            if order_and_download(token, sid, STEP, date_deb, date_fin, out_csv):
-                year_ok += 1
+            try:
+                ok = order_and_download(token, sid, STEP, date_deb, date_fin, out_csv)
+                if ok:
+                    year_ok += 1
+                elif fail_marker.exists():
+                    fail_count += 1
+                    if fail_count >= 3:
+                        log(f"Skipping rest of {sid}: {fail_count} failures")
+                        # mark remaining years as fail so they are skipped next run
+                        for y2 in YEARS:
+                            if y2 <= year:
+                                continue
+                            m2 = (RAW_DIR / f"{sid}_{STEP}_{y2}.csv").with_suffix(".fail")
+                            if not (RAW_DIR / f"{sid}_{STEP}_{y2}.csv").exists():
+                                m2.touch()
+                        break
+            except Exception as e:
+                log(f"Unexpected error {sid} {year}: {e}")
             time.sleep(1)
 
         if year_ok == len(YEARS):

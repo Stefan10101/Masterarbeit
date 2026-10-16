@@ -78,7 +78,7 @@ DEFAULT_DURATION = "3 days"
 # ==================== DATA ====================
 @lru_cache(maxsize=1)
 def load_metadata():
-    path = DATA_DIR / "stations_overview.csv"
+    path = DATA_DIR / "C:\Users\stefa\Documents\UNI\Master\Masterarbeit\Daten\QC\stations_overview.csv"
     if not path.exists():
         raise FileNotFoundError(f"stations_overview.csv not found in {DATA_DIR}")
     df = pd.read_csv(path)

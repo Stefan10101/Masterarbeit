@@ -1,6 +1,6 @@
 ﻿#!/usr/bin/env python3
-""DATA_ROOT / "
-meteosuisse unified extractor - precipitation + relative humidity + snow height + temperature + wind speed
+"""
+MeteoSuisse unified extractor - precipitation + relative humidity + snow height + temperature + wind speed
 
 objective
 ---------
@@ -8,23 +8,23 @@ extract 10-minute data for multiple variables from meteosuisse json station file
 (2020-2025) and write clean, compact json files per station and variable.
 
 variables extracted:
-- rre150z0  â†’ niederschlag (precipitation)
-- ure200s0  â†’ relative luftfeuchtigkeit (relative humidity)
-- htoauts0  â†’ schneehÃ¶he (snow height)
-- tre200s0  â†’ lufttemperatur 2m (air temperature)
-- fkl010z0  â†’ windgeschwindigkeit skalar (mean wind speed)   â† new
+- rre150z0  -> niederschlag (precipitation)
+- ure200s0  -> relative luftfeuchtigkeit (relative humidity)
+- htoauts0  -> schneehoehe (snow height)
+- tre200s0  -> lufttemperatur 2m (air temperature)
+- fkl010z0  -> windgeschwindigkeit skalar (mean wind speed)
 
-all meteosuisse data is already in utc â†’ no timezone conversion required.
+all meteosuisse data is already in utc -> no timezone conversion required.
 
 logs are written to:
-  " / "code" / "logs" / "meteosuisse" / "extract
+  DATA_ROOT / "code" / "logs" / "meteosuisse" / "extract"
 
 wind output:
-  " / "wind" / "meteosuisse
+  DATA_ROOT / "wind" / "meteosuisse"
 
 design principles:
 - efficient parallel processing (threadpoolexecutor)
-- idempotent " / " resumable (skips files that already exist)
+- idempotent / resumable (skips files that already exist)
 - clean, compact json output
 - proper logging (file + console)
 - easy to extend with new variables
@@ -97,17 +97,33 @@ VARIABLES = {
 }
 
 # =============================================================================
-# LOAD STATION METADATA (pre-filtered east of 8Â°E)
+# LOAD STATION METADATA (all Switzerland)
 # =============================================================================
-meta_json_path = INPUT_DIR / "stations_east_of_8deg_metadata.json"
+meta_json_path = INPUT_DIR / "stations_metadata.json"
 with open(meta_json_path, "r", encoding="utf-8") as f:
     station_meta_list = json.load(f)
 
-logging.info(f"Loaded {len(station_meta_list)} stations (east of 8Â°E)")
+logging.info(f"Loaded {len(station_meta_list)} stations (all Switzerland)")
 
 # =============================================================================
 # CORE WORKER FUNCTION
 # =============================================================================
+def load_station_json(json_file: Path) -> dict:
+    """Load a station JSON. Accepts bare NaN/Infinity (legacy dumps) by rewriting them to null."""
+    with open(json_file, "r", encoding="utf-8") as f:
+        text = f.read()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Legacy files may contain bare NaN / Infinity from pandas
+        cleaned = (
+            text.replace(":NaN", ":null")
+            .replace(":Infinity", ":null")
+            .replace(":-Infinity", ":null")
+        )
+        return json.loads(cleaned)
+
+
 def process_station_file(json_file: Path):
     """
     Process one station's 10-min JSON file.
@@ -115,8 +131,7 @@ def process_station_file(json_file: Path):
     Returns (station_name, list_of_(variable_name, record_count))
     """
     try:
-        with open(json_file, "r", encoding="utf-8") as f:
-            full_data = json.load(f)
+        full_data = load_station_json(json_file)
 
         meta = full_data["station_metadata"]
         station_abbr = meta["station_abbr"].lower()
@@ -127,7 +142,7 @@ def process_station_file(json_file: Path):
 
         if time_col not in df.columns:
             logging.warning(f"{station_name}: No '{time_col}' column found")
-            return station_name, []
+            return station_name, [], None
 
         df["time_dt"] = pd.to_datetime(df[time_col], format="%d.%m.%Y %H:%M", errors="coerce")
 
@@ -172,11 +187,11 @@ def process_station_file(json_file: Path):
 
             results.append((var_info['name'], len(output["data"])))
 
-        return station_name, results
+        return station_name, results, None
 
     except Exception as e:
         logging.error(f"Failed to process {json_file.name}: {e}")
-        return None, []
+        return None, [], json_file.name
 
 
 # =============================================================================
@@ -191,18 +206,26 @@ def main():
     logging.info(f"Found {len(json_files)} station files to process")
 
     start_time = time.time()
+    failed = []
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(process_station_file, f): f for f in json_files}
 
         for future in tqdm(as_completed(futures), total=len(futures), desc="Processing stations", unit="station"):
-            station_name, var_results = future.result()
+            station_name, var_results, bad_file = future.result()
+            if bad_file:
+                failed.append(bad_file)
             if var_results:
                 for var_name, n_records in var_results:
-                    logging.info(f"âœ“ {station_name} â†’ {var_name}: {n_records:,} records")
+                    logging.info(f"✓ {station_name} → {var_name}: {n_records:,} records")
 
     duration = time.time() - start_time
     logging.info(f"=== DONE in {duration/60:.1f} minutes ===")
+    if failed:
+        logging.warning(f"{len(failed)} station files failed (truncated or invalid JSON).")
+        logging.warning("Delete those files and re-run meteoSuisseAPI.py, then re-run this extractor.")
+        for name in sorted(failed):
+            logging.warning(f"  {name}")
     logging.info(f"Full log written to: {LOG_FILE}")
 
 

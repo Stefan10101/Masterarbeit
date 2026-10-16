@@ -25,7 +25,6 @@ DATA_ROOT = PROJECT_ROOT
 INPUT_DIR = Path(DATA_ROOT / "meteosuisse" / "tutti")
 OUTPUT_BASE = Path(DATA_ROOT / "temperatur")
 
-MIN_LON = 8.0
 MAX_WORKERS = 12
 TARGET_TIME_START = "2020-01-01"
 TARGET_TIME_END   = "2025-12-31"
@@ -33,13 +32,13 @@ TARGET_TIME_END   = "2025-12-31"
 OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
 
 # =============================================
-# STEP 1: Load filtered station metadata
+# STEP 1: Load station metadata (all Switzerland)
 # =============================================
-meta_json_path = INPUT_DIR / "stations_east_of_8deg_metadata.json"
+meta_json_path = INPUT_DIR / "stations_metadata.json"
 with open(meta_json_path, "r", encoding="utf-8") as f:
     station_meta_list = json.load(f)
 
-print(f"Loaded {len(station_meta_list)} stations east of {MIN_LON}Â° E")
+print(f"Loaded {len(station_meta_list)} stations (all Switzerland)")
 
 # Fast lookup: station_abbr (lowercase) -> metadata
 meta_dict = {m["station_abbr"].lower(): m for m in station_meta_list}

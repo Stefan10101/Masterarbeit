@@ -8,15 +8,14 @@ paths:
   aggregated_from: "RFSI"
   stations_from: "RFSI"
   grids_from: "RFSI"
-
 domain:
   preset: "full"
-  custom_bbox: [-53065, 211149, 420782, 593933]
+  custom_bbox: [-76229, 123066, 637216, 501366]
   buffer_m: 15000
 
 predefined_bboxes:
-  # Study domain (lonlat 7.5–13.6 E, 45.8–49.1 N) in EPSG:31287
-  full: [-53065, 211149, 420782, 593933]
+  # Alpine Convention perimeter in EPSG:31287 (from process_new_dem.py run)
+  full: [-76229, 123066, 637216, 501366]
 
 time_resolution: "monthly"
 start_date: "2020-01-01"
