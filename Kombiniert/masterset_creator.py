@@ -54,8 +54,10 @@ MAX_PROVIDER_MATCH_M = 100.0
 # --- Provider lookup from raw data tree (more complete than Stationen/ folder) ---
 RAW_VARIABLE_FOLDERS = ["Luftfeuchte", "Wind", "Niederschlag", "Schneehoehe", "Temperatur"]
 
-VALID_PROVIDER_FOLDERS = {"DWD", "HydroT", "HydroVO", "LWD", "Meteosuisse", "Suedtirol", "Zamg", "ZAMG"}
-
+VALID_PROVIDER_FOLDERS = {
+    "DWD", "HydroT", "HydroVO", "LWD", "Meteosuisse", "Suedtirol",
+    "zamg", "ZAMG", "ARSO", "MeteoFrance",
+}
 PROVIDER_MAP = {
     "DWD": "DWD",
     "HydroT": "HYDRO_TIROL",
@@ -63,8 +65,10 @@ PROVIDER_MAP = {
     "LWD": "LWD",
     "Meteosuisse": "MeteoSuisse",
     "Suedtirol": "Suedtirol",
-    "Zamg": "ZAMG",
+    "zamg": "ZAMG",
     "ZAMG": "ZAMG",
+    "ARSO": "ARSO",
+    "MeteoFrance": "MeteoFrance",
 }
 
 # Fallback (old central lists) - kept for compatibility but usually less complete

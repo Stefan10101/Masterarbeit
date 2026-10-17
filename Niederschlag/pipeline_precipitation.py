@@ -227,12 +227,30 @@ def parse_suedtirol(path: Path) -> Optional[pd.DataFrame]:
     df["lon"] = pd.to_numeric(data.get("longitude"), errors="coerce")
     return df
 
+def parse_meteofrance(path: Path) -> Optional[pd.DataFrame]:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    df = pd.DataFrame(data.get("data", []))
+    if df.empty:
+        return None
+    df["timestamp"] = pd.to_datetime(df["time"], errors="coerce")
+    meta = data.get("station_metadata", {})
+    df["name"] = meta.get("name")
+    df["height"] = pd.to_numeric(meta.get("altitude"), errors="coerce")
+    df["lat"] = pd.to_numeric(meta.get("lat"), errors="coerce")
+    df["lon"] = pd.to_numeric(meta.get("lon"), errors="coerce")
+    return df
 NETWORK_PARSERS: Dict[str, Callable[[Path], Optional[pd.DataFrame]]] = {
-    "DWD": parse_dwd, "ZAMG": parse_zamg, "Meteosuisse": parse_meteosuisse,
-    "LWD": parse_lwd, "HydroT": parse_hydro_generic, "HydroVO": parse_hydro_generic,
+    "DWD": parse_dwd,
+    "ZAMG": parse_zamg,
+    "Meteosuisse": parse_meteosuisse,
+    "LWD": parse_lwd,
+    "ARSO": parse_lwd,          # same layout as LWD
+    "HydroT": parse_hydro_generic,
+    "HydroVO": parse_hydro_generic,
     "Suedtirol": parse_suedtirol,
+    "MeteoFrance": parse_meteofrance,
 }
-
 # ==================== READ + LIGHT QC (Precipitation specific) ====================
 
 def read_station_json(json_path: Path) -> Optional[pd.DataFrame]:

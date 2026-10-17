@@ -25,11 +25,12 @@ NETWORK_ALIASES = {
     "zamg": "ZAMG",
     "meteosuisse": "Meteosuisse",
     "lwd": "LWD",
+    "arso": "ARSO",
     "hydrot": "HydroT",
     "hydrovo": "HydroVO",
     "suedtirol": "Suedtirol",
+    "meteofrance": "MeteoFrance",
 }
-
 
 def _first_existing(*candidates: Path) -> Path:
     for p in candidates:
