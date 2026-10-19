@@ -40,8 +40,8 @@ HARD_MIN          = 0.0
 HARD_MAX          = 100.0
 
 SPIKE_THRESHOLD   = 18.0
-STUCK_HOURS       = 48.0
-STUCK_TOL         = 0.3
+STUCK_HOURS       = 72.0
+STUCK_TOL         = 1.0
 ICING_HOURS       = 8.0
 ICING_STD_MAX     = 1.0
 
@@ -192,7 +192,14 @@ def apply_wind_qc(df: pd.DataFrame, logger=None, station_name: str = "") -> pd.D
     df.loc[hard_mask, "value"] = np.nan
 
     # === STEP 3: Climatological soft limits â€” per elevation band ===
-    hoehe = float(df["hoehe"].iloc[0]) if "hoehe" in df.columns else np.nan
+        # Step 3: Climatological limits per elevation band
+    if "hoehe" in df.columns:
+        hoehe = float(df["hoehe"].iloc[0])
+    elif "height" in df.columns:
+        hoehe = float(df["height"].iloc[0])
+    else:
+        hoehe = np.nan
+    band = get_elev_band(hoehe)
     band = get_elev_band(hoehe)
     soft_max = BAND_SOFT_MAX[band]
     clim_mask = (df["value"] > soft_max) & df["value"].notna()

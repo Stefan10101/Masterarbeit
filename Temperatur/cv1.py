@@ -193,14 +193,19 @@ def apply_temperature_qc(df: pd.DataFrame, logger=None, station_name: str = "") 
     df.loc[hard_mask, "value"] = np.nan
 
     # Step 3: Climatological limits per elevation band
-    hoehe = float(df["hoehe"].iloc[0]) if "hoehe" in df.columns else np.nan
+    if "hoehe" in df.columns:
+        hoehe = float(df["hoehe"].iloc[0])
+    elif "height" in df.columns:
+        hoehe = float(df["height"].iloc[0])
+    else:
+        hoehe = np.nan
     band = get_elev_band(hoehe)
     soft_max = BAND_SOFT_MAX[band]
     soft_min = BAND_SOFT_MIN[band]
     clim_mask = ((df["value"] > soft_max) | (df["value"] < soft_min)) & df["value"].notna()
     flagged["clim"] = int(clim_mask.sum())
     df.loc[clim_mask, "value"] = np.nan
-
+    
     # Step 4: Spike
     df["diff"] = df["value"].diff().abs()
     spike_mask = (df["diff"] > SPIKE_THRESHOLD) & df["value"].notna()
