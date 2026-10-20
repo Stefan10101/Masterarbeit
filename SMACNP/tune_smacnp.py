@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""Train Localized SMACNP for one variable (daily first).
+
+Loads panel, computes features, splits held-out stations and random days,
+fits PaperScaler on the training pool, trains with on-the-grid context
+sampling, early-stops on validation days, and saves the checkpoint.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+import argparse
+
+import numpy as np
+import torch
+import torch.nn as nn
+
+CODE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CODE_DIR))
+
+from smacnp_data import (
+    load_config,
+    load_panel,
+    compute_dem_features,
+    feature_columns,
+    PaperScaler,
+    FeatureScaler,
+    split_held_out,
+    split_days_random,
+    prepare_day_tensors,
+)
+from smacnp_core import SMACNP, gaussian_nll, two_step_loss
+from paths import get_smacnp_model_path
+
+
+def set_seed(seed: int):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def get_device(cfg: dict) -> torch.device:
+    dev = cfg["smacnp"].get("device", "auto")
+    if dev == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(dev)
+
+
+def build_model(cfg: dict, n_features: int, two_step: bool) -> SMACNP:
+    s = cfg["smacnp"]
+    spatial_dim = 2
+    attr_dim = n_features - spatial_dim
+    return SMACNP(
+        input_dim=n_features,
+        spatial_dim=spatial_dim,
+        attr_dim=attr_dim,
+        y_dim=1,
+        two_step=two_step,
+        r_dim=s["r_dim"],
+        w_dim=s["w_dim"],
+        v_dim=s["v_dim"],
+        hidden_size=s["hidden_size"],
+        num_layers_mlp=s["num_layers_mlp"],
+        num_heads=s["num_heads"],
+        dropout_rate=s["dropout_rate"],
+        k_localized=s["k_localized"],
+        use_positional_encoding=s["use_positional_encoding"],
+        pe_dim=s["pe_dim"],
+        use_layer_norm=s["use_layer_norm"],
+        variance_floor=s["variance_floor"],
+    )
+
+
+def precompute_days(days, df, feature_cols, scaler, train_stations, cfg):
+    """Build all day tensors once. Avoids pandas slicing inside the epoch loop."""
+    rng = np.random.default_rng(cfg["smacnp"]["seed"])
+    on_grid = cfg["smacnp"]["on_grid_training"]
+    ctx_frac = cfg["smacnp"]["context_fraction"]
+    grouped = {t: g for t, g in df.groupby("time", sort=False)}
+    out = []
+    for day in days:
+        g = grouped.get(day)
+        if g is None:
+            continue
+        tensors = prepare_day_tensors(g, feature_cols, scaler, train_stations, on_grid, ctx_frac, rng)
+        if tensors is not None:
+            out.append(tensors)
+    return out
+
+
+def run_epoch(model, day_tensors, cfg, device, optimizer=None):
+    """One pass over precomputed day tensors."""
+    model.train(optimizer is not None)
+    total_loss = 0.0
+    n = 0
+    two_step = model.two_step
+    use_amp = bool(cfg["smacnp"].get("use_amp", False)) and device.type == "cuda"
+    scaler_amp = torch.amp.GradScaler("cuda", enabled=use_amp)
+
+    for tensors in day_tensors:
+        x_ctx = torch.from_numpy(tensors["x_context"]).unsqueeze(0).to(device, non_blocking=True)
+        y_ctx = torch.from_numpy(tensors["y_context"]).unsqueeze(0).to(device, non_blocking=True)
+        x_tgt = torch.from_numpy(tensors["x_target"]).unsqueeze(0).to(device, non_blocking=True)
+        y_tgt = torch.from_numpy(tensors["y_target"]).unsqueeze(0).to(device, non_blocking=True)
+
+        if optimizer is not None:
+            optimizer.zero_grad(set_to_none=True)
+        with torch.amp.autocast("cuda", enabled=use_amp):
+            pred = model(x_ctx, y_ctx, x_tgt)
+            if two_step:
+                loss = two_step_loss(pred, y_tgt)
+            else:
+                loss = gaussian_nll(pred["mu"], pred["variance"], y_tgt)
+        if not torch.isfinite(loss):
+            if optimizer is not None:
+                optimizer.zero_grad(set_to_none=True)
+            continue
+        if optimizer is not None:
+            scaler_amp.scale(loss).backward()
+            scaler_amp.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(model.parameters(), float(cfg["smacnp"]["clip_grad_norm"]))
+            scaler_amp.step(optimizer)
+            scaler_amp.update()
+        total_loss += loss.item()
+        n += 1
+    return total_loss / max(n, 1)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--variable", default="temp_mean")
+    parser.add_argument("--time-resolution", default=None)
+    args = parser.parse_args()
+
+    cfg = load_config()
+    if args.time_resolution:
+        cfg["time_resolution"] = args.time_resolution
+    var = args.variable
+    two_step = var in cfg["smacnp"].get("two_step_vars", [])
+    set_seed(cfg["smacnp"]["seed"])
+    device = get_device(cfg)
+    print(f"device={device}  variable={var}  two_step={two_step}  time_res={cfg['time_resolution']}")
+
+    print("Loading panel...")
+    df = load_panel(cfg, var)
+    if var not in df.columns:
+        raise KeyError(f"column {var} not in panel")
+    df = df.rename(columns={var: "value"})
+    print(f"panel rows={len(df)}  stations={df['station_name'].nunique()}")
+
+    print("Computing features...")
+    # Features are station-static; compute once and merge
+    stations = df[["station_name", "x", "y"]].drop_duplicates("station_name")
+    if "elev" in df.columns:
+        stations = stations.merge(df[["station_name", "elev"]].drop_duplicates("station_name"), on="station_name", how="left")
+    stations = compute_dem_features(stations, cfg)
+    feat_cols = feature_columns(cfg)
+    df = df.drop(columns=[c for c in feat_cols if c in df.columns and c not in ("x", "y")], errors="ignore")
+    df = df.merge(stations[["station_name"] + [c for c in feat_cols if c not in ("x", "y")]], on="station_name", how="left")
+
+    station_names = df["station_name"].unique()
+    train_stations, held_stations = split_held_out(
+        station_names, cfg["smacnp"]["held_out_fraction"], cfg["smacnp"]["held_out_seed"]
+    )
+    print(f"train stations={len(train_stations)}  held-out={len(held_stations)}")
+
+    # Scalers on training-pool only
+    train_mask = df["station_name"].isin(train_stations)
+    y_scaler = PaperScaler(two_step=two_step).fit(df.loc[train_mask, "value"].to_numpy())
+    feat_scaler = FeatureScaler().fit(df.loc[train_mask], feat_cols)
+    df = feat_scaler.transform(df)
+
+    days = df["time"].unique()
+    train_days, val_days = split_days_random(
+        days, cfg["smacnp"]["train_day_fraction"], cfg["smacnp"]["day_split_seed"]
+    )
+    print(f"train days={len(train_days)}  val days={len(val_days)}")
+    print("Precomputing day tensors...")
+    train_tensors = precompute_days(train_days, df, feat_cols, y_scaler, train_stations, cfg)
+    val_tensors = precompute_days(val_days, df, feat_cols, y_scaler, train_stations, cfg)
+    print(f"train tensors={len(train_tensors)}  val tensors={len(val_tensors)}")
+
+    model = build_model(cfg, len(feat_cols), two_step).to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=float(cfg["smacnp"]["lr"]),
+        weight_decay=float(cfg["smacnp"]["weight_decay"]),
+    )
+
+    best_val = float("inf")
+    patience = 0
+    max_patience = cfg["smacnp"]["early_stopping_patience"]
+    ckpt_path = get_smacnp_model_path(var, cfg["time_resolution"])
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+
+    for epoch in range(cfg["smacnp"]["num_epochs"]):
+        tr_loss = run_epoch(model, train_tensors, cfg, device, optimizer)
+        with torch.no_grad():
+            va_loss = run_epoch(model, val_tensors, cfg, device, None)
+        print(f"epoch {epoch:4d}  train={tr_loss:.4f}  val={va_loss:.4f}")
+        if not np.isfinite(va_loss):
+            print("val loss is not finite, stopping")
+            break
+        if va_loss < best_val - 1e-5:
+            best_val = va_loss
+            patience = 0
+            torch.save(
+                {
+                    "model": model.state_dict(),
+                    "scaler": y_scaler.__dict__,
+                    "feature_scaler": feat_scaler.state_dict(),
+                    "feature_cols": feat_cols,
+                    "two_step": two_step,
+                    "variable": var,
+                    "time_resolution": cfg["time_resolution"],
+                    "cfg": cfg["smacnp"],
+                },
+                ckpt_path,
+            )
+        else:
+            patience += 1
+            if patience >= max_patience:
+                print(f"early stop at epoch {epoch}")
+                break
+
+    print(f"best val={best_val:.4f}  saved to {ckpt_path}")
+
+
+if __name__ == "__main__":
+    main()

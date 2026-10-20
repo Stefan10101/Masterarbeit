@@ -1,10 +1,10 @@
 plotting:
   mode: "config"
   input_nc_folder: ""
-  method: "IDW"
+  method: "SMACNP"
   domain: "full"
-  resolutions: [1000, 500]
-  time_period: "20200101-20251231"
+  resolutions: [1000]
+  time_period: ""
   variables: null
   output_root: null
   dpi: 250
@@ -22,20 +22,21 @@ plotting:
     - snow_min
 
 maps:
-  show_stations: true
-  show_provider_symbols: true
+  show_stations: false
+  show_provider_symbols: false
   show_topo: true
   show_extra_info: true
   dpi: 250
-  n_jobs: -1
+  n_jobs: 1
 
   time_filter:
     step: 1
     months: null
-    weeks: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-    years: [2020. 2021, 2022, 2023, 2024]                    # first 16 weeks of 2020 only
+    weeks: null
+    years: null
     timestamps: null
 
+    
   colormaps:
     temp_mean: "RdBu_r"
     temp_min: "RdBu_r"

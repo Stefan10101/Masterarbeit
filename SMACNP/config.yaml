@@ -1,0 +1,131 @@
+# config.yaml - Spatial Multi-Attention Conditional Neural Process (SMACNP)
+# Localized encoder only. Per-variable models. Daily first; monthly/weekly/hh wired.
+# Features start with DEM-derived: elev, dist_to_coast, signed_dist_to_alpine_ridge.
+# Normalization: paper scheme (min-max [0,1]; log1p+min-max for amount).
+# Training: on-the-grid. LLOCV: fixed held-out stations.
+
+paths:
+  input_root: "Kombiniert"
+  dem: "DEM_Source/COP30_mosaic_EPSG31287.tif"
+  output_root: "SMACNP/Output"
+  aggregated_from: "RFSI"
+  stations_from: "RFSI"
+  grids_from: "RFSI"
+
+domain:
+  preset: "full"
+  custom_bbox: [-76229, 123066, 637216, 501366]
+  buffer_m: 15000
+
+predefined_bboxes:
+  full: [-76229, 123066, 637216, 501366]
+
+time_resolution: "daily"
+start_date: "2020-01-01"
+end_date:   "2025-12-31"
+resolutions_to_process: [1000]
+
+smacnp:
+  variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
+  two_step_vars: ["precip_sum", "snow_mean"]
+  tau_wet: 0.5
+  rh_t_mode: "none"          # none | predicted | observed (later)
+  save_model: true
+  save_llocv: true
+  primary_metric: "rmse"
+
+  # Feature set (configurable).
+  features:
+    elev: true
+    smooth_elev: true           # elevation after spatial smoothing (paper)
+    tpi: true                   # topographic position index (paper)
+    dist_to_coast: true         # distance to nearest Natural Earth coastline
+    signed_dist_to_ridge: true  # positive north of main Alpine ridge, negative south
+    # later: slope, aspect, clc, ...
+    slope: false
+    aspect: false
+    clc: false
+
+  # TPI / smoothing radius (metres). Used when computing from DEM.
+  terrain_radius_m: 2000
+
+  # Model architecture (Localized, from paper best)
+  configuration: "localized"
+  r_dim: 64
+  w_dim: 256
+  v_dim: 512
+  hidden_size: 512
+  num_layers_mlp: 3
+  num_heads: 8
+  dropout_rate: 0.1
+  use_layer_norm: false
+  laplace_distance_p: 1.0
+  k_localized: 15
+  use_positional_encoding: true
+  pe_dim: 32
+  pe_type: "sinusoidal"
+
+  # Variance floors
+  variance_floor: 2.0e-4
+
+  # Training
+  on_grid_training: true
+  context_fraction: 0.5
+  batch_size: 32
+  num_epochs: 500
+  lr: 0.000419
+  weight_decay: 1e-5
+  clip_grad_norm: 1.0
+  early_stopping_patience: 50
+  use_amp: false
+  seed: 42
+  device: "auto"
+
+  # Fixed held-out stations (never used as context). Fraction of stations.
+  held_out_fraction: 0.15
+  held_out_seed: 42
+
+  # Random day split inside the training-pool stations (no temporal cut).
+  # Fraction of days used for training; remainder for early-stopping validation.
+  train_day_fraction: 0.80
+  day_split_seed: 42
+
+  # Normalization (paper scheme)
+  norm: "minmax"          # minmax for continuous; log1p+minmax for two-step amount
+
+aggregation:
+  weekly:
+    freq: "W"
+    time_col: "year_week"
+  daily:
+    freq: "D"
+    time_col: "date"
+  monthly:
+    freq: "ME"
+    time_col: "year_month"
+  half_hourly:
+    freq: "30min"
+    time_col: "timestamp"
+    add_is_daylight: true
+
+targets:
+  precipitation:
+    raw_col: "precipitation"
+    stats: ["sum"]
+    output_names: ["precip_sum"]
+  temperature:
+    raw_col: "temperature"
+    stats: ["mean", "min", "max"]
+    output_names: ["temp_mean", "temp_min", "temp_max"]
+  wind_speed:
+    raw_col: "wind_speed"
+    stats: ["mean"]
+    output_names: ["wind_mean"]
+  relative_humidity:
+    raw_col: "relative_humidity"
+    stats: ["mean"]
+    output_names: ["rh_mean"]
+  snow_height:
+    raw_col: "snow_height"
+    stats: ["mean"]
+    output_names: ["snow_mean"]

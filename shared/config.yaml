@@ -1,0 +1,50 @@
+plotting:
+  mode: "config"
+  input_nc_folder: ""
+  method: "IDW"
+  domain: "full"
+  resolutions: [1000, 500]
+  time_period: "20200101-20251231"
+  variables: null
+  output_root: null
+  dpi: 250
+  scatter_dpi: 300
+  default_variables:
+    - precip_sum
+    - temp_mean
+    - temp_min
+    - temp_max
+    - wind_mean
+    - wind_max
+    - rh_mean
+    - snow_mean
+    - snow_max
+    - snow_min
+
+maps:
+  show_stations: false
+  show_provider_symbols: false
+  show_topo: true
+  show_extra_info: true
+  dpi: 250
+  n_jobs: 1
+
+  time_filter:
+    step: 1
+    months: null
+    weeks: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    years: [2020. 2021, 2022, 2023, 2024]                    # first 16 weeks of 2020 only
+    timestamps: null
+
+  colormaps:
+    temp_mean: "RdBu_r"
+    temp_min: "RdBu_r"
+    temp_max: "RdBu_r"
+    precip_sum: "Blues"
+    snow_mean: "BuPu"
+    snow_max: "BuPu"
+    snow_min: "BuPu"
+    rh_mean: "viridis"
+    wind_mean: "viridis"
+    wind_max: "viridis"
+    default: "viridis"

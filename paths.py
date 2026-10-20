@@ -58,11 +58,32 @@ def get_source_root() -> Path:
 
 
 def get_dem_path() -> Path:
-    return get_source_root() / "DEM" / "COP30_mosaic_EPSG31287.tif"
+    """COP30 DEM in EPSG:31287. Prefers the unclipped mosaic if present."""
+    root = get_source_root() / "DEM"
+    unclipped = root / "COP30_mosaic_EPSG31287_unclipped.tif"
+    clipped = root / "COP30_mosaic_EPSG31287.tif"
+    return unclipped if unclipped.exists() else clipped
 
 
 def get_landcover_path() -> Path:
     return get_source_root() / "Landcover" / "CLC2018_EPSG31287_100m.tif"
+
+
+def get_terrain_dir() -> Path:
+    """Shared static terrain features (stations and grids)."""
+    d = get_source_root() / "terrain"
+    ensure_dir(d)
+    return d
+
+
+def get_station_terrain_path() -> Path:
+    """Station-level static features (elev, smooth_elev, tpi, slope, aspect, clc, ...)."""
+    return get_terrain_dir() / "station_features.parquet"
+
+
+def get_grid_terrain_path(resolution: int = 1000) -> Path:
+    """Grid-level static features at the given resolution."""
+    return get_terrain_dir() / f"grid_{resolution}m.nc"
 
 
 # ============================================================
@@ -192,6 +213,14 @@ def get_cnn_tuned_params_path(variable: str, time_resolution: str) -> Path:
     d = get_method_output_dir("CNN") / "cluster_params" / time_resolution / "cnn"
     ensure_dir(d)
     return d / f"{variable}_cnn_params.yaml"
+
+def get_smacnp_model_path(variable: str, time_resolution: str) -> Path:
+    return get_method_output_dir("SMACNP") / "models" / f"{variable}_{time_resolution}.pt"
+
+
+def get_smacnp_tuned_params_path(variable: str, time_resolution: str) -> Path:
+    return get_method_output_dir("SMACNP") / "tuned" / f"{variable}_{time_resolution}.yaml"
+
 
 
 def get_frei_tuned_params_path(variable: str, time_resolution: str) -> Path:

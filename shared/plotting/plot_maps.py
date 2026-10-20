@@ -83,16 +83,23 @@ def get_input_nc_files():
     resolutions = PLOTTING_CFG.get("resolutions") or []
     time_period = PLOTTING_CFG.get("time_period")
 
-    base = Path(get_method_output_dir(method)) / "interpolated_maps" / domain
-    pattern = str(base / "res_*m" / "*" / "*.nc")
+    base = Path(get_method_output_dir(method)) / "interpolated_maps"
+    # Standard layout: interpolated_maps/<domain>/res_*m/<time_res>/*.nc
+    pattern = str(base / domain / "res_*m" / "*" / "*.nc")
     nc_files = sorted(glob.glob(pattern))
+    # SMACNP layout: interpolated_maps/<time_res>/*.nc
+    if not nc_files:
+        pattern = str(base / "*" / "*.nc")
+        nc_files = sorted(glob.glob(pattern))
 
     if resolutions:
-        res_patterns = [f"res_{r}m" for r in resolutions]
+        res_patterns = [f"res_{r}m" for r in resolutions] + [f"{r}m" for r in resolutions]
         nc_files = [f for f in nc_files if any(r in f for r in res_patterns)]
 
     if time_period:
-        nc_files = [f for f in nc_files if time_period in Path(f).name]
+        matched = [f for f in nc_files if time_period in Path(f).name]
+        if matched:
+            nc_files = matched
 
     return nc_files
 
@@ -104,6 +111,8 @@ def get_colormap(var_name):
 
 def detect_method(ds, fallback: str = "IDW") -> str:
     attr = str(ds.attrs.get("method", "")).upper()
+    if "SMACNP" in attr:
+        return "SMACNP"
     if "RFSI" in attr or "RANDOM FOREST" in attr:
         return "RFSI"
     if "BSS" in attr or "BILINEAR" in attr:
@@ -215,131 +224,137 @@ def load_elevation_on_grid(x, y):
     return elev
 
 
+def alpine_mask(x, y, buffer_km: float = 50.0):
+    """Boolean mask (ny, nx): True inside Alpine Convention perimeter + buffer."""
+    import geopandas as gpd
+    from shapely.ops import unary_union
+    import urllib.request
+    from rasterio.features import rasterize
+    from rasterio.transform import from_bounds
+
+    url = (
+        "https://services5.arcgis.com/qjjtr5pMpt3PDiiR/ArcGIS/rest/services/"
+        "Alpine_Convention_Perimeter/FeatureServer/1/query?"
+        "where=1%3D1&outFields=*&f=geojson"
+    )
+    cache = Path(__file__).resolve().parent / "alpine_perimeter.geojson"
+    if not cache.exists():
+        urllib.request.urlretrieve(url, cache)
+    peri = gpd.read_file(cache).to_crs("EPSG:31287")
+    geom = unary_union(peri.geometry).buffer(buffer_km * 1000.0)
+
+    dx = float(np.median(np.diff(x))) if len(x) > 1 else 1000.0
+    dy = float(np.median(np.diff(y))) if len(y) > 1 else 1000.0
+    ny, nx = len(y), len(x)
+    # from_bounds expects west, south, east, north; y may be descending
+    y_top = float(y.max()) + abs(dy) / 2
+    y_bot = float(y.min()) - abs(dy) / 2
+    x_left = float(x.min()) - abs(dx) / 2
+    x_right = float(x.max()) + abs(dx) / 2
+    transform = from_bounds(x_left, y_bot, x_right, y_top, nx, ny)
+    mask = rasterize(
+        [(geom, 1)], out_shape=(ny, nx), transform=transform, fill=0, dtype=np.uint8
+    )
+    # rasterize puts north at row 0. Flip if grid y is ascending (south at row 0).
+    if y[0] < y[-1]:
+        mask = mask[::-1]
+    return mask.astype(bool)
+
+
+def _load_lines_31287():
+    """Coastline and major rivers in EPSG:31287, plus label positions."""
+    import cartopy.io.shapereader as shpreader
+    import geopandas as gpd
+
+    coast_path = shpreader.natural_earth(resolution="10m", category="physical", name="coastline")
+    river_path = shpreader.natural_earth(resolution="10m", category="physical", name="rivers_lake_centerlines")
+    coast = gpd.read_file(coast_path).to_crs("EPSG:31287")
+    rivers = gpd.read_file(river_path).to_crs("EPSG:31287")
+    # Label anchors in lon/lat, converted once
+    labels_ll = [
+        ("Rhine", 8.3, 47.6), ("Inn", 11.5, 47.3), ("Etsch", 11.15, 46.35),
+        ("Rhône", 6.8, 46.2), ("Drau", 13.4, 46.7), ("Po", 10.5, 45.1),
+        ("Danube", 13.5, 48.4),
+    ]
+    lab = gpd.GeoDataFrame(
+        {"name": [n for n, _, _ in labels_ll]},
+        geometry=gpd.points_from_xy([x for _, x, _ in labels_ll], [y for _, _, y in labels_ll]),
+        crs="EPSG:4326",
+    ).to_crs("EPSG:31287")
+    return coast, rivers, lab
+
+
 def process_one_timestep(args):
     (nc_path, t_idx, t, var_name, data_var, stations_df,
      show_stations, show_provider, show_topo, show_extra,
      time_res, domain, res, elev_grid) = args
 
+    import geopandas as gpd
+
     ds = xr.open_dataset(nc_path)
     plot_type, X, Y, C = _normalize_spatial_data(ds, data_var, t_idx)
     method = detect_method(ds, fallback=PLOTTING_CFG.get("method", "IDW"))
 
-    fig, ax = plt.subplots(figsize=(11, 9), constrained_layout=True)
+    if not hasattr(process_one_timestep, "_mask") or process_one_timestep._mask_shape != C.shape:
+        process_one_timestep._mask = alpine_mask(X, Y, buffer_km=50.0)
+        process_one_timestep._mask_shape = C.shape
+        process_one_timestep._lines = _load_lines_31287()
+    mask = process_one_timestep._mask
+    C_plot = np.where(mask, C, np.nan)
 
-    if plot_type == "grid":
-        pcm = ax.pcolormesh(X, Y, C, cmap=get_colormap(var_name), shading="auto")
+    peri_path = Path(__file__).resolve().parent / "alpine_perimeter.geojson"
+    peri = gpd.read_file(peri_path).to_crs("EPSG:31287")
+    coast, rivers, labels = process_one_timestep._lines
 
-        if show_topo:
-            elev_vals = None
-            elev_name = next((n for n in ["elev", "elevation", "topo", "dem", "altitude"]
-                              if n in ds), None)
-            if elev_name is not None:
-                elev = ds[elev_name]
-                if "time" in elev.dims:
-                    elev = elev.isel(time=0)
-                elev_vals = elev.values
-            elif elev_grid is not None:
-                elev_vals = elev_grid
+    fig, ax = plt.subplots(figsize=(12, 8))
 
-            if elev_vals is not None:
-                zmin = np.nanmin(elev_vals)
-                zmax = np.nanmax(elev_vals)
-                if np.isfinite(zmin) and np.isfinite(zmax) and zmax > zmin:
-                    levels = np.arange(
-                        np.floor(zmin / 500.0) * 500.0,
-                        np.ceil(zmax / 500.0) * 500.0 + 500.0,
-                        500.0,
-                    )
-                    ax.contour(X, Y, elev_vals, levels=levels,
-                               colors="k", linewidths=0.5, alpha=0.55)
-    else:
-        sc = ax.scatter(X, Y, c=C, cmap=get_colormap(var_name),
-                        s=8, edgecolors="none", alpha=0.9)
-        pcm = sc
+    # Grayscale DEM everywhere
+    elev_vals = ds["elev"].values if "elev" in ds else elev_grid
+    if elev_vals is not None:
+        ax.pcolormesh(X, Y, elev_vals, cmap="gray_r", vmin=0, vmax=3200, shading="auto", zorder=1)
 
-    # === Station overlay (robust matching) ===
-    if show_stations and stations_df is not None and len(stations_df) > 0:
-        t_pd = pd.to_datetime(t)
-        if getattr(t_pd, "tzinfo", None) is not None:
-            t_pd = t_pd.tz_localize(None)
+    # Interpolation only inside perimeter + buffer
+    pcm = ax.pcolormesh(X, Y, C_plot, cmap=get_colormap(var_name), shading="auto", alpha=0.75, zorder=2)
 
-        stations_clean = stations_df.copy()
-        stations_clean["time"] = pd.to_datetime(stations_clean["time"]).dt.tz_localize(None)
+    # Coast and rivers
+    coast.plot(ax=ax, color="0.35", linewidth=0.4, zorder=3)
+    rivers.plot(ax=ax, color="#4a90d9", linewidth=0.35, zorder=3)
+    for _, row in labels.iterrows():
+        ax.text(row.geometry.x, row.geometry.y, row["name"], fontsize=7,
+                fontstyle="italic", color="#1a5f8a", zorder=5,
+                bbox=dict(facecolor="white", alpha=0.55, edgecolor="none", pad=0.4))
 
-        if time_res == "weekly":
-            t_year = int(t_pd.isocalendar().year)
-            t_week = int(t_pd.isocalendar().week)
-            stations_clean["year"] = stations_clean["time"].dt.isocalendar().year.astype(int)
-            stations_clean["week"] = stations_clean["time"].dt.isocalendar().week.astype(int)
-            valid = stations_clean[
-                (stations_clean["year"] == t_year) & (stations_clean["week"] == t_week)
-            ]
-        else:
-            valid = stations_clean[
-                stations_clean["time"].dt.normalize() == t_pd.normalize()
-            ]
+    # Perimeter
+    peri.boundary.plot(ax=ax, edgecolor="black", linewidth=1.1, zorder=4)
 
-        cols = ["station_name", var_name, "x", "y"]
-        if "provider" in valid.columns:
-            cols.append("provider")
-        valid = valid[cols].dropna(subset=["x", "y", var_name])
-
-        if len(valid) > 0:
-            if show_provider and "provider" in valid.columns:
-                for prov in valid["provider"].unique():
-                    prov_data = valid[valid["provider"] == prov]
-                    ax.scatter(prov_data["x"], prov_data["y"], s=14,
-                               marker="o", edgecolors="k", linewidths=0.4,
-                               label=str(prov), zorder=5)
-                ax.legend(loc="upper right", fontsize=7, framealpha=0.9)
-            else:
-                ax.scatter(valid["x"], valid["y"], s=12, c="black",
-                           alpha=0.85, edgecolors="none", zorder=5)
-
-    # === Title ===
-    t_start = pd.to_datetime(t)
-    if time_res == "weekly":
-        week_start = t_start - pd.Timedelta(days=t_start.weekday())
-        week_end = week_start + pd.Timedelta(days=6)
-        date_str = f"{week_start.strftime('%d.%m.%Y')} - {week_end.strftime('%d.%m.%Y')}"
-    elif time_res == "monthly":
-        date_str = t_start.strftime("%Y-%m")
-    else:
-        date_str = t_start.strftime("%d.%m.%Y")
-
-    title = f"{var_name} | {method} | {domain} | {res}m | {time_res} | {date_str}"
-    ax.set_title(title, fontsize=11)
-
+    # Crop to perimeter bounds with pad
+    minx, miny, maxx, maxy = peri.total_bounds
+    pad = 40000
+    ax.set_xlim(minx - pad, maxx + pad)
+    ax.set_ylim(miny - pad, maxy + pad)
     ax.set_aspect("equal")
-    if plot_type == "points":
-        ax.set_xlim(X.min(), X.max())
-        ax.set_ylim(Y.min(), Y.max())
 
-    if show_extra:
-        info = []
-        for key in ["p", "Fz", "k", "tau", "n_segments", "n_obs"]:
-            if key in ds:
-                val = float(ds[key].isel(time=t_idx).values)
-                info.append(f"{key}={val:.2f}")
-        for key in ["rmse", "mae", "nse", "kge"]:
-            if key in ds:
-                val = float(ds[key].isel(time=t_idx).values)
-                info.append(f"{key.upper()}={val:.3f}")
-        if info:
-            ax.text(0.99, 0.01, "\n".join(info), transform=ax.transAxes,
-                    ha="right", va="bottom", fontsize=7.5,
-                    bbox=dict(boxstyle="round,pad=0.25", fc="white", alpha=0.9))
+    # Black frame, no title, no axis labels
+    for spine in ax.spines.values():
+        spine.set_edgecolor("black")
+        spine.set_linewidth(1.3)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("")
 
-    cbar = fig.colorbar(pcm, ax=ax, shrink=0.55, pad=0.02)
-    cbar.set_label(var_name)
+    # Small colour legend, raised
+    cax = ax.inset_axes([0.70, 0.10, 0.25, 0.028])
+    cb = fig.colorbar(pcm, cax=cax, orientation="horizontal")
+    cb.ax.tick_params(labelsize=6)
+    cb.set_label(var_name, fontsize=6)
 
-    time_label = pd.to_datetime(t).strftime("%Y%m%d_%H%M")
+    t_start = pd.to_datetime(t)
+    ax.set_title(f"{method}  |  {t_start.strftime('%d.%m.%Y')}", fontsize=11)
+    time_label = t_start.strftime("%Y%m%d_%H%M")
     out_path = get_map_output_path(method, domain, var_name, res, time_label)
-
-    fig.savefig(out_path, dpi=MAPS_CFG.get("dpi", 250), bbox_inches="tight")
+    fig.savefig(out_path, dpi=MAPS_CFG.get("dpi", 200), bbox_inches="tight", facecolor="white")
     plt.close(fig)
     ds.close()
-
     return out_path.name
 
 
@@ -376,18 +391,28 @@ def main():
 
         aux = {"time", "x", "y", "elev", "elevation", "topo", "dem", "mask", "prediction",
                "p", "Fz", "k", "tau", "n_segments", "n_obs", "rmse", "mae", "nse", "kge"}
-        candidates = [v for v in ds.data_vars if v not in aux]
+        candidates = [v for v in ds.data_vars if v not in aux and not str(v).endswith("_variance")]
         if candidates:
-            var_name = candidates[0]
+            raw = candidates[0]
+            # SMACNP stores temp_mean_mean / temp_mean_variance; plot the mean
+            var_name = raw[:-5] if str(raw).endswith("_mean") else raw
+            data_var = raw
         else:
             var_name = ds.attrs.get("variable", ds.attrs.get("var_name", "prediction"))
-        data_var = "prediction" if "prediction" in ds else var_name
+            data_var = "prediction" if "prediction" in ds else var_name
 
         times = ds["time"].values
         method = detect_method(ds, fallback=PLOTTING_CFG.get("method", "IDW"))
         domain = ds.attrs.get("domain", "full")
         res = int(ds.attrs.get("resolution_m", 0) or 0)
+        if res == 0:
+            # SMACNP filename: temp_mean_daily_1000m.nc
+            import re
+            m = re.search(r"(\d+)m", nc_path.name)
+            res = int(m.group(1)) if m else 1000
         time_res = infer_time_resolution(ds, nc_path)
+        # Station overlay: SMACNP has no own station table; use RFSI sources
+        station_method = "RFSI" if method == "SMACNP" else method
 
         elev_grid = None
         if show_topo:
@@ -409,12 +434,12 @@ def main():
 
         stations_df = None
         try:
-            agg_path = get_aggregated_data_path(method, time_res)
+            agg_path = get_aggregated_data_path(station_method, time_res)
             if agg_path.exists():
                 agg = pd.read_parquet(agg_path)
                 agg["time"] = parse_aggregated_time(agg, time_res)
 
-                stations_path = get_domain_stations_path(method, domain)
+                stations_path = get_domain_stations_path(station_method, domain)
                 if stations_path.exists():
                     stations = pd.read_parquet(stations_path)
                     keep = ["station_name", "x", "y"]

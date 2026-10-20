@@ -11,8 +11,10 @@ Official API flow (user guide):
 Datasets (OBS): arpafvg, dpcn-lombardia, open-trentino,
                 dpcn-bolzanoboze, dpcn-piemonte, dpcn-veneto
 
-Quarterly windows to stay under the 1 GB output limit.
-Respects ~10 requests/hour quota.
+Quarterly windows to stay under the output limit.
+No hourly request limit (account upgraded).
+Historical extractions have lower priority — longer waits expected.
+FVG (arpafvg) data starts July 2026 — skipped for 2020–2025.
 Resumable. Logs to code/logs/meteohub/download/.
 
 Set METEOHUB_USER and METEOHUB_PASS.
@@ -73,9 +75,9 @@ QUARTERS = [
     ("07", "09"),
     ("10", "12"),
 ]
-MAX_REQUESTS_PER_HOUR = 10
-POLL_INTERVAL = 20
-BATCH_WAIT_MAX = 90 * 60   # 90 min max wait per batch
+MAX_CONCURRENT = 5          # keep this many requests in flight
+POLL_INTERVAL = 30          # seconds between status checks
+BATCH_WAIT_MAX = 2 * 60 * 60  # 2 h max per request before giving up
 SLEEP_BETWEEN = 1.0
 TIMEOUT = 120
 HEADERS = {"User-Agent": "MeteoHub-thesis-downloader/1.0"}
@@ -170,35 +172,6 @@ def get_all_requests(token: str) -> list:
         return []
 
 
-def wait_for_batch(token: str, pending: dict) -> dict:
-    """Wait until all request_ids in pending are SUCCESS or FAILED.
-    pending: {request_id: (dataset, year, q_from, q_to)}
-    Returns the same dict with only the still-unresolved ones removed.
-    """
-    start = time.time()
-    resolved = {}
-    while pending and (time.time() - start) < BATCH_WAIT_MAX:
-        all_reqs = get_all_requests(token)
-        by_id = {str(r.get("id") or r.get("request_id")): r for r in all_reqs}
-        done = []
-        for rid, meta in list(pending.items()):
-            req = by_id.get(str(rid))
-            if not req:
-                continue
-            status = (req.get("status") or "").upper()
-            log.info(f"  {meta[0]} {meta[1]}-{meta[2]}/{meta[3]} → {status}")
-            if status in ("SUCCESS", "FAILED", "ERROR"):
-                resolved[rid] = (req, meta)
-                done.append(rid)
-        for rid in done:
-            pending.pop(rid, None)
-        if pending:
-            time.sleep(POLL_INTERVAL)
-    if pending:
-        log.warning(f"batch wait timeout, {len(pending)} still pending")
-    return resolved
-
-
 def download_and_delete(token: str, rid: int, req: dict, meta: tuple) -> bool:
     dataset, year, q_from, q_to = meta
     out_path = RAW_BASE / f"{dataset}_{year}_{q_from}_{q_to}.json"
@@ -249,6 +222,9 @@ def download_file(token: str, filename: str, out_path: Path) -> bool:
 def iter_jobs():
     for dataset in DATASETS:
         for year in YEARS:
+            # arpafvg only from July 2026
+            if dataset == "arpafvg" and year < 2026:
+                continue
             for q_from, q_to in QUARTERS:
                 out_path = RAW_BASE / f"{dataset}_{year}_{q_from}_{q_to}.json"
                 if out_path.exists():
@@ -262,38 +238,59 @@ def main():
     if not token:
         return
 
-    jobs = list(iter_jobs())
-    log.info(f"{len(jobs)} quarters remaining")
+    jobs = iter(iter_jobs())
+    pending = {}          # request_id → (dataset, year, q_from, q_to, submitted_at)
+    exhausted = False
 
-    idx = 0
-    while idx < len(jobs):
-        # submit up to hourly limit
-        batch = {}
-        while idx < len(jobs) and len(batch) < MAX_REQUESTS_PER_HOUR:
-            dataset, year, q_from, q_to = jobs[idx]
-            rid = submit_extraction(token, dataset, year, q_from, q_to)
-            if rid == -1:
-                log.info("Rate limit hit — waiting 60 min")
-                time.sleep(3600)
-                token = get_token() or token
-                continue
-            if rid:
-                batch[rid] = (dataset, year, q_from, q_to)
-            idx += 1
-            time.sleep(SLEEP_BETWEEN)
+    def submit_next():
+        nonlocal exhausted
+        if exhausted:
+            return
+        try:
+            dataset, year, q_from, q_to = next(jobs)
+        except StopIteration:
+            exhausted = True
+            return
+        rid = submit_extraction(token, dataset, year, q_from, q_to)
+        if rid and rid != -1:
+            pending[rid] = (dataset, year, q_from, q_to, time.time())
+            log.info(f"  in flight: {len(pending)}")
+        time.sleep(SLEEP_BETWEEN)
 
-        if not batch:
+    # fill initial pool
+    for _ in range(MAX_CONCURRENT):
+        submit_next()
+        if exhausted:
             break
 
-        log.info(f"waiting for {len(batch)} requests …")
-        resolved = wait_for_batch(token, batch)
+    while pending:
+        all_reqs = get_all_requests(token)
+        by_id = {str(r.get("id") or r.get("request_id")): r for r in all_reqs}
 
-        for rid, (req, meta) in resolved.items():
-            download_and_delete(token, rid, req, meta)
+        finished = []
+        for rid, meta in list(pending.items()):
+            dataset, year, q_from, q_to, submitted_at = meta
+            req = by_id.get(str(rid))
+            if not req:
+                if time.time() - submitted_at > BATCH_WAIT_MAX:
+                    log.warning(f"  {dataset} {year}-{q_from}/{q_to} timeout, dropping")
+                    finished.append(rid)
+                continue
+            status = (req.get("status") or "").upper()
+            log.info(f"  {dataset} {year}-{q_from}/{q_to} → {status}")
+            if status in ("SUCCESS", "FAILED", "ERROR"):
+                download_and_delete(token, rid, req, meta[:4])
+                finished.append(rid)
+            elif time.time() - submitted_at > BATCH_WAIT_MAX:
+                log.warning(f"  {dataset} {year}-{q_from}/{q_to} timeout, dropping")
+                finished.append(rid)
 
-        # refresh token for next batch
-        token = get_token() or token
-        log.info("batch done, continuing")
+        for rid in finished:
+            pending.pop(rid, None)
+            submit_next()
+
+        if pending:
+            time.sleep(POLL_INTERVAL)
 
     log.info("=== MeteoHub download finished ===")
 
