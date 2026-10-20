@@ -124,7 +124,27 @@ def feature_columns(cfg: dict) -> List[str]:
         cols.append("dist_to_coast")
     if feats.get("signed_dist_to_ridge", True):
         cols.append("signed_dist_to_ridge")
+    if feats.get("clc", True):
+        # Level-2 one-hot column names; filled by attach_clc_onehot
+        cols.extend([f"clc_l2_{i}" for i in range(16)])
     return cols
+
+
+def attach_clc_onehot(df: pd.DataFrame) -> pd.DataFrame:
+    """Add CLC level-2 one-hot columns (clc_l2_0 .. clc_l2_15)."""
+    from shared.clc import one_hot_level2
+    src = None
+    for c in ("clc_level2", "clc_code", "clc"):
+        if c in df.columns:
+            src = df[c].to_numpy()
+            break
+    if src is None:
+        src = np.zeros(len(df), dtype=np.int32)
+    oh = one_hot_level2(src)
+    out = df.copy()
+    for i in range(oh.shape[1]):
+        out[f"clc_l2_{i}"] = oh[:, i]
+    return out
 
 
 class FeatureScaler:

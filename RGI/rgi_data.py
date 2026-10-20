@@ -14,6 +14,8 @@ import yaml
 CODE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE_DIR))
 
+from shared.clc import level2_index
+
 
 def _label_times(times):
     _splits_path = CODE_DIR / "shared" / "splits" / "splits.py"
@@ -180,7 +182,7 @@ class FeatureScaler:
             self.mean[key] = float(np.nanmean(v))
             s = float(np.nanstd(v))
             self.std[key] = s if s > 1e-8 else 1.0
-        codes = sorted(set(int(c) for c in df["clc_code"].to_numpy().tolist()) | {0})
+        codes = sorted(set(int(c) for c in level2_index(df["clc_code"].to_numpy()).tolist()) | {0})
         self.clc_codes = codes
         for key in self.extra_keys:
             if key not in df.columns:
@@ -222,8 +224,10 @@ class FeatureScaler:
         return np.column_stack(cols).astype(np.float32)
 
     def clc_index(self, codes) -> np.ndarray:
+        """Level-2 compact index, then into the fitted embedding table."""
+        idx = level2_index(codes)
         table = {c: i for i, c in enumerate(self.clc_codes)}
-        out = np.array([table.get(int(c), 0) for c in np.asarray(codes).ravel()], dtype=np.int64)
+        out = np.array([table.get(int(c), 0) for c in idx], dtype=np.int64)
         return out
 
     def state_dict(self) -> dict:

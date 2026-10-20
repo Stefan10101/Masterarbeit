@@ -41,10 +41,10 @@ smacnp:
     tpi: true                   # topographic position index (paper)
     dist_to_coast: true         # distance to nearest Natural Earth coastline
     signed_dist_to_ridge: true  # positive north of main Alpine ridge, negative south
-    # later: slope, aspect, clc, ...
+    # later: slope, aspect, ...
     slope: false
     aspect: false
-    clc: false
+    clc: true                 # level-2 one-hot (16 cols)
 
   # TPI / smoothing radius (metres). Used when computing from DEM.
   terrain_radius_m: 2000

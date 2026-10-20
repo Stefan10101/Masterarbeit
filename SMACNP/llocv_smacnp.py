@@ -117,6 +117,8 @@ def main():
             df[["station_name", "elev"]].drop_duplicates("station_name"), on="station_name", how="left"
         )
     stations = compute_dem_features(stations, cfg)
+    from smacnp_data import attach_clc_onehot
+    stations = attach_clc_onehot(stations)
     df = df.drop(columns=[c for c in feat_cols if c in df.columns and c not in ("x", "y")], errors="ignore")
     df = df.merge(
         stations[["station_name"] + [c for c in feat_cols if c not in ("x", "y")]],

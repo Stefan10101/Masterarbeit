@@ -79,15 +79,13 @@ def data_sources(cfg) -> tuple[str, str, str]:
 
 
 def clc_group(codes) -> np.ndarray:
-    """CLC2018 → level-1 (1 urban … 5 water). 0 = missing/other."""
-    c = np.asarray(codes, dtype=np.int32)
-    out = np.zeros(c.shape, dtype=np.int32)
-    high = c >= 100
-    out[high] = c[high] // 100
-    mid = (c >= 1) & (c <= 5)
-    out[mid] = c[mid]
-    out[(out < 0) | (out > 5)] = 0
-    return out
+    """CLC2018 → level-2 codes (11, 12, … 52). 0 = missing/other.
+
+    Dummies of these codes are the right encoding for a linear RK trend.
+    Rare classes are still merged by merge_rare_clc.
+    """
+    from shared.clc import to_level2
+    return to_level2(codes)
 
 
 def merge_rare_clc(groups: np.ndarray, min_count: int) -> tuple[np.ndarray, dict[int, int]]:

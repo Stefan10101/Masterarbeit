@@ -65,7 +65,7 @@ def n_in_channels(cfg: CNNConfig, subdaily: bool, extra_ch: int = 0) -> int:
     n = 3  # value, mask, elev
     if cfg.use_terrain:
         n += 3  # slope, sinasp, cosasp
-    n += 1  # clc
+    n += 16  # CLC level-2 one-hot (0=missing + 15 classes)
     if cfg.cyclic_time:
         n += 2
         if subdaily:
@@ -283,7 +283,12 @@ class CNNInterpolator:
             chans.append(np.zeros((ny, nx)) if slope is None else slope / 45.0)
             chans.append(np.zeros((ny, nx)) if sinasp is None else sinasp)
             chans.append(np.ones((ny, nx)) if cosasp is None else cosasp)
-        chans.append(clc / 5.0)
+        # CLC level-2 one-hot (16 channels). Best for a conv net: each class
+        # gets its own filter instead of a meaningless ordinal scale.
+        from shared.clc import level2_index, N_LEVEL2
+        idx = level2_index(np.asarray(clc).reshape(-1)).reshape(value.shape)
+        for k in range(N_LEVEL2):
+            chans.append((idx == k).astype(np.float32))
         if time_ch:
             for t in time_ch:
                 chans.append(np.full(value.shape, float(t), dtype=np.float32))

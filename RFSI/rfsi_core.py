@@ -57,14 +57,14 @@ def clip_var(var: str, pred) -> np.ndarray:
 
 def build_covariates(elev=None, clc_code=None, use_elev: bool = True, use_lc: bool = True,
                      extras: dict | None = None):
-    """elev in km + CLC level-1 one-hot (6 cols) + optional extras (fixed order)."""
+    """elev in km + CLC level-2 one-hot (16 cols) + optional extras (fixed order)."""
+    from shared.clc import one_hot_level2
     parts = []
     if use_elev and elev is not None:
         e = np.asarray(elev, dtype=np.float32).reshape(-1)
         parts.append((e / 1000.0)[:, None])
     if use_lc and clc_code is not None:
-        g = np.clip(clc_level1(clc_code).reshape(-1), 0, 5)
-        parts.append(np.eye(6, dtype=np.float32)[g])
+        parts.append(one_hot_level2(clc_code))
     if extras:
         for key in ("slope", "northness", "tpi", "tmean"):
             if key not in extras or extras[key] is None:
