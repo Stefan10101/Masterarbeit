@@ -30,6 +30,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_rgi_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.splits.evaluation_sets import prepare_for_tuning
 from rgi_core import RGI, RGIConfig
 from rgi_data import attach_extras, compute_metrics, extra_cols_for_var, load_config, load_panel
 from llocv_rgi import cfg_to_rgi, station_folds
@@ -81,6 +82,7 @@ def _write_tuned(var, time_res, payload: dict) -> Path:
 
 def run_variable(cfg, var, phase: str):
     panel = attach_extras(load_panel(cfg, var), cfg, var)
+    panel = prepare_for_tuning(panel)
     if cfg.get("_quick_months"):
         from Kriging.kriging_data import subset_times
         panel = subset_times(panel, cfg["_quick_months"])

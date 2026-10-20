@@ -35,6 +35,7 @@ from paths import (
 from rfsi_core import RFSI, build_covariates, extras_for_var, two_step_var
 from rfsi_optimizer import compute_metrics
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.splits.evaluation_sets import prepare_for_tuning
 
 _splits_path = CODE_DIR / "shared" / "splits" / "splits.py"
 _spec = _ilu.spec_from_file_location("thesis_time_splits", _splits_path)
@@ -217,6 +218,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
     seed = int(rfsi.get("rf_fixed", {}).get("random_state", 22))
 
     panel = load_panel(cfg, var)
+    panel = prepare_for_tuning(panel)
     rh_t_mode = str(rfsi.get("rh_t_mode", "none"))
     two_step = bool(rfsi.get("two_step", True)) and two_step_var(var)
     tau_wet = float(rfsi.get("tau_wet", 0.5))

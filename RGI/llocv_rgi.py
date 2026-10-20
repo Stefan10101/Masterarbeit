@@ -27,7 +27,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from paths import get_nested_llocv_path, get_rgi_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from rgi_core import RGI, RGIConfig
-from rgi_data import attach_extras, extra_cols_for_var, load_config, load_panel, print_split_metrics
+from shared.splits.evaluation_sets import apply_evaluation_protocol
 import yaml
 
 
@@ -89,26 +89,16 @@ def station_folds(names: list[str], n_folds: int, seed: int) -> list[list[str]]:
 
 def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations):
     panel = attach_extras(load_panel(cfg, var), cfg, var)
+    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
     if cfg.get("_quick_months"):
         from Kriging.kriging_data import subset_times
         panel = subset_times(panel, cfg["_quick_months"])
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
-    if fit_splits != {"all"}:
-        fit_df = panel[panel["split"].isin(fit_splits)]
-    else:
-        fit_df = panel[panel["split"].isin(("train", "dev", "test"))]
-    if score_splits != {"all"}:
-        score_df = panel[panel["split"].isin(score_splits)]
-    else:
-        score_df = panel[panel["split"].isin(("train", "dev", "test"))]
-
+    # Protocol
+    fit_df = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
+    score_df = panel[(panel["is_heldout"]) & (panel["split"] == "test")]
     names = sorted(score_df["station_name"].unique())
-    if max_stations:
-        names = names[: int(max_stations)]
-    if mode == "leave_one":
-        folds = [[n] for n in names]
-    else:
-        folds = station_folds(names, n_folds, int(cfg.get("rgi", {}).get("seed", 22)))
+    folds = [names]
 
     tuned = load_tuned(var, cfg["time_resolution"])
     tuned["extra_cols"] = extra_cols_for_var(var, cfg)

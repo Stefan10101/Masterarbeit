@@ -34,6 +34,7 @@ from paths import (
 from rfsi_core import RFSI, build_covariates, extras_for_var, neighbor_width, two_step_var
 from rfsi_optimizer import compute_metrics
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of, apply_evaluation_protocol
 
 import importlib.util as _ilu
 _splits_path = Path(__file__).resolve().parents[1] / "shared" / "splits" / "splits.py"
@@ -132,6 +133,8 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
     tau_wet = float(rfsi_cfg.get("tau_wet", 0.5))
 
     valid = load_panel(cfg, var)
+    # Override old year-based split with the shared quarter protocol
+    valid, held_out, pool, qsplits = apply_evaluation_protocol(valid)
     if str(var).lower().startswith("rh") and rh_t_mode in ("predicted", "observed"):
         try:
             from Kriging.kriging_data import attach_temperature
@@ -152,34 +155,15 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
         except Exception:
             pass
     valid, _hours = apply_hour_cut(valid, cfg["time_resolution"], cfg.get("_hours"))
-    if fit_splits != {"all"}:
-        fit_mask = valid["split"].isin(fit_splits)
-    else:
-        fit_mask = valid["split"].isin(("train", "dev", "test"))
-    if score_splits != {"all"}:
-        score_mask = valid["split"].isin(score_splits)
-    else:
-        score_mask = valid["split"].isin(("train", "dev", "test"))
-
-    fit_df = valid[fit_mask].copy()
-    score_df = valid[score_mask].copy()
+    # Protocol: fit on pool stations × train quarters; score held-out × test quarters
+    fit_df = valid[(~valid["is_heldout"]) & (valid["split"] == "train")].copy()
+    score_df = valid[(valid["is_heldout"]) & (valid["split"] == "test")].copy()
     if use_lc and "clc_code" not in fit_df.columns:
         raise RuntimeError("use_landcover=true but stations have no clc_code")
 
-    names = sorted(score_df["station_name"].unique())
-    if max_stations:
-        names = names[: int(max_stations)]
-    if n_folds and n_folds > 0:
-        rng = np.random.default_rng(22)
-        shuf = list(names)
-        rng.shuffle(shuf)
-        groups = [shuf[i::int(n_folds)] for i in range(int(n_folds))]
-    else:
-        groups = [[n] for n in names]
-
     print(f"\n{'=' * 60}\nVARIABLE {var}")
-    print(f"  fit rows {len(fit_df):,}  score rows {len(score_df):,}")
-    print(f"  stations to leave out: {len(names)}")
+    print(f"  fit rows {len(fit_df):,}  (pool stations × train quarters)")
+    print(f"  score rows {len(score_df):,}  (held-out stations × test quarters)")
     print(f"  n_obs={n_obs}  trees={rf_params['n_estimators']}")
 
     _, encoder = prepare_covariates(
@@ -190,70 +174,61 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
     records = []
     t0 = time.perf_counter()
 
-    for i, hold_names in enumerate(tqdm(groups, desc=var), start=1):
-        hold_set = set(hold_names)
-        train = fit_df[~fit_df["station_name"].isin(hold_set)]
-        hold = score_df[score_df["station_name"].isin(hold_set)]
-        if hold.empty or train["station_name"].nunique() < min_stations:
-            continue
-        X_train, _ = prepare_covariates(
-            train, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-            extras=extras_for_var(train, var, rh_t_mode),
-        )
-        model = RFSI(
-            n_obs=n_obs, rf_params=rf_params,
-            two_step=two_step, tau_wet=tau_wet, var_name=var,
-        )
-        try:
-            model.fit_pooled(
-                times=train["time"].to_numpy(),
-                coords=train[["x", "y"]].to_numpy(),
-                z=train[var].to_numpy(),
-                X_cov=X_train,
-                min_stations=min_stations,
-            )
-        except RuntimeError:
-            continue
+    # Single fit on the pool; predict the held-out stations
+    if score_df.empty or fit_df["station_name"].nunique() < min_stations:
+        print("  insufficient data for held-out evaluation")
+        return
+    X_train, _ = prepare_covariates(
+        fit_df, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+        extras=extras_for_var(fit_df, var, rh_t_mode),
+    )
+    model = RFSI(
+        n_obs=n_obs, rf_params=rf_params,
+        two_step=two_step, tau_wet=tau_wet, var_name=var,
+    )
+    model.fit_pooled(
+        times=fit_df["time"].to_numpy(),
+        coords=fit_df[["x", "y"]].to_numpy(),
+        z=fit_df[var].to_numpy(),
+        X_cov=X_train,
+        min_stations=min_stations,
+    )
 
-        donors = valid[~valid["station_name"].isin(hold_set)]
-        for t, hold_t in hold.groupby("time", sort=False):
-            # Neighbours are same-timestamp other stations (any year).
-            # The forest itself was fit on TRAIN times only.
-            others = donors[donors["time"] == t]
-            if len(others) < max(min_stations, n_obs):
-                continue
-            X_hold, _ = prepare_covariates(
-                hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-                extras=extras_for_var(hold_t, var, rh_t_mode),
-            )
-            pred = model.predict_field(
-                others[["x", "y"]].to_numpy(),
-                others[var].to_numpy(),
-                hold_t[["x", "y"]].to_numpy(),
-                X_cov_pred=X_hold,
-            )
-            for row, yhat in zip(hold_t.itertuples(index=False), pred):
-                records.append({
-                    "time": row.time,
-                    "split": row.split,
-                    "station_name": row.station_name,
-                    "variable": var,
-                    "observed": float(getattr(row, var)),
-                    "predicted": float(yhat),
-                    "n_neighbors_avail": int(len(others)),
-                })
-
-        if checkpoint_every and i % checkpoint_every == 0 and records:
-            pd.DataFrame(records).to_parquet(out_path, index=False)
+    # Donors for prediction: pool stations (any time, but typically same timestamp)
+    donors = valid[~valid["is_heldout"]]
+    for t, hold_t in score_df.groupby("time", sort=False):
+        others = donors[donors["time"] == t]
+        if len(others) < max(min_stations, n_obs):
+            continue
+        X_hold, _ = prepare_covariates(
+            hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+            extras=extras_for_var(hold_t, var, rh_t_mode),
+        )
+        pred = model.predict_field(
+            others[["x", "y"]].to_numpy(),
+            others[var].to_numpy(),
+            hold_t[["x", "y"]].to_numpy(),
+            X_cov_pred=X_hold,
+        )
+        for row, yhat in zip(hold_t.itertuples(index=False), pred):
+            records.append({
+                "time": row.time,
+                "split": row.split,
+                "station_name": row.station_name,
+                "variable": var,
+                "observed": float(getattr(row, var)),
+                "predicted": float(yhat),
+                "n_neighbors_avail": int(len(others)),
+            })
 
     elapsed = time.perf_counter() - t0
     pred_df = pd.DataFrame(records)
     if pred_df.empty:
-        raise RuntimeError(f"No LLOCV predictions for {var}")
+        raise RuntimeError(f"No held-out predictions for {var}")
     pred_df.to_parquet(out_path, index=False)
 
     print(f"  wrote {len(pred_df):,} rows → {out_path}")
-    print(f"  wall {elapsed/60:.1f} min  ({elapsed/max(len(names),1):.1f} s/station)")
+    print(f"  wall {elapsed/60:.1f} min")
     for split_name, part in pred_df.groupby("split"):
         met = compute_metrics(part["observed"].to_numpy(), part["predicted"].to_numpy())
         print(

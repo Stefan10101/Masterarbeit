@@ -25,6 +25,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_frei_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs
+from shared.splits.evaluation_sets import prepare_for_tuning
 from frei_data import (
     attach_temperature,
     compute_block,
@@ -149,6 +150,7 @@ def main():
 
     for var in variables:
         panel = load_panel(cfg, var)
+        panel = prepare_for_tuning(panel)
         rh_mode = args.rh_t_mode or block.get("rh_t_mode", "none")
         if var.lower().startswith("rh") and rh_mode in ("predicted", "observed"):
             panel = attach_temperature(panel, cfg)

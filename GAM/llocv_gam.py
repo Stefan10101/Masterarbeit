@@ -19,6 +19,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from paths import get_gam_tuned_params_path, get_nested_llocv_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from gam_core import GAMConfig, GAMInterpolator
+from shared.splits.evaluation_sets import apply_evaluation_protocol
 from gam_data import (
     attach_pack_terrain,
     attach_temperature,
@@ -84,98 +85,37 @@ def load_tuned(var, time_res):
 
 def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, progress: str | None = None,
               pack=None):
-    import time
+    """Protocol-aware. Final scores: held-out × test. Tuning: pool × requested splits."""
+    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
+    if score_splits == {"all"} or "test" in score_splits:
+        score_df = panel[(panel["is_heldout"]) & (panel["split"] == "test")]
+    else:
+        score_df = panel[(~panel["is_heldout"]) & (panel["split"].isin(score_splits))]
+    if score_df.empty:
+        return pd.DataFrame(columns=["station_name", "time", "split", "observed", "predicted"])
 
-    names = sorted(panel["station_name"].unique())
-    folds = station_folds(names, n_folds, gcfg.seed)
     rows = []
-    tag = f"[{progress}] " if progress else ""
-    t0 = time.time()
-    n_done = 0
-    n_fail = 0
-    backend = None
-    for fi, hold in enumerate(folds, start=1):
-        hold_set = set(hold)
-        don_all = panel[~panel["station_name"].isin(hold_set)]
-        q_all = panel[panel["station_name"].isin(hold_set)]
-        if score_splits != {"all"}:
-            q_all = q_all[q_all["split"].isin(score_splits)]
-        q_all = q_all.copy()
-        don_all = don_all.copy()
-        q_all["_t"] = pd.to_datetime(q_all["time"]).astype("datetime64[ns]")
-        don_all["_t"] = pd.to_datetime(don_all["time"]).astype("datetime64[ns]")
-        times = list(q_all.groupby("_t"))
-        print(
-            f"{tag}fold {fi}/{n_folds} hold={len(hold_set)} score_times={len(times)}",
-            flush=True,
-        )
-        for ti, (ts, q) in enumerate(times, start=1):
-            don = don_all[don_all["_t"] == ts]
-            if don["station_name"].nunique() < gcfg.min_stations:
-                continue
-            model = GAMInterpolator(gcfg)
-            use_t = str(var).lower().startswith("rh") and gcfg.rh_t_mode in ("predicted", "observed")
-            tmean = don["temp_mean"].to_numpy() if use_t and "temp_mean" in don.columns else None
-            tmean_q = q["temp_mean"].to_numpy() if use_t and "temp_mean" in q.columns else None
-            if use_t and gcfg.rh_t_mode == "predicted" and tmean is not None:
-                tmod = GAMInterpolator(gcfg)
-                tmean_q = tmod.predict_timestamp(
-                    don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
-                    tmean, q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
-                    clc=don["clc_group"].to_numpy(), clc_q=q["clc_group"].to_numpy(),
-                    slope=don["slope"].to_numpy() if "slope" in don.columns else None,
-                    slope_q=q["slope"].to_numpy() if "slope" in q.columns else None,
-                    sinasp=don["sinasp"].to_numpy() if "sinasp" in don.columns else None,
-                    sinasp_q=q["sinasp"].to_numpy() if "sinasp" in q.columns else None,
-                    cosasp=don["cosasp"].to_numpy() if "cosasp" in don.columns else None,
-                    cosasp_q=q["cosasp"].to_numpy() if "cosasp" in q.columns else None,
-                    var="temp_mean",
-                )
-            try:
-                hat = model.predict_timestamp(
-                    don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
-                    don[var].to_numpy(),
-                    q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
-                    clc=don["clc_group"].to_numpy(),
-                    clc_q=q["clc_group"].to_numpy(),
-                    slope=don["slope"].to_numpy() if "slope" in don.columns else None,
-                    slope_q=q["slope"].to_numpy() if "slope" in q.columns else None,
-                    sinasp=don["sinasp"].to_numpy() if "sinasp" in don.columns else None,
-                    sinasp_q=q["sinasp"].to_numpy() if "sinasp" in q.columns else None,
-                    cosasp=don["cosasp"].to_numpy() if "cosasp" in don.columns else None,
-                    cosasp_q=q["cosasp"].to_numpy() if "cosasp" in q.columns else None,
-                    var=var,
-                    trace=gcfg.trace,
-                    tmean=tmean, tmean_q=tmean_q,
-                    region=don["region"].to_numpy() if "region" in don.columns else None,
-                    region_q=q["region"].to_numpy() if "region" in q.columns else None,
-                )
-            except Exception as exc:
-                n_fail += 1
-                print(f"{tag}FAIL {ts} {type(exc).__name__}: {exc}", flush=True)
-                continue
-            n_done += 1
-            be = getattr(model, "_backend", None)
-            if backend is None and be:
-                backend = be
-                print(f"{tag}backend={backend} first_ok {ts}", flush=True)
-            if ti == 1 or ti % 6 == 0 or ti == len(times):
-                dt = time.time() - t0
-                print(
-                    f"{tag}fold {fi}/{n_folds} time {ti}/{len(times)} "
-                    f"ok={n_done} fail={n_fail} {dt:.0f}s backend={backend}",
-                    flush=True,
-                )
-            part = q[["station_name", "time", "split", var]].copy()
-            part["predicted"] = hat
-            part = part.rename(columns={var: "observed"})
-            rows.append(part)
-    dt = time.time() - t0
-    print(f"{tag}llocv done ok={n_done} fail={n_fail} rows={len(rows)} {dt:.0f}s", flush=True)
+    for t, q in score_df.groupby("time", sort=False):
+        don = panel[(~panel["is_heldout"]) & (panel["time"] == t)]
+        if don["station_name"].nunique() < gcfg.min_stations:
+            continue
+        model = GAMInterpolator(gcfg)
+        try:
+            hat = model.predict_timestamp(
+                don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
+                don[var].to_numpy(),
+                q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
+                var=var,
+            )
+        except Exception:
+            continue
+        part = q[["station_name", "time", "split", var]].copy()
+        part["observed"] = part[var]
+        part["predicted"] = hat
+        rows.append(part.drop(columns=[var]))
     if not rows:
         return pd.DataFrame(columns=["station_name", "time", "split", "observed", "predicted"])
     return pd.concat(rows, ignore_index=True)
-
 
 def main():
     p = argparse.ArgumentParser()

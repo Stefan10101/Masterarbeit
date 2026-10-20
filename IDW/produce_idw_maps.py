@@ -41,6 +41,7 @@ from paths import (
 from idw_core import get_valid_targets, interpolate_idw, modified_idw
 from loocv_optimizer import loocv_predictions
 from shared.time_res import add_time_res_arg, apply_time_res
+from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
@@ -141,7 +142,7 @@ def load_cluster_params(canonical_var: str) -> dict:
 
 
 def process_one_time_step(args):
-    t, df_t, var, target_coords, target_elev, param_group, params = args
+    t, df_t, var, target_coords, target_elev, param_group, params, held_out, test_quarters = args
 
     if len(df_t) < 5:
         return None
@@ -151,14 +152,34 @@ def process_one_time_step(args):
     k = min(int(params["k"]), len(df_t))
 
     llocv_df = None
-    if SAVE_LLOCV:
-        llocv_df = loocv_predictions(df_t, var, p, Fz, k)
-        if len(llocv_df) > 0:
-            llocv_df = llocv_df.copy()
+    if SAVE_LLOCV and quarter_of(t) in test_quarters:
+        # Protocol: donors = pool stations, targets = held-out stations
+        donors = df_t[~df_t["station_name"].isin(held_out)]
+        targets = df_t[df_t["station_name"].isin(held_out)]
+        if len(donors) >= 5 and len(targets) >= 1:
+            # Predict each held-out station from the donors only
+            from loocv_optimizer import loocv_predictions
+            # Build a combined frame where we score only the targets
+            # by temporarily using donors as the source and calling interpolate
+            from idw_core import interpolate_idw
+            tree = KDTree(donors[["x", "y"]].values)
+            pred = interpolate_idw(
+                station_values=donors[var].values,
+                station_coords=donors[["x", "y"]].values,
+                station_elev=donors["elev"].values,
+                target_coords=targets[["x", "y"]].values,
+                target_elev=targets["elev"].values,
+                tree=tree, p=p, Fz=Fz, k=min(k, len(donors)),
+                var=var,
+            )
+            llocv_df = targets[["station_name", "x", "y"]].copy()
+            llocv_df["observed"] = targets[var].values
+            llocv_df["predicted"] = pred
             llocv_df["time"] = t
             llocv_df["p"] = p
             llocv_df["Fz"] = Fz
             llocv_df["k"] = k
+            llocv_df["split"] = "test"
 
     tree = KDTree(df_t[["x", "y"]].values)
     chunk_size = 1_000_000 if param_group != "coarse" else None
@@ -291,6 +312,9 @@ def main():
                 time_steps = sorted(valid["time"].unique())
             tasks = []
             n_fallback = 0
+            held_out, _pool = load_holdout()
+            qsplits = load_quarter_splits()
+            test_quarters = set(qsplits["test"])
             for t in time_steps:
                 # look up cluster
                 cid = None
@@ -312,7 +336,8 @@ def main():
 
                 tasks.append(
                     (t, valid[valid["time"] == t], var,
-                     target_coords, target_elev, param_group, params)
+                     target_coords, target_elev, param_group, params,
+                     held_out, test_quarters)
                 )
 
             if n_fallback:
@@ -331,12 +356,6 @@ def main():
                          if r["llocv"] is not None and len(r["llocv"]) > 0]
                 if parts:
                     llocv_all = pd.concat(parts, ignore_index=True)
-                    import importlib.util as _ilu
-                    _sp = Path(__file__).resolve().parents[1] / "shared" / "splits" / "splits.py"
-                    _spec = _ilu.spec_from_file_location("thesis_time_splits", _sp)
-                    _mod = _ilu.module_from_spec(_spec)
-                    _spec.loader.exec_module(_mod)
-                    llocv_all["split"] = _mod.label_times(llocv_all["time"]).to_numpy()
                     llocv_path = get_llocv_path(
                         "IDW", DOMAIN, var, res,
                         start_date=str(START_DATE.date()),
@@ -344,7 +363,7 @@ def main():
                         time_resolution=TIME_RES,
                     )
                     llocv_all.to_parquet(llocv_path, index=False)
-                    print(f"  LLOCV: {llocv_path.name} ({len(llocv_all)} rows)")
+                    print(f"  LLOCV (held-out × test): {llocv_path.name} ({len(llocv_all)} rows)")
 
             n_y, n_x = mask.shape
             data_3d = np.full((len(results), n_y, n_x), np.nan, dtype=np.float32)

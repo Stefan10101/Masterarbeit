@@ -29,6 +29,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from paths import get_kriging_tuned_params_path, get_nested_llocv_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from kriging_core import KrigingConfig, KrigingInterpolator
+from shared.splits.evaluation_sets import apply_evaluation_protocol
 from kriging_data import (
     attach_pack_terrain,
     attach_temperature,
@@ -99,6 +100,8 @@ def station_folds(names: list[str], n_folds: int, seed: int) -> list[list[str]]:
 def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations, trend_override,
                  months=None, rh_t_mode=None, pack=None):
     panel = load_panel(cfg, var)
+    # Shared protocol
+    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
     if months:
         panel = subset_times(panel, months)
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
@@ -108,22 +111,13 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
     if need_t:
         panel = attach_temperature(panel, cfg)
     panel = attach_pack_terrain(panel, pack)
-    if fit_splits != {"all"}:
-        fit_df = panel[panel["split"].isin(fit_splits)]
-    else:
-        fit_df = panel[panel["split"].isin(("train", "dev", "test"))]
-    if score_splits != {"all"}:
-        score_df = panel[panel["split"].isin(score_splits)]
-    else:
-        score_df = panel[panel["split"].isin(("train", "dev", "test"))]
+    # Protocol: fit on pool × train, score held-out × test
+    fit_df = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
+    score_df = panel[(panel["is_heldout"]) & (panel["split"] == "test")]
 
     names = sorted(score_df["station_name"].unique())
-    if max_stations:
-        names = names[: int(max_stations)]
-    if mode == "leave_one":
-        folds = [[n] for n in names]
-    else:
-        folds = station_folds(names, n_folds, int(cfg.get("kriging", {}).get("seed", 22)))
+    # Single evaluation group (the held-out set)
+    folds = [names]
 
     tuned = load_tuned(var, cfg["time_resolution"])
     if trend_override:

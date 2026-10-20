@@ -31,6 +31,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from paths import get_kriging_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from kriging_core import KrigingConfig, KrigingInterpolator
+from shared.splits.evaluation_sets import prepare_for_tuning
 from kriging_data import (
     attach_pack_terrain,
     attach_temperature,
@@ -119,6 +120,7 @@ def _eval_grid(panel, var, cfg, n_folds, locked: dict, varying: list[dict], labe
 
 def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None, rh_t_mode=None):
     panel = load_panel(cfg, var)
+    panel = prepare_for_tuning(panel)
     if months:
         panel = subset_times(panel, months)
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))

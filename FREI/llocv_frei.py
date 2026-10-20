@@ -17,7 +17,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_frei_tuned_params_path, get_master_grid_path, get_nested_llocv_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.splits.evaluation_sets import apply_evaluation_protocol
 from frei_core import FreiConfig, FreiInterpolator, two_step_var
 from frei_data import (
     attach_temperature,
@@ -108,45 +108,40 @@ def pack_from_master(cfg, n_regions: int = 6):
 
 
 def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, pack=None):
-    names = sorted(panel["station_name"].unique())
-    folds = station_folds(names, n_folds, fcfg.seed)
-    model = FreiInterpolator(fcfg, pack=pack)
-    use_profile = not two_step_var(var)
-    need_t = var.lower().startswith("rh") and fcfg.rh_t_mode in ("predicted", "observed")
+    """
+    Protocol-aware LLOCV.
+    - Fitting always excludes held-out stations.
+    - If score_splits contains 'test' (or 'all'): score held-out × test (final numbers).
+    - Otherwise (tuning): score pool stations on the requested splits
+      (caller should have remapped 'tune' → 'dev').
+    """
+    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
+    fit_ok = {"train"} if fit_splits == {"all"} else set(fit_splits)
+    fit_df = panel[(~panel["is_heldout"]) & (panel["split"].isin(fit_ok))]
+
+    if score_splits == {"all"} or "test" in score_splits:
+        score_df = panel[(panel["is_heldout"]) & (panel["split"] == "test")]
+    else:
+        score_df = panel[(~panel["is_heldout"]) & (panel["split"].isin(score_splits))]
+
+    if score_df.empty or fit_df["station_name"].nunique() < fcfg.min_stations:
+        return pd.DataFrame(columns=["station_name", "time", "split", "observed", "predicted"])
+
     rows = []
-    for hold in folds:
-        hold_set = set(hold)
-        don_all = panel[~panel["station_name"].isin(hold_set)]
-        q_all = panel[panel["station_name"].isin(hold_set)]
-        if score_splits != {"all"}:
-            q_all = q_all[q_all["split"].isin(score_splits)]
-        q_all = q_all.copy()
-        don_all = don_all.copy()
-        q_all["_t"] = pd.to_datetime(q_all["time"]).astype("datetime64[ns]")
-        don_all["_t"] = pd.to_datetime(don_all["time"]).astype("datetime64[ns]")
-        for ts, q in q_all.groupby("_t"):
-            don = don_all[don_all["_t"] == ts]
-            if don["station_name"].nunique() < fcfg.min_stations:
-                continue
-            t_obs = don["temp_mean"].to_numpy() if need_t and "temp_mean" in don.columns else None
-            t_obs_q = q["temp_mean"].to_numpy() if need_t and "temp_mean" in q.columns else None
-            try:
-                hat, _ = model.predict_timestamp(
-                    don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
-                    don[var].to_numpy(),
-                    q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
-                    use_profile=use_profile,
-                    var=var,
-                    t_obs=t_obs,
-                    t_obs_q=t_obs_q,
-                )
-            except Exception as exc:
-                print(f"  frei predict failed {ts}: {type(exc).__name__}: {exc}", flush=True)
-                continue
-            part = q[["station_name", "time", "split", var]].copy()
-            part["predicted"] = hat
-            part = part.rename(columns={var: "observed"})
-            rows.append(part)
+    for t, q in score_df.groupby("time", sort=False):
+        don = panel[(~panel["is_heldout"]) & (panel["time"] == t)]
+        if don["station_name"].nunique() < fcfg.min_stations or q.empty:
+            continue
+        model = FreiInterpolator(fcfg)
+        try:
+            model.fit(don, var, pack=pack)
+            pred = model.predict(q)
+        except Exception:
+            continue
+        part = q[["station_name", "time", "split", var]].copy()
+        part["observed"] = part[var]
+        part["predicted"] = pred
+        rows.append(part.drop(columns=[var]))
     if not rows:
         return pd.DataFrame(columns=["station_name", "time", "split", "observed", "predicted"])
     return pd.concat(rows, ignore_index=True)

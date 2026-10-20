@@ -26,10 +26,10 @@ from smacnp_data import (
     feature_columns,
     PaperScaler,
     FeatureScaler,
-    split_held_out,
 )
 from smacnp_core import SMACNP
 from paths import get_smacnp_model_path, get_method_output_dir
+from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of
 
 
 def get_device(cfg: dict) -> torch.device:
@@ -125,16 +125,24 @@ def main():
     df = feat_scaler.transform(df)
 
     station_names = df["station_name"].unique()
-    train_stations, held_stations = split_held_out(
-        station_names, cfg["smacnp"]["held_out_fraction"], cfg["smacnp"]["held_out_seed"]
-    )
+    held_out, pool = load_holdout()
+    train_stations = np.array([s for s in station_names if s in set(pool)])
+    held_stations = np.array([s for s in station_names if s in set(held_out)])
     print(f"evaluating on {len(held_stations)} held-out stations")
+
+    # Restrict to test quarters for the primary scores
+    qsplits = load_quarter_splits()
+    df["quarter"] = df["time"].map(quarter_of)
+    test_days = set(df.loc[df["quarter"].isin(qsplits["test"]), "time"].unique())
+    print(f"test quarters={len(qsplits['test'])}  test days={len(test_days)}")
 
     # For evaluation: context = all training-pool stations present that day
     # target = held-out stations present that day
     rows = []
     days = df["time"].unique()
     for day in days:
+        if day not in test_days:
+            continue
         df_day = df[df["time"] == day].dropna(subset=feat_cols + ["value"])
         df_ctx = df_day[df_day["station_name"].isin(train_stations)]
         df_tgt = df_day[df_day["station_name"].isin(held_stations)]

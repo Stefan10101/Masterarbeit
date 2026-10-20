@@ -29,6 +29,7 @@ from cnn_core import (
 )
 from cnn_data import data_sources, load_cnn_config, load_panel, precip_trace
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.splits.evaluation_sets import prepare_for_tuning
 
 try:
     import xarray as xr
@@ -335,6 +336,7 @@ def main():
     variables = [args.variable] if args.variable else cfg["cnn"].get("variables_to_process", ["temp_mean"])
     for var in variables:
         panel = load_panel(cfg, var)
+        panel = prepare_for_tuning(panel)
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))
         model, dev = train_one(

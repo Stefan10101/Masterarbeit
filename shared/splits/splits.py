@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Load the shared train / dev / test time windows."""
+"""Load the shared train / dev / test time windows.
+
+For the thesis evaluation protocol (stratified station hold-out +
+quarter-based 70/15/15 splits) see evaluation_sets.py and
+make_evaluation_sets.py in this directory.
+"""
 
 from __future__ import annotations
 

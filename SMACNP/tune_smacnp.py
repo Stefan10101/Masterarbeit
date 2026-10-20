@@ -26,12 +26,11 @@ from smacnp_data import (
     feature_columns,
     PaperScaler,
     FeatureScaler,
-    split_held_out,
-    split_days_random,
     prepare_day_tensors,
 )
 from smacnp_core import SMACNP, gaussian_nll, two_step_loss
 from paths import get_smacnp_model_path
+from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of
 
 
 def set_seed(seed: int):
@@ -161,9 +160,9 @@ def main():
     df = df.merge(stations[["station_name"] + [c for c in feat_cols if c not in ("x", "y")]], on="station_name", how="left")
 
     station_names = df["station_name"].unique()
-    train_stations, held_stations = split_held_out(
-        station_names, cfg["smacnp"]["held_out_fraction"], cfg["smacnp"]["held_out_seed"]
-    )
+    held_out, pool = load_holdout()
+    train_stations = np.array([s for s in station_names if s in set(pool)])
+    held_stations = np.array([s for s in station_names if s in set(held_out)])
     print(f"train stations={len(train_stations)}  held-out={len(held_stations)}")
 
     # Scalers on training-pool only
@@ -172,10 +171,12 @@ def main():
     feat_scaler = FeatureScaler().fit(df.loc[train_mask], feat_cols)
     df = feat_scaler.transform(df)
 
-    days = df["time"].unique()
-    train_days, val_days = split_days_random(
-        days, cfg["smacnp"]["train_day_fraction"], cfg["smacnp"]["day_split_seed"]
-    )
+    # Quarter-based temporal split (shared protocol)
+    qsplits = load_quarter_splits()
+    df["quarter"] = df["time"].map(quarter_of)
+    train_days = df.loc[df["quarter"].isin(qsplits["train"]), "time"].unique()
+    val_days = df.loc[df["quarter"].isin(qsplits["tune"]), "time"].unique()
+    print(f"train quarters={len(qsplits['train'])}  tune quarters={len(qsplits['tune'])}")
     print(f"train days={len(train_days)}  val days={len(val_days)}")
     print("Precomputing day tensors...")
     train_tensors = precompute_days(train_days, df, feat_cols, y_scaler, train_stations, cfg)

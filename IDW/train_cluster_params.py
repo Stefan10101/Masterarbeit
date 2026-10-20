@@ -44,6 +44,7 @@ from paths import (
     ensure_dir,
 )
 from loocv_optimizer import optimize_idw_params_loocv
+from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of
 
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
 
@@ -167,6 +168,7 @@ def build_field(
     value_col: str,
     timestamp: pd.Timestamp,
     min_stations: int,
+    exclude_stations: set | None = None,
 ) -> Optional[pd.DataFrame]:
     """Return valid_df for one timestamp or None if too few stations."""
     # robust timestamp match (handle tz-naive vs tz-aware)
@@ -184,6 +186,8 @@ def build_field(
         return None
 
     df_t = agg.loc[mask, ["station_name", value_col]].dropna(subset=[value_col])
+    if exclude_stations:
+        df_t = df_t[~df_t["station_name"].isin(exclude_stations)]
     merged = (
         df_t.merge(stations, on="station_name", how="inner")
         .dropna(subset=["x", "y", "elev", value_col])
@@ -204,13 +208,15 @@ def train_one_cluster(
     primary_metric: str,
     min_stations: int,
     n_jobs: int,
+    exclude_stations: set | None = None,
 ) -> Optional[dict]:
     """
     Run LOOCV on every medoid of one cluster, return median parameters.
+    Held-out evaluation stations are excluded.
     """
     rows = []
     for ts in medoid_times:
-        valid_df = build_field(agg, stations, value_col, ts, min_stations)
+        valid_df = build_field(agg, stations, value_col, ts, min_stations, exclude_stations)
         if valid_df is None:
             continue
         best_params, best_scores = optimize_idw_params_loocv(
@@ -294,32 +300,27 @@ def main():
             print(f"\n[{var}] parameters already exist → {out_path.name}  (use --force to overwrite)")
             continue
 
-        import importlib.util as _ilu
-        _sp = CODE_DIR / "shared" / "splits" / "splits.py"
-        _spec = _ilu.spec_from_file_location("thesis_time_splits", _sp)
-        _mod = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        spec = _mod.load_time_splits()
-        dev_start, dev_end = spec["windows"]["dev"]
-        start, end = str(dev_start.date()), str(dev_end.date())
-        dated = get_medoids_path(method, resolution, cluster_method, var, start, end)
+        # Shared protocol: exclude held-out stations; use tune quarters for parameter selection
+        held_out, _pool = load_holdout()
+        held_out_set = set(held_out)
+        qsplits = load_quarter_splits()
+        tune_quarters = set(qsplits["tune"])
+
         undated = get_medoids_path(method, resolution, cluster_method, var)
-        medoids_path = dated if dated.exists() else undated
+        medoids_path = undated
         if not medoids_path.exists():
-            print(f"\n[SKIP] medoids not found: {dated} or {undated}")
+            print(f"\n[SKIP] medoids not found: {undated}")
             continue
 
         medoids = pd.read_parquet(medoids_path)
         medoids["timestamp"] = pd.to_datetime(medoids["timestamp"], utc=True)
-        labels = _mod.label_times(
-            pd.DatetimeIndex(medoids["timestamp"]).tz_convert("UTC").tz_localize(None)
-        )
+        medoids["quarter"] = medoids["timestamp"].map(quarter_of)
         before = len(medoids)
-        medoids = medoids.loc[labels.to_numpy() == "dev"].copy()
+        medoids = medoids.loc[medoids["quarter"].isin(tune_quarters)].copy()
         print(f"  medoids {medoids_path}")
-        print(f"  medoids in DEV: {len(medoids)} / {before}")
+        print(f"  medoids in tune quarters: {len(medoids)} / {before}")
         if medoids.empty:
-            print(f"\n[SKIP] no DEV medoids for {var}")
+            print(f"\n[SKIP] no tune-quarter medoids for {var}")
             continue
 
         cluster_ids = sorted(medoids["cluster_id"].unique())
@@ -338,6 +339,7 @@ def main():
                 primary_metric=primary_metric,
                 min_stations=min_stations,
                 n_jobs=n_jobs,
+                exclude_stations=held_out_set,
             )
             if row is None:
                 print(f"  cluster {cid}: no usable medoids — skipped")
