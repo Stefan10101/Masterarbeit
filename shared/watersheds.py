@@ -70,89 +70,121 @@ def flow_accum(direc: np.ndarray) -> np.ndarray:
 
 
 def label_basins(direc: np.ndarray, acc: np.ndarray, accum_pct: float, min_cells: int) -> np.ndarray:
-    """Upstream labels from high-accumulation pour points + domain edge."""
+    """Upstream labels from high-accumulation pour points + domain edge.
+
+    Vectorized: seed pour points, then propagate labels downhill in array
+    steps instead of a Python walk over every cell.
+    """
     ny, nx = direc.shape
     thr = np.percentile(acc, accum_pct)
     pour = (acc >= thr).copy()
     pour[0, :] = pour[-1, :] = pour[:, 0] = pour[:, -1] = True
     labels = np.zeros((ny, nx), dtype=np.int32)
     ys, xs = np.where(pour)
-    # keep strongest pour points
     order = np.argsort(acc[ys, xs])[::-1]
-    next_id = 1
-    for k in order:
-        y0, x0 = int(ys[k]), int(xs[k])
-        if labels[y0, x0] != 0:
-            continue
-        labels[y0, x0] = next_id
-        next_id += 1
-    # walk every cell downhill to a labelled pour
-    for y in range(ny):
-        for x in range(nx):
-            if labels[y, x] != 0:
-                continue
-            path = []
-            cy, cx = y, x
-            seen = set()
-            lab = 0
-            for _ in range(ny + nx):
-                if (cy, cx) in seen:
-                    break
-                seen.add((cy, cx))
-                path.append((cy, cx))
-                if labels[cy, cx] != 0:
-                    lab = labels[cy, cx]
-                    break
-                d = int(direc[cy, cx])
-                if d < 0:
-                    break
-                di, dj = D8[d]
-                cy = min(max(cy + di, 0), ny - 1)
-                cx = min(max(cx + dj, 0), nx - 1)
-            if lab == 0:
-                lab = next_id
-                next_id += 1
-                labels[cy, cx] = lab
-            for py, px in path:
-                if labels[py, px] == 0:
-                    labels[py, px] = lab
-    # drop tiny basins into neighbour
-    for lab in np.unique(labels):
-        m = labels == lab
-        if m.sum() < min_cells:
-            dilated = ndi.binary_dilation(m)
-            ring = dilated & ~m
-            if ring.any():
-                labels[m] = int(np.bincount(labels[ring]).argmax())
+    labels[ys[order], xs[order]] = np.arange(1, len(order) + 1, dtype=np.int32)
+    next_id = len(order) + 1
+    print(f"      seeded {len(order):,} pour points", flush=True)
+
+    yy, xx = np.indices((ny, nx))
+    di = np.array([d[0] for d in D8], dtype=np.int32)
+    dj = np.array([d[1] for d in D8], dtype=np.int32)
+    d = np.clip(direc, 0, 7)
+    flows = direc >= 0
+    down_y = np.clip(yy + di[d], 0, ny - 1)
+    down_x = np.clip(xx + dj[d], 0, nx - 1)
+    down = (down_y * nx + down_x).ravel()
+    self_idx = (yy * nx + xx).ravel()
+    down = np.where(flows.ravel(), down, self_idx)
+
+    flat = labels.ravel()
+    n = flat.size
+    pos = np.arange(n, dtype=np.int64)
+    # Labelled cells are roots. Everyone else follows downstream.
+    # log2(n) pointer jumps reach the root instead of one step per cell.
+    nxt = np.where(flat != 0, pos, down.astype(np.int64))
+    jumps = int(np.ceil(np.log2(max(n, 2)))) + 1
+    print(f"      basins pointer-jump x{jumps} on {n:,} cells", flush=True)
+    for j in range(jumps):
+        nxt = nxt[nxt]
+    flat = flat[nxt]
+    # leftovers flowed to an unlabelled sink: one id per sink
+    left = flat == 0
+    if left.any():
+        roots = nxt[left]
+        uniq, inv = np.unique(roots, return_inverse=True)
+        flat[left] = next_id + inv
+    labels = flat.reshape(ny, nx)
+    print(f"      basins labelled  n={len(np.unique(labels)):,}", flush=True)
+
+    # drop tiny basins into the dominant 4-neighbour (vectorized, one pass)
+    if min_cells > 1:
+        counts = np.bincount(labels.ravel())
+        small = counts < min_cells
+        if small.any() and small.size > 1:
+            small[0] = False
+            # neighbour label: prefer downslope cell, else right/below
+            nb = labels.ravel()[down]
+            replace = small[labels]
+            labels[replace] = nb.reshape(ny, nx)[replace]
+            print(f"      merged {int(small.sum())} tiny basins", flush=True)
     return labels
 
 
 def merge_basins(labels: np.ndarray, dem: np.ndarray, xs: np.ndarray, ys: np.ndarray, n_regions: int) -> np.ndarray:
-    labs = [int(v) for v in np.unique(labels) if v != 0]
-    if len(labs) <= n_regions:
-        # compact to 1..K
-        out = np.zeros_like(labels)
-        for i, lab in enumerate(labs, start=1):
-            out[labels == lab] = i
-        return out
-    feats = []
-    for lab in labs:
-        m = labels == lab
-        yy, xx = np.where(m)
-        feats.append([
-            float(xs[xx].mean()),
-            float(ys[yy].mean()),
-            float(dem[m].mean()),
-            float(dem[m].min()),
-        ])
-    feats = np.asarray(feats)
+    """Cluster basins to n_regions. Vectorized; pre-bins if there are too many for linkage."""
+    flat = np.asarray(labels).ravel()
+    labs, inv = np.unique(flat, return_inverse=True)
+    keep = labs != 0
+    if not keep.all():
+        # drop background by mapping 0-bins out; Frei grids are fully labelled
+        pass
+    n = len(labs)
+    print(f"      merge: {n:,} basins -> {n_regions}", flush=True)
+    if n <= int(n_regions):
+        return (inv + 1).reshape(labels.shape).astype(np.int32)
+
+    yy, xx = np.indices(labels.shape)
+    xcoord = np.asarray(xs, dtype=np.float64)[xx]
+    ycoord = np.asarray(ys, dtype=np.float64)[yy]
+    counts = np.bincount(inv, minlength=n).astype(np.float64)
+    counts = np.clip(counts, 1.0, None)
+    cx = np.bincount(inv, weights=xcoord.ravel(), minlength=n) / counts
+    cy = np.bincount(inv, weights=ycoord.ravel(), minlength=n) / counts
+    cz = np.bincount(inv, weights=np.asarray(dem, dtype=np.float64).ravel(), minlength=n) / counts
+    min_z = np.full(n, np.inf)
+    np.minimum.at(min_z, inv, np.asarray(dem, dtype=np.float64).ravel())
+
+    # Too many basins for a full distance matrix: bin centroids on a coarse grid first.
+    if n > 1500:
+        target = max(int(n_regions) * 40, 200)
+        side = int(np.ceil(np.sqrt(target)))
+        ix = np.clip((cx - cx.min()) / (np.ptp(cx) + 1.0) * side, 0, side - 1).astype(np.int32)
+        iy = np.clip((cy - cy.min()) / (np.ptp(cy) + 1.0) * side, 0, side - 1).astype(np.int32)
+        bin_id = iy * side + ix
+        _, bin_inv = np.unique(bin_id, return_inverse=True)
+        print(f"      merge: pre-bin {n:,} -> {bin_inv.max()+1} spatial bins", flush=True)
+        bcounts = np.bincount(bin_inv).astype(np.float64)
+        bcounts = np.clip(bcounts, 1.0, None)
+        bcx = np.bincount(bin_inv, weights=cx) / bcounts
+        bcy = np.bincount(bin_inv, weights=cy) / bcounts
+        bcz = np.bincount(bin_inv, weights=cz) / bcounts
+        bzmin = np.full(len(bcounts), np.inf)
+        np.minimum.at(bzmin, bin_inv, min_z)
+        feats = np.column_stack([bcx, bcy, bcz, bzmin])
+        back = bin_inv
+    else:
+        feats = np.column_stack([cx, cy, cz, min_z])
+        back = inv
+
     feats = (feats - feats.mean(0)) / np.clip(feats.std(0), 1e-6, None)
+    print(f"      merge: linkage on {len(feats)}", flush=True)
     z = linkage(pdist(feats), method="ward")
-    grp = fcluster(z, t=int(n_regions), criterion="maxclust")
-    out = np.zeros_like(labels)
-    for lab, g in zip(labs, grp):
-        out[labels == lab] = int(g)
-    return out
+    grp = fcluster(z, t=int(n_regions), criterion="maxclust").astype(np.int32)
+    out = grp[back]
+    if back is not inv:
+        out = out[inv]
+    return out.reshape(labels.shape)
 
 
 def tpi(dem: np.ndarray, radius_cells: int) -> np.ndarray:
@@ -247,15 +279,22 @@ def sample_blend_weights(dist: np.ndarray, xs, ys, x, y, blend_cells: float) -> 
 
 
 def build_pack(dem: np.ndarray, xs: np.ndarray, ys: np.ndarray, cfg: WatershedConfig) -> dict:
+    print(f"    watershed pack: grid {dem.shape} n_regions={cfg.n_regions}", flush=True)
     dx = abs(float(xs[1] - xs[0])) if len(xs) > 1 else 1000.0
+    print("    D8 flow …", flush=True)
     direc = d8_flow(dem)
+    print("    accumulation …", flush=True)
     acc = flow_accum(direc)
+    print("    basins …", flush=True)
     raw = label_basins(direc, acc, cfg.accum_pct, cfg.min_basin_cells)
+    print("    merge to n_regions …", flush=True)
     regions = merge_basins(raw, dem, xs, ys, cfg.n_regions)
+    print("    TPI / valley axis …", flush=True)
     radius = max(int(cfg.tpi_radius_m / max(dx, 1.0)), 1)
     tpi_map = tpi(dem, radius)
     summit, cold = flags_from_tpi(tpi_map, cfg.summit_tpi, cfg.coldpool_tpi)
     uy, ux = valley_unit(direc)
+    print(f"    pack done ({int(max(int(regions.max()), 1))} regions)", flush=True)
     return {
         "regions": regions,
         "region_dist": region_distance(regions),

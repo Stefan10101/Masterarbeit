@@ -27,6 +27,7 @@ from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from paths import (
+    get_rfsi_tuned_params_path,
     get_aggregated_data_path,
     get_domain_stations_path,
     get_nested_llocv_path,
@@ -114,11 +115,20 @@ def load_panel(cfg, var):
 def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_every,
                  n_folds=0, months=None, pack=None):
     rfsi_cfg = cfg.get("rfsi", {})
-    n_obs = int(rfsi_cfg.get("n_obs", 10))
+    tuned = {}
+    tpath = get_rfsi_tuned_params_path(var, cfg["time_resolution"])
+    if tpath.exists():
+        with open(tpath, "r", encoding="utf-8") as f:
+            tuned = yaml.safe_load(f) or {}
+        print(f"  tuned params {tpath.name}")
+    n_obs = int(tuned.get("n_obs", rfsi_cfg.get("n_obs", 10)))
     rf_fixed = dict(rfsi_cfg.get("rf_fixed", {"n_estimators": 250, "random_state": 22}))
+    for key in ("max_depth", "min_samples_leaf", "max_features", "n_estimators"):
+        if key in tuned and tuned[key] is not None:
+            rf_fixed[key] = tuned[key]
     rf_params = {
         "n_estimators": int(rf_fixed.get("n_estimators", 250)),
-        "max_depth": rf_fixed.get("max_depth"),
+        "max_depth": None if rf_fixed.get("max_depth") is None else int(rf_fixed.get("max_depth")),
         "min_samples_leaf": int(rf_fixed.get("min_samples_leaf", 5)),
         "max_features": rf_fixed.get("max_features", "sqrt"),
         "random_state": int(rf_fixed.get("random_state", 22)),
@@ -304,12 +314,7 @@ def main():
     if args.quick:
         n_folds = n_folds or 2
         months = months or "seasonal4"
-    pack = None
-    try:
-        from Kriging.kriging_data import pack_from_master
-        pack = pack_from_master(cfg, 6)
-    except Exception:
-        pack = None
+    pack = None  # temp/precip do not use watershed regions
     for var in wanted:
         run_variable(
             cfg, var, fit_splits, score_splits,

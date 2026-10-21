@@ -81,6 +81,20 @@ def prepare_covariates(df, encoder=None, fit_encoder=False, use_elev=True, use_l
     return X, None
 
 
+
+SEASONAL4_MONTHS = (2, 5, 8, 11)
+
+
+def _subset_times(panel, spec):
+    if spec is None or spec in ("", "all"):
+        return panel
+    times = pd.to_datetime(panel["time"])
+    if str(spec).strip().lower() == "seasonal4":
+        return panel.loc[times.dt.month.isin(SEASONAL4_MONTHS)].copy()
+    keys = {s.strip() for s in str(spec).split(",") if s.strip()}
+    return panel.loc[times.dt.strftime("%Y-%m").isin(keys)].copy()
+
+
 def load_panel(cfg, var):
     time_res = cfg["time_resolution"]
     df = pd.read_parquet(get_aggregated_data_path("RFSI", time_res))
@@ -141,53 +155,46 @@ def load_medoid_times(cfg, var, cluster_method: str):
 
 def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
                 min_stations, n_splits, primary, rh_t_mode="none", two_step=False, tau_wet=0.5):
-    names = panel["station_name"].to_numpy()
-    uniq = np.unique(names)
-    if len(uniq) < n_splits * 2:
+    """Fit on pool x train quarters, score held-out x tune quarters. No station folds."""
+    train = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
+    hold = panel[(panel["is_heldout"]) & (panel["split"] == "tune")]
+    if train["station_name"].nunique() < min_stations or hold.empty:
         return None
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=22)
+    X_train, _ = prepare_covariates(
+        train, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+        extras=extras_for_var(train, var, rh_t_mode),
+    )
+    model = RFSI(
+        n_obs=n_obs, rf_params=rf_params,
+        two_step=two_step, tau_wet=tau_wet, var_name=var,
+    )
+    try:
+        model.fit_pooled(
+            times=train["time"].to_numpy(),
+            coords=train[["x", "y"]].to_numpy(),
+            z=train[var].to_numpy(),
+            X_cov=X_train,
+            min_stations=min_stations,
+        )
+    except RuntimeError:
+        return None
     obs_all, pred_all = [], []
-    for train_idx, test_idx in kf.split(uniq):
-        train_names = set(uniq[train_idx])
-        test_names = set(uniq[test_idx])
-        train = panel[panel["station_name"].isin(train_names)]
-        hold = panel[panel["station_name"].isin(test_names)]
-        if train["station_name"].nunique() < min_stations:
+    for t, hold_t in hold.groupby("time", sort=False):
+        others = panel[(~panel["is_heldout"]) & (panel["time"] == t)]
+        if len(others) < max(min_stations, n_obs):
             continue
-        X_train, _ = prepare_covariates(
-            train, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-            extras=extras_for_var(train, var, rh_t_mode),
+        X_hold, _ = prepare_covariates(
+            hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+            extras=extras_for_var(hold_t, var, rh_t_mode),
         )
-        model = RFSI(
-            n_obs=n_obs, rf_params=rf_params,
-            two_step=two_step, tau_wet=tau_wet, var_name=var,
+        pred = model.predict_field(
+            others[["x", "y"]].to_numpy(),
+            others[var].to_numpy(),
+            hold_t[["x", "y"]].to_numpy(),
+            X_hold,
         )
-        try:
-            model.fit_pooled(
-                times=train["time"].to_numpy(),
-                coords=train[["x", "y"]].to_numpy(),
-                z=train[var].to_numpy(),
-                X_cov=X_train,
-                min_stations=min_stations,
-            )
-        except RuntimeError:
-            continue
-        for t, hold_t in hold.groupby("time", sort=False):
-            others = train[train["time"] == t]
-            if len(others) < max(min_stations, n_obs):
-                continue
-            X_hold, _ = prepare_covariates(
-                hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-                extras=extras_for_var(hold_t, var, rh_t_mode),
-            )
-            pred = model.predict_field(
-                others[["x", "y"]].to_numpy(),
-                others[var].to_numpy(),
-                hold_t[["x", "y"]].to_numpy(),
-                X_cov_pred=X_hold,
-            )
-            obs_all.append(hold_t[var].to_numpy())
-            pred_all.append(pred)
+        obs_all.append(hold_t[var].to_numpy())
+        pred_all.append(np.asarray(pred, dtype=float))
     if not obs_all:
         return None
     o = np.concatenate(obs_all)
@@ -218,32 +225,19 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
     seed = int(rfsi.get("rf_fixed", {}).get("random_state", 22))
 
     panel = load_panel(cfg, var)
-    panel = prepare_for_tuning(panel)
+    from shared.splits.evaluation_sets import apply_evaluation_protocol
+    tagged, _, _, _ = apply_evaluation_protocol(panel)
+    panel = tagged[tagged["split"].isin(["train", "tune"])].copy()
     rh_t_mode = str(rfsi.get("rh_t_mode", "none"))
     two_step = bool(rfsi.get("two_step", True)) and two_step_var(var)
     tau_wet = float(rfsi.get("tau_wet", 0.5))
-    if quick:
-        from Kriging.kriging_data import subset_times
-        panel = subset_times(panel, months or "seasonal4")
-        spec = load_time_splits()
-        dev_start, dev_end = spec["windows"]["dev"]
-        panel = panel[(panel["time"] >= dev_start) & (panel["time"] <= dev_end)].copy()
-        print(f"  QUICK DEV panel: {len(panel):,} rows | "
-              f"{panel['station_name'].nunique()} stations | "
-              f"{panel['time'].nunique()} times")
-    else:
-        medoid_times = load_medoid_times(cfg, var, cluster_method)
-        if len(medoid_times) == 0:
-            raise RuntimeError(
-                f"No DEV medoid months for {var}. "
-                "Re-run identify_regimes with --start-date/--end-date = DEV."
-            )
-        panel_months = pd.to_datetime(panel["time"]).dt.to_period("M")
-        med_months = pd.DatetimeIndex(medoid_times).tz_localize(None).to_period("M")
-        panel = panel[panel_months.isin(set(med_months))].copy()
-        print(f"  DEV medoid panel: {len(panel):,} rows | "
-              f"{panel['station_name'].nunique()} stations | "
-              f"{panel['time'].nunique()} months")
+    # Global tune on the prepared panel (held-out dropped, test quarters removed).
+    # Optional month cut for dry runs; no regime/medoid subset.
+    if months or quick:
+        panel = _subset_times(panel, months or "seasonal4")
+    print(f"  tune panel: {len(panel):,} rows | "
+          f"{panel['station_name'].nunique()} stations | "
+          f"{panel['time'].nunique()} times")
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
 
     X_all, encoder = prepare_covariates(
@@ -259,11 +253,13 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
                  rfsi.get("rf_fixed", {}).get("max_features", "sqrt"))]
     else:
         grid = param_grid(cfg)
-    print(f"  search {len(grid)} combos × {n_splits} station folds, "
+    print(f"  search {len(grid)} combos, fit on train, score held-out x tune, "
           f"{n_est_search} trees")
     rows = []
     t0 = time.perf_counter()
-    for n_obs, depth, leaf, feat in grid:
+    n_grid = len(grid)
+    for i, (n_obs, depth, leaf, feat) in enumerate(grid, start=1):
+        print(f"  [{i}/{n_grid}] n={n_obs} depth={depth} leaf={leaf} feat={feat}", flush=True)
         rf_params = {
             "n_estimators": n_est_search,
             "max_depth": depth,
@@ -278,6 +274,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
             rh_t_mode=rh_t_mode, two_step=two_step, tau_wet=tau_wet,
         )
         if met is None:
+            print(f"    [{i}/{n_grid}] no score", flush=True)
             continue
         rows.append({
             "n_obs": int(n_obs),
@@ -286,9 +283,13 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
             "max_features": feat,
             **met,
         })
+        elapsed = time.perf_counter() - t0
+        eta = elapsed / i * (n_grid - i)
         print(
-            f"    n={n_obs:2d} depth={str(depth):4s} leaf={leaf} feat={feat!s:5s}  "
-            f"RMSE={met['rmse']:.3f} NSE={met['nse']:.3f}"
+            f"    [{i}/{n_grid}] n={n_obs:2d} depth={str(depth):4s} leaf={leaf} "
+            f"feat={feat!s:5s}  RMSE={met['rmse']:.3f} NSE={met['nse']:.3f}  "
+            f"elapsed={elapsed/60:.1f}min  ETA={eta/60:.1f}min",
+            flush=True,
         )
     if not rows:
         raise RuntimeError(f"Search produced no scores for {var}")
@@ -352,11 +353,8 @@ def main():
     wanted = args.variables or cfg.get("rfsi", {}).get("variables_to_process") or [
         "temp_mean", "precip_sum",
     ]
-    spec = load_time_splits()
-    dev = spec["windows"]["dev"]
     print("=" * 72)
-    print("RFSI pooled hyperparameter search")
-    print(f"  DEV {dev[0].date()} → {dev[1].date()}")
+    print("RFSI pooled hyperparameter search (global, no regimes)")
     print(f"  variables {wanted}")
     print("=" * 72)
     for var in wanted:

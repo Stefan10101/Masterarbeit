@@ -178,6 +178,13 @@ def get_kriging_model_path(variable: str, time_resolution: str) -> Path:
     return d / f"{variable}_kriging.joblib"
 
 
+def get_idw_tuned_params_path(variable: str, time_resolution: str) -> Path:
+    """IDW hyperparameters. Same layout as the other methods, outside CODE/."""
+    d = get_method_output_dir("IDW") / "cluster_params" / time_resolution / "idw"
+    ensure_dir(d)
+    return d / f"{variable}_idw_params.yaml"
+
+
 def get_kriging_tuned_params_path(variable: str, time_resolution: str) -> Path:
     """Best Kriging hyperparameters from the staged DEV search."""
     d = get_method_output_dir("Kriging") / "cluster_params" / time_resolution / "kriging"

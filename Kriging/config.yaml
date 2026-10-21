@@ -75,7 +75,7 @@ kriging:
 
   # staged DEV search (tune_kriging.py --phase)
   search:
-    k: [8, 12, 16, 24, 32, 48, 64]
+    k: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50]
     family: ["spherical", "exponential", "matern15", "gaussian"]
     theta_deg: [0.0, 30.0, 60.0, 90.0]
     aniso_ratio: [1.0, 0.5, 0.3]
@@ -84,7 +84,7 @@ kriging:
   # phase 5: expand past the phase-3 corner, then re-search k
   search_expand:
     alpha_z: [10.0, 50.0, 100.0, 200.0, 300.0, 400.0, 600.0]
-    k: [8, 12, 16, 24, 32, 48, 64]
+    k: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50]
 
 aggregation:
   weekly:

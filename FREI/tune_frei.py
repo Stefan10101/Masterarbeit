@@ -56,7 +56,8 @@ def _init(panel, cfg, packs, n_folds, var):
 def _eval_cell(nr, sh, k, aw):
     fcfg = cfg_to_frei(_CFG, {"n_regions": nr, "shrink": sh, "k": k, "across_w": aw})
     fcfg.select_metric = False
-    pred = run_llocv(_PANEL, _VAR, fcfg, _N_FOLDS, {"train"}, {"dev"}, _PACKS.get(int(nr)))
+    # Held-out stations x tune quarters. Donors are the pool, so no station folds.
+    pred = run_llocv(_PANEL, _VAR, fcfg, _N_FOLDS, {"train"}, {"tune"}, _PACKS.get(int(nr)))
     met = compute_metrics(pred["observed"], pred["predicted"])
     nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0
     return {
@@ -150,7 +151,11 @@ def main():
 
     for var in variables:
         panel = load_panel(cfg, var)
-        panel = prepare_for_tuning(panel)
+        # Keep held-out stations: they are the tune targets.
+        # Drop test quarters only, so the score cannot see the final split.
+        from shared.splits.evaluation_sets import apply_evaluation_protocol
+        tagged, _, _, _ = apply_evaluation_protocol(panel)
+        panel = tagged[tagged["split"].isin(["train", "tune"])].copy()
         rh_mode = args.rh_t_mode or block.get("rh_t_mode", "none")
         if var.lower().startswith("rh") and rh_mode in ("predicted", "observed"):
             panel = attach_temperature(panel, cfg)

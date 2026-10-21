@@ -47,27 +47,22 @@ from llocv_kriging import cfg_to_kriging, station_folds
 
 
 def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None) -> float:
-    train = panel[panel["split"] == "train"]
-    dev = panel[panel["split"] == "dev"]
-    names = sorted(dev["station_name"].unique())
-    folds = station_folds(names, n_folds, kcfg.seed)
+    """Held-out stations x tune quarters. Donors are the pool. No station folds."""
+    train = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
+    ho = panel[(panel["is_heldout"]) & (panel["split"] == "tune")]
+    if ho.empty or train["station_name"].nunique() < kcfg.min_stations:
+        return np.inf
+    model = KrigingInterpolator(kcfg)
+    model.pack = pack
+    model.fit(train, var, cfg["time_resolution"], cfg)
     obs, pred = [], []
-    for hold_names in folds:
-        hold_set = set(hold_names)
-        tr = train[~train["station_name"].isin(hold_set)]
-        ho = dev[dev["station_name"].isin(hold_set)]
-        if ho.empty or tr["station_name"].nunique() < kcfg.min_stations:
+    for t, ho_t in ho.groupby("time", sort=False):
+        others = panel[(panel["time"] == t) & (~panel["is_heldout"])]
+        if len(others) < kcfg.min_stations:
             continue
-        model = KrigingInterpolator(kcfg)
-        model.pack = pack
-        model.fit(tr, var, cfg["time_resolution"], cfg)
-        for t, ho_t in ho.groupby("time", sort=False):
-            others = panel[(panel["time"] == t) & (~panel["station_name"].isin(hold_set))]
-            if len(others) < kcfg.min_stations:
-                continue
-            yhat = model.predict_frame(others, ho_t, var)
-            obs.append(ho_t[var].to_numpy())
-            pred.append(yhat)
+        yhat = model.predict_frame(others, ho_t, var)
+        obs.append(ho_t[var].to_numpy())
+        pred.append(np.asarray(yhat, dtype=float))
     if not obs:
         return np.inf
     met = compute_metrics(np.concatenate(obs), np.concatenate(pred))
@@ -120,7 +115,10 @@ def _eval_grid(panel, var, cfg, n_folds, locked: dict, varying: list[dict], labe
 
 def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None, rh_t_mode=None):
     panel = load_panel(cfg, var)
-    panel = prepare_for_tuning(panel)
+    # Keep held-out stations: they are the tune targets. Drop test quarters.
+    from shared.splits.evaluation_sets import apply_evaluation_protocol
+    tagged, _, _, _ = apply_evaluation_protocol(panel)
+    panel = tagged[tagged["split"].isin(["train", "tune"])].copy()
     if months:
         panel = subset_times(panel, months)
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
@@ -149,10 +147,13 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None, rh_
         grid = [{"k": int(k), "k_indicator": int(k)} for k in search.get("k", [base.k])]
         best = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label= "phase 1a  k")
         locked = dict(best[1])
-        if is_precip(var):
+        if is_precip(var) and cfg["time_resolution"] != "monthly":
             grid = [{"k_indicator": int(k)} for k in search.get("k", [base.k])]
             best = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label= "phase 1b  k_indicator")
             locked = dict(best[1])
+        elif is_precip(var):
+            print(f"{var} phase 1b skipped: monthly fields are almost always wet, "
+                  f"k_indicator does not change the score", flush=True)
 
     if phase in ("2", "all"):
         grid = [{"family": str(f)} for f in search.get("family", [base.family])]

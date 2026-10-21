@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-Assign every timestamp to a DEV-fitted cluster model.
+Assign every timestamp to a cluster model fitted on the tune quarters.
 
-Fit stays on DEV (identify_regimes.py with DEV dates).
-This script only applies scaler + PCA + GMM/KMeans to all months.
+identify_regimes.py fits scaler + PCA + GMM/KMeans on the tune quarters
+(excluding held-out stations) and writes the model to the undated
+clusters/{resolution}/{cluster_method}/ folder.
+
+This script only applies that model to the full period and labels each
+timestamp with its quarter split (train / tune / test / outside) from
+shared/splits/quarter_splits.yaml.
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib.util as _ilu
 import sys
 from pathlib import Path
 
@@ -30,13 +34,7 @@ from identify_regimes import (
     _load_metadata,
     _time_col_name,
 )
-
-_spec = _ilu.spec_from_file_location(
-    "thesis_time_splits", CODE_DIR / "shared" / "splits" / "splits.py"
-)
-_mod = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-load_time_splits = _mod.load_time_splits
+from shared.splits.evaluation_sets import load_quarter_splits, quarter_of
 
 
 def parse_args():
@@ -48,14 +46,19 @@ def parse_args():
     return p.parse_args()
 
 
+def _split_label(ts, splits: dict) -> str:
+    q = quarter_of(ts)
+    for name, qs in splits.items():
+        if q in qs:
+            return name
+    return "outside"
+
+
 def main():
     args = parse_args()
-    spec = load_time_splits()
-    dev_start, dev_end = spec["windows"]["dev"]
-    tag = f"{dev_start.date()}_{dev_end.date()}".replace("-", "")
-    model_root = get_clusters_dir(args.method) / args.resolution / args.cluster_method / tag
-    out_root = get_clusters_dir(args.method) / args.resolution / args.cluster_method
-    out_root.mkdir(parents=True, exist_ok=True)
+    root = get_clusters_dir(args.method) / args.resolution / args.cluster_method
+    root.mkdir(parents=True, exist_ok=True)
+    splits = load_quarter_splits()
 
     time_col = _time_col_name(args.resolution)
     meta = _load_metadata()
@@ -63,13 +66,13 @@ def main():
     var_to_col = _discover_value_columns(data, args.variables)
 
     temp_col = next((c for c in ("temp_mean", "temperature") if c in data.columns), None)
-    print(f"DEV model dir: {model_root}")
-    print(f"Write assignments: {out_root}")
+    print(f"Model / assignment dir: {root}")
 
     for var, value_col in var_to_col.items():
-        pack_path = model_root / f"{var}_cluster_model.joblib"
+        pack_path = root / f"{var}_cluster_model.joblib"
         if not pack_path.exists():
             print(f"[SKIP] no model {pack_path}")
+            print(f"       Run identify_regimes.py first (writes the undated folder).")
             continue
         pack = joblib.load(pack_path)
         feat_df = build_feature_matrix(
@@ -85,18 +88,17 @@ def main():
         if pack["pca"] is not None:
             Xs = pack["pca"].transform(Xs)
         labels = pack["model"].predict(Xs)
+
+        timestamps = pd.to_datetime(feat_df.index, utc=True)
         assign = pd.DataFrame({
-            "timestamp": feat_df.index.to_numpy(),
+            "timestamp": timestamps.to_numpy(),
             "variable": var,
             "cluster_id": labels.astype(int),
-            "split": _mod.label_times(
-                pd.DatetimeIndex(pd.to_datetime(feat_df.index, utc=True))
-                .tz_convert("UTC").tz_localize(None)
-            ).to_numpy(),
+            "split": [_split_label(t, splits) for t in timestamps],
         })
-        assign.to_parquet(out_root / f"{var}_assignments.parquet", index=False)
-        assign.to_parquet(model_root / f"{var}_assignments_all.parquet", index=False)
-        print(f"  {var}: {len(assign)} timestamps → {out_root / f'{var}_assignments.parquet'}")
+        out_path = root / f"{var}_assignments.parquet"
+        assign.to_parquet(out_path, index=False)
+        print(f"  {var}: {len(assign)} timestamps → {out_path}")
         print(assign.groupby("split")["cluster_id"].nunique().to_string())
 
 

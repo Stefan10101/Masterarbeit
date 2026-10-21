@@ -73,7 +73,7 @@ def main():
             print(f"{var} load panel…", flush=True)
             panel = load_panel(cfg, var)
             if args.quick or args.months:
-                from Kriging.kriging_data import subset_times
+                from cnn_data import subset_times
                 panel = subset_times(panel, args.months or "seasonal4")
             panel, _hours = apply_hour_cut(panel, time_res, args.hours)
             ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))

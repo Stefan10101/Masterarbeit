@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import sys
 
 import numpy as np
@@ -83,37 +84,83 @@ def load_tuned(var, time_res):
         return yaml.safe_load(f) or {}
 
 
+
+def _score_one(payload):
+    """One timestamp. Own R process, so it is safe to run several at once."""
+    i, n, ts, don, q, var, gcfg = payload
+    model = GAMInterpolator(gcfg)
+    hat = model.predict_timestamp(
+        don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
+        don[var].to_numpy(),
+        q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
+        var=var,
+        clc=don["clc_group"].to_numpy() if "clc_group" in don.columns else None,
+        clc_q=q["clc_group"].to_numpy() if "clc_group" in q.columns else None,
+        slope=don["slope"].to_numpy() if "slope" in don.columns else None,
+        slope_q=q["slope"].to_numpy() if "slope" in q.columns else None,
+        sinasp=don["sinasp"].to_numpy() if "sinasp" in don.columns else None,
+        sinasp_q=q["sinasp"].to_numpy() if "sinasp" in q.columns else None,
+        cosasp=don["cosasp"].to_numpy() if "cosasp" in don.columns else None,
+        cosasp_q=q["cosasp"].to_numpy() if "cosasp" in q.columns else None,
+    )
+    part = q[["station_name", "time", "split", var]].copy()
+    part["observed"] = part[var]
+    part["predicted"] = hat
+    return i, str(ts), len(don), len(q), part.drop(columns=[var])
+
+
 def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, progress: str | None = None,
-              pack=None):
+              pack=None, jobs: int = 1):
     """Protocol-aware. Final scores: held-out × test. Tuning: pool × requested splits."""
     panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
-    if score_splits == {"all"} or "test" in score_splits:
-        score_df = panel[(panel["is_heldout"]) & (panel["split"] == "test")]
+    score_ok = {"tune" if s == "dev" else s for s in score_splits}
+    if score_splits == {"all"} or bool(score_ok & {"test", "tune"}):
+        score_df = panel[(panel["is_heldout"]) & (panel["split"].isin(score_ok))]
     else:
-        score_df = panel[(~panel["is_heldout"]) & (panel["split"].isin(score_splits))]
+        score_df = panel[(~panel["is_heldout"]) & (panel["split"].isin(score_ok))]
     if score_df.empty:
+        print(f"  {var} no score rows for {sorted(score_ok)}", flush=True)
         return pd.DataFrame(columns=["station_name", "time", "split", "observed", "predicted"])
 
-    rows = []
-    for t, q in score_df.groupby("time", sort=False):
-        don = panel[(~panel["is_heldout"]) & (panel["time"] == t)]
+    groups = list(score_df.groupby("time", sort=False))
+    print(f"  {var} scoring {len(groups)} timestamps, {len(score_df)} rows, "
+          f"form={gcfg.formula} ns={gcfg.n_splines} jobs={jobs}", flush=True)
+    payloads = []
+    for i, (ts, q) in enumerate(groups, start=1):
+        don = panel[(~panel["is_heldout"]) & (panel["time"] == ts)]
         if don["station_name"].nunique() < gcfg.min_stations:
+            print(f"    [{i}/{len(groups)}] {ts} skipped, too few donors", flush=True)
             continue
-        model = GAMInterpolator(gcfg)
-        try:
-            hat = model.predict_timestamp(
-                don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
-                don[var].to_numpy(),
-                q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
-                var=var,
-            )
-        except Exception:
-            continue
-        part = q[["station_name", "time", "split", var]].copy()
-        part["observed"] = part[var]
-        part["predicted"] = hat
-        rows.append(part.drop(columns=[var]))
+        payloads.append((i, len(groups), ts, don, q, var, gcfg))
+    rows = []
+    first_err = None
+    if jobs <= 1 or len(payloads) <= 1:
+        for payload in payloads:
+            i = payload[0]
+            try:
+                i, ts, nd, nq, part = _score_one(payload)
+                print(f"    [{i}/{len(groups)}] {ts} donors={nd} targets={nq}", flush=True)
+                rows.append(part)
+            except Exception as exc:
+                if first_err is None:
+                    first_err = exc
+                print(f"    [{i}/{len(groups)}] failed: {type(exc).__name__}: {exc}", flush=True)
+    else:
+        with ProcessPoolExecutor(max_workers=jobs) as ex:
+            futs = {ex.submit(_score_one, p): p[0] for p in payloads}
+            for fut in as_completed(futs):
+                i = futs[fut]
+                try:
+                    i, ts, nd, nq, part = fut.result()
+                    print(f"    [{i}/{len(groups)}] {ts} donors={nd} targets={nq}", flush=True)
+                    rows.append(part)
+                except Exception as exc:
+                    if first_err is None:
+                        first_err = exc
+                    print(f"    [{i}/{len(groups)}] failed: {type(exc).__name__}: {exc}", flush=True)
     if not rows:
+        if first_err is not None:
+            print(f"  {var} no rows, first error: {first_err}", flush=True)
         return pd.DataFrame(columns=["station_name", "time", "split", "observed", "predicted"])
     return pd.concat(rows, ignore_index=True)
 
@@ -125,6 +172,7 @@ def main():
     p.add_argument("--folds", type=int, default=None)
     p.add_argument("--months", default=None)
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--jobs", type=int, default=4)
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -137,6 +185,7 @@ def main():
     if args.quick:
         n_folds = args.folds or 2
         months = months or "seasonal4"
+    print(f"GAM LLOCV | {time_res} | vars={variables} | score will use held-out x requested split", flush=True)
     pack = pack_from_master(cfg, int(cfg.get("gam", {}).get("n_regions", 6)))
     for var in variables:
         tuned = load_tuned(var, time_res)
@@ -144,14 +193,16 @@ def main():
         if args.rh_t_mode:
             tuned["rh_t_mode"] = args.rh_t_mode
         gcfg = cfg_to_gam(cfg, tuned)
+        print(f"{var} loading panel", flush=True)
         panel = load_panel(cfg, var)
+        print(f"{var} panel rows={len(panel)}", flush=True)
         if str(var).lower().startswith("rh") and gcfg.rh_t_mode in ("predicted", "observed"):
             panel = attach_temperature(panel, cfg)
         panel = attach_pack_terrain(panel, pack)
         if months:
             panel = subset_times(panel, months)
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
-        pred = run_llocv(panel, var, gcfg, n_folds, parse_split_arg(args.fit), parse_split_arg(args.score), pack=pack)
+        pred = run_llocv(panel, var, gcfg, n_folds, parse_split_arg(args.fit), parse_split_arg(args.score), pack=pack, jobs=max(1, args.jobs))
         out = get_nested_llocv_path("GAM", var, time_res, domain="full")
         pred.to_parquet(out, index=False)
         print(f"{var} -> {out}")

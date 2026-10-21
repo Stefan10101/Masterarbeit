@@ -9,6 +9,7 @@ import itertools
 import sys
 
 import numpy as np
+import pandas as pd
 import yaml
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -33,6 +34,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variable", default=None)
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--jobs", type=int, default=4)
     add_hours_arg(p)
     add_time_res_arg(p)
     args = p.parse_args()
@@ -68,7 +70,18 @@ def main():
     variables = [args.variable] if args.variable else block.get("variables_to_process", ["temp_mean"])
     for var in variables:
         panel = load_panel(cfg, var)
-        panel = prepare_for_tuning(panel)
+        # Fit on pool x train, score held-out x tune. train_one reads split=='dev'.
+        from shared.splits.evaluation_sets import apply_evaluation_protocol
+        tagged, _, _, _ = apply_evaluation_protocol(panel)
+        train = tagged[(~tagged["is_heldout"]) & (tagged["split"] == "train")].copy()
+        dev = tagged[(tagged["is_heldout"]) & (tagged["split"] == "tune")].copy()
+        dev["split"] = "dev"
+        # Pool stations on the tune months are the IDW donors for the dev score.
+        pool_tune = tagged[(~tagged["is_heldout"]) & (tagged["split"] == "tune")].copy()
+        pool_tune["split"] = "pool"
+        panel = pd.concat([train, dev, pool_tune], ignore_index=True)
+        print(f"{var} train rows={len(train)} dev rows={len(dev)} "
+              f"dev times={dev['time'].nunique()}", flush=True)
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         trace = precip_trace(cfg, time_res, var)
         taus = list(search.get("tau_wet", [block.get("tau_wet", 0.5)])) if two_step_var(var) else [block.get("tau_wet", 0.5)]
@@ -85,7 +98,7 @@ def main():
             })
             _, dev = train_one(
                 panel, var, ccfg, elev, clc, gx, gy,
-                slope, sinasp, cosasp, time_res=time_res, trace=trace,
+                slope, sinasp, cosasp, time_res=time_res, trace=trace, jobs=max(1, args.jobs),
             )
             print(f"{var} levels={levels} ch={ch} mask={frac} tau={tau} dev={dev:.4f}", flush=True)
             if best is None or dev < best["dev"]:

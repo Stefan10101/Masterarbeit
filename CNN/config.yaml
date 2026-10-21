@@ -42,17 +42,19 @@ cnn:
   patience: 8
   lr: 0.001
   weight_decay: 0.0001
-  batch_times: 4
+  batch_times: 2          # leave headroom so the desktop GPU is not starved
+  tile_size: 64
+  tiles_per_batch: 64
   seed: 22
   device: "auto"
   use_amp: true
   n_folds: 5
 
   search:
-    n_levels: [3, 4, 5]
-    base_ch: [16, 32, 64]
-    train_mask_frac: [0.15, 0.25, 0.35]
-    tau_wet: [0.4, 0.5, 0.6]
+    n_levels: [4]        # dry run: one network; full grid later
+    base_ch: [32]       # dry run: one network; full grid later
+    train_mask_frac: [0.25]
+    tau_wet: [0.5]      # monthly: threshold does not move the score
 
 aggregation:
   weekly:

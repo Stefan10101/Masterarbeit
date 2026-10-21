@@ -22,6 +22,15 @@ SPLITS = ("train", "dev", "test")
 
 
 def load_time_splits(path: Path | None = None) -> dict:
+    """Deprecated. Continuous windows were replaced by quarter_splits.yaml.
+
+    Kept so old callers fail with a clear message instead of a missing file.
+    Use label_times() or evaluation_sets.load_quarter_splits().
+    """
+    raise FileNotFoundError(
+        "time_splits.yaml was removed. Use quarter_splits.yaml via "
+        "label_times() or shared.splits.evaluation_sets.load_quarter_splits()."
+    )
     path = Path(path) if path else get_time_splits_path()
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
@@ -41,14 +50,21 @@ def load_time_splits(path: Path | None = None) -> dict:
 
 
 def label_times(times) -> pd.Series:
-    """Map timestamps to train/dev/test/outside."""
-    spec = load_time_splits()
-    t = pd.DatetimeIndex(pd.to_datetime(times)).tz_localize(None)
-    labels = pd.Series("outside", index=range(len(t)))
-    for name in SPLITS:
-        start, end = spec["windows"][name]
-        labels[(t >= start) & (t <= end)] = name
-    return labels
+    """Map timestamps to train/dev/test/outside using quarter_splits.yaml.
+
+    The tune quarters are labelled 'dev' so existing code that looks for
+    the old DEV window hits the designated tune subset.
+    """
+    from shared.splits.evaluation_sets import load_quarter_splits, quarter_of
+    splits = load_quarter_splits()
+    q_to_split = {}
+    for name, qs in splits.items():
+        label = "dev" if name == "tune" else name
+        for q in qs:
+            q_to_split[q] = label
+    t = pd.to_datetime(times)
+    labels = [q_to_split.get(quarter_of(x), "outside") for x in t]
+    return pd.Series(labels, index=range(len(labels)))
 
 
 def in_splits(times, names) -> pd.Series:

@@ -308,27 +308,13 @@ def load_panel(cfg, var: str) -> pd.DataFrame:
 
 
 def attach_regimes(cfg, times: np.ndarray, var: str) -> np.ndarray:
-    """Join existing GMM assignments when present. Else cluster_id=0."""
-    time_res = cfg["time_resolution"]
-    fine = time_res in ("weekly", "daily", "half_hourly")
-    if not fine:
-        return np.zeros(len(times), dtype=np.int32)
-    kcfg = cfg.get("kriging", {})
-    method = kcfg.get("regimes_from", "RFSI")
-    cluster_method = kcfg.get("cluster_method", "gmm")
-    from paths import get_clusters_dir
+    """Regimes disabled for the method comparison.
 
-    canon = VAR_TO_REGIME.get(var, var)
-    path = get_clusters_dir(method) / time_res / cluster_method / f"{canon}_assignments.parquet"
-    if not path.exists():
-        return np.zeros(len(times), dtype=np.int32)
-    asg = pd.read_parquet(path)
-    tcol = "timestamp" if "timestamp" in asg.columns else "time"
-    asg["time"] = as_naive_utc(asg[tcol], time_res)
-    asg = asg.drop_duplicates("time")
-    src = pd.DataFrame({"time": times})
-    merged = src.merge(asg[["time", "cluster_id"]], on="time", how="left")
-    return merged["cluster_id"].fillna(0).astype(np.int32).to_numpy()
+    Clustering artefacts stay in the repo but no method consumes them.
+    Always return a single global regime (cluster_id=0) so variograms
+    are fit once per variable, not per meteorological regime.
+    """
+    return np.zeros(len(times), dtype=np.int32)
 
 
 def compute_metrics(obs, pred) -> dict:

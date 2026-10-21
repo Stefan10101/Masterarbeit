@@ -5,9 +5,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import time
 import sys
 
 import numpy as np
+import pandas as pd
 import torch
 import yaml
 
@@ -18,6 +20,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_model_path, get_cnn_tuned_params_path, get_master_grid_path
 from cnn_core import (
+    idw_fz_raster, idw_fz_points,
     CNNConfig,
     CNNInterpolator,
     cyclic_time,
@@ -63,6 +66,8 @@ def cfg_to_cnn(cfg, overrides=None) -> CNNConfig:
         lr=float(c.get("lr", 1e-3)),
         weight_decay=float(c.get("weight_decay", 1e-4)),
         batch_times=int(c.get("batch_times", 4)),
+        tile_size=int(c.get("tile_size", 64)),
+        tiles_per_batch=int(c.get("tiles_per_batch", 64)),
         seed=int(c.get("seed", 22)),
         device=str(c.get("device", "auto")),
         use_amp=bool(c.get("use_amp", True)),
@@ -101,35 +106,289 @@ def is_subdaily(panel, time_res: str | None = None) -> bool:
     return False
 
 
-def build_frames(panel, var, gx, gy, elev, clc, ccfg: CNNConfig, split, subdaily=False, trace=0.1):
+
+def _idw_baseline(var, time_res):
+    """Tuned IDW (p, Fz, k). Tries the Methods path, then the old CODE path."""
+    import yaml
+    from paths import get_idw_tuned_params_path, get_method_output_dir
+    res = time_res or "monthly"
+    from paths import get_method_output_dir
+    out = get_method_output_dir("IDW")
+    candidates = [
+        out / "global_params" / res / f"{var}_params.yaml",
+        get_idw_tuned_params_path(var, res),
+        out / "cluster_params" / res / "idw" / f"{var}_idw_params.yaml",
+    ]
+    for path in candidates:
+        if path.exists():
+            d = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            print(f"  baseline IDW from {path}", flush=True)
+            return float(d.get("p", 1.5)), float(d.get("Fz", 1.0)), int(d.get("k", 40))
+    print(f"  [WARN] no IDW yaml for {var} {res}, fallback p=1.5 Fz=1.0 k=40", flush=True)
+    print(f"         looked in {candidates[0]}", flush=True)
+    return 1.5, 1.0, 40
+
+
+
+def _idw_cache_path(var, time_res, ts, p, fz, k):
+    from paths import get_method_output_dir
+    key = pd.Timestamp(ts)
+    if key.tzinfo is not None:
+        key = key.tz_convert("UTC").tz_localize(None)
+    d = get_method_output_dir("CNN") / "idw_cache" / (time_res or "monthly") / var
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{key:%Y%m%dT%H%M}_p{p}_fz{fz}_k{k}.npz"
+
+
+def _load_idw(path):
+    if not path.exists():
+        return None
+    z = np.load(path)
+    return z["base"], z["pts"]
+
+
+def _save_idw(path, base, pts):
+    np.savez_compressed(path, base=np.asarray(base, dtype=np.float32), pts=np.asarray(pts, dtype=np.float32))
+
+
+def build_frames(panel, var, gx, gy, elev, clc, ccfg: CNNConfig, split, subdaily=False, trace=0.1,
+                 donors=None, time_res=None, jobs=1):
+    """donors: pool stations used as the IDW source. Dev frames must not IDW from
+    the held-out stations themselves, or the baseline is ~60 sparse neighbours."""
     sl = panel[panel["split"] == split]
+    donor_src = donors if donors is not None else panel
     frames = []
     ny, nx = elev.shape
     two = ccfg.two_step and two_step_var(var)
-    for ts, part in sl.groupby("time"):
+    groups = list(sl.groupby("time"))
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _ensure(item):
+        i, ts, part = item
+        tkey = pd.Timestamp(ts)
+        if tkey.tzinfo is not None:
+            tkey = tkey.tz_convert("UTC").tz_localize(None)
+        dtimes = pd.to_datetime(donor_src["time"])
+        if getattr(dtimes.dt, "tz", None) is not None:
+            dtimes = dtimes.dt.tz_convert("UTC").dt.tz_localize(None)
+        don = donor_src.loc[dtimes == tkey]
+        if don.empty or len(don) < 4 or not ccfg.residual_idw:
+            return "skip"
+        cache = _idw_cache_path(var, time_res, tkey, ccfg.idw_p, ccfg.idw_fz, ccfg.idw_k)
+        if cache.exists():
+            return "cached"
+        dx_, dy_, dz_, dv = don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(), don[var].to_numpy()
+        same = donors is None
+        base = idw_fz_raster(dx_, dy_, dz_, dv, gx, gy, elev, p=ccfg.idw_p, Fz=ccfg.idw_fz, k=ccfg.idw_k, exclude_self=same)
+        pts = idw_fz_points(dx_, dy_, dz_, dv, part["x"].to_numpy(), part["y"].to_numpy(), part["elev"].to_numpy(),
+                            p=ccfg.idw_p, Fz=ccfg.idw_fz, k=ccfg.idw_k, exclude_self=same)
+        _save_idw(cache, base, pts)
+        return "built"
+
+    n_jobs = max(1, int(jobs))
+    items = [(i, ts, part) for i, (ts, part) in enumerate(groups, start=1)]
+    print(f"    {split}: {len(items)} timestamps, Fz IDW jobs={n_jobs}", flush=True)
+    if n_jobs > 1 and len(items) > 1:
+        with ThreadPoolExecutor(max_workers=n_jobs) as ex:
+            for done, tag in enumerate(ex.map(_ensure, items), start=1):
+                if done % 25 == 0 or done == len(items):
+                    print(f"    idw {done}/{len(items)} {tag}", flush=True)
+    else:
+        for it in items:
+            _ensure(it)
+
+    for i, (ts, part) in enumerate(groups, start=1):
         if part["station_name"].nunique() < ccfg.min_stations:
+            print(f"    [{i}/{len(groups)}] {ts} skipped", flush=True)
             continue
+        n_st = part["station_name"].nunique()
         rows, cols = grid_index(part["x"].to_numpy(), part["y"].to_numpy(), gx, gy)
         val = part[var].to_numpy()
         field, mask = station_to_raster(rows, cols, val, ny, nx)
-        base = idw_raster(rows, cols, val, ny, nx, k=ccfg.idw_k) if ccfg.residual_idw else np.zeros_like(field)
+        tkey = pd.Timestamp(ts)
+        if tkey.tzinfo is not None:
+            tkey = tkey.tz_convert("UTC").tz_localize(None)
+        dtimes = pd.to_datetime(donor_src["time"])
+        if getattr(dtimes.dt, "tz", None) is not None:
+            dtimes = dtimes.dt.tz_convert("UTC").dt.tz_localize(None)
+        don = donor_src.loc[dtimes == tkey]
+        if don.empty or len(don) < 4:
+            print(f"    [{i}/{len(groups)}] {ts} no donors (n={len(don)})", flush=True)
+            continue
+        n_don = don["station_name"].nunique()
+        extra = f" donors={n_don}" if n_don != n_st else ""
+        dx_, dy_, dz_, dv = don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(), don[var].to_numpy()
+        sx, sy, sz = part["x"].to_numpy(), part["y"].to_numpy(), part["elev"].to_numpy()
+        same = donors is None
+        cache = _idw_cache_path(var, time_res, tkey, ccfg.idw_p, ccfg.idw_fz, ccfg.idw_k)
+        hit = _load_idw(cache) if ccfg.residual_idw else None
+        if hit is not None:
+            base, pts = hit
+            base = base.copy()
+            base[rows, cols] = pts
+            tag = "cached"
+        elif ccfg.residual_idw:
+            base = idw_fz_raster(
+                dx_, dy_, dz_, dv, gx, gy, elev,
+                p=ccfg.idw_p, Fz=ccfg.idw_fz, k=ccfg.idw_k, exclude_self=same,
+            )
+            pts = idw_fz_points(
+                dx_, dy_, dz_, dv, sx, sy, sz,
+                p=ccfg.idw_p, Fz=ccfg.idw_fz, k=ccfg.idw_k, exclude_self=same,
+            )
+            _save_idw(cache, base, pts)
+            base = base.copy()
+            base[rows, cols] = pts
+            tag = "built"
+        else:
+            base = np.zeros_like(field)
+            tag = "none"
+        print(f"    [{i}/{len(groups)}] {ts}  stations={n_st}{extra} {tag}", flush=True)
         resid = np.where(mask > 0, field - base, 0.0)
         wet = ((field > trace) & (mask > 0)).astype(np.float32)
         frames.append({
-            "value": resid.astype(np.float32) if ccfg.residual_idw else field,
-            "mask": mask,
-            "base": base,
-            "field": field.astype(np.float32),
-            "target": resid if ccfg.residual_idw else field,
-            "wet": wet,
-            "rows": rows,
-            "cols": cols,
-            "obs": val,
+            "rows": np.asarray(rows, dtype=np.int32),
+            "cols": np.asarray(cols, dtype=np.int32),
+            "obs": np.asarray(val, dtype=np.float32),
+            "pts": np.asarray(base[rows, cols], dtype=np.float32),
+            "wet": (np.asarray(val) > trace).astype(np.float32),
             "time": ts,
             "time_ch": cyclic_time(ts, subdaily) if ccfg.cyclic_time else None,
             "two_step": two,
         })
     return frames
+
+
+
+def _crop(arr, r, c, tile, shape):
+    """tile x tile window centered on (r, c), zero-padded at the border."""
+    arr = np.asarray(arr)
+    if arr.ndim == 1:
+        arr = arr.reshape(shape)
+    half = tile // 2
+    ny, nx = arr.shape
+    out = np.zeros((tile, tile), dtype=np.float32)
+    r0, c0 = int(r) - half, int(c) - half
+    rs, cs = max(r0, 0), max(c0, 0)
+    re, ce = min(r0 + tile, ny), min(c0 + tile, nx)
+    out[rs - r0:rs - r0 + (re - rs), cs - c0:cs - c0 + (ce - cs)] = arr[rs:re, cs:ce]
+    return out
+
+
+def pack_tiles(frames, elev, clc, model, rng, n_tiles, tile, train,
+               slope=None, sinasp=None, cosasp=None):
+    """Local windows centered on stations. Center pixel is the only target.
+
+    The center is zeroed in the input so the net cannot read the observation.
+    IDW on the frame is already exclude-self, so the residual target is real.
+    Returns numpy arrays; the caller moves them to the GPU.
+    """
+    half = tile // 2
+    shape = elev.shape
+    chans, tgts, qmasks, wets = [], [], [], []
+    n_fr = len(frames)
+    for _ in range(n_tiles):
+        fr = frames[int(rng.integers(0, n_fr))]
+        r = np.asarray(fr["rows"])
+        c = np.asarray(fr["cols"])
+        si = int(rng.integers(0, len(r)))
+        rr, cc = int(r[si]), int(c[si])
+        field = np.asarray(fr["field"], dtype=np.float32)
+        base = np.asarray(fr["base"], dtype=np.float32)
+        value = np.asarray(fr["value"], dtype=np.float32)
+        mask = np.asarray(fr["mask"], dtype=np.float32)
+        vc = _crop(value, rr, cc, tile, shape)
+        mc = _crop(mask, rr, cc, tile, shape)
+        vc[half, half] = 0.0
+        mc[half, half] = 0.0
+        chans.append(model.pack_channels(
+            vc, mc, _crop(elev, rr, cc, tile, shape), _crop(clc, rr, cc, tile, shape),
+            slope=None if slope is None else _crop(slope, rr, cc, tile, shape),
+            sinasp=None if sinasp is None else _crop(sinasp, rr, cc, tile, shape),
+            cosasp=None if cosasp is None else _crop(cosasp, rr, cc, tile, shape),
+            time_ch=fr.get("time_ch"),
+        ))
+        tgt = np.zeros((tile, tile), dtype=np.float32)
+        tgt[half, half] = (field[rr, cc] - base[rr, cc] - model.y_mean) / model.y_std
+        qm = np.zeros((tile, tile), dtype=np.float32)
+        qm[half, half] = 1.0
+        wet = np.zeros((tile, tile), dtype=np.float32)
+        wet[half, half] = float(fr["wet"][rr, cc]) if "wet" in fr else 0.0
+        tgts.append(tgt)
+        qmasks.append(qm)
+        wets.append(wet)
+    return (np.stack(chans), np.stack(tgts), np.stack(qmasks), np.stack(wets))
+
+
+def _to_dev(arrs, device):
+    return tuple(torch.from_numpy(a).to(device, non_blocking=True) for a in arrs)
+
+
+
+def _attach_static(frames, elev, clc, model, slope, sinasp, cosasp):
+    """One shared terrain/CLC grid. Time is a constant channel, filled per frame.
+
+    A daily run is ~1500 frames. Storing the 24-channel grid on each one is
+    ~110 GB. The grid does not change with the day.
+    """
+    z = np.zeros_like(elev, dtype=np.float32)
+    n_time = len(frames[0].get("time_ch") or [])
+    shared = model.pack_channels(
+        z, z, elev, clc, slope=slope, sinasp=sinasp, cosasp=cosasp,
+        time_ch=([0.0] * n_time) or None,
+    )
+    model._shared_static = shared
+    model._n_time = n_time
+
+
+def _pack_from_static(frames, idx, model, rng, mask_frac):
+    """Build one batch from the shared grid and the sparse station values.
+
+    Nothing full-grid is kept on the frame. The batch is the only dense array,
+    and it is discarded after the step.
+    """
+    ny, nx = model._shared_static.shape[-2:]
+    chans, tgts, qmasks, wets, bases, fields = [], [], [], [], [], []
+    for i in idx:
+        fr = frames[i]
+        r = np.asarray(fr["rows"]); c = np.asarray(fr["cols"])
+        obs = np.asarray(fr["obs"], dtype=np.float32)
+        pts = np.asarray(fr["pts"], dtype=np.float32)
+        drop = np.zeros(len(r), dtype=bool)
+        if mask_frac > 0 and len(r) >= 5:
+            cand = rng.random(len(r)) < mask_frac
+            if cand.any() and (~cand).sum() >= 4:
+                drop = cand
+        keep = ~drop
+        ch = model._shared_static.copy()
+        tc = fr.get("time_ch") or []
+        for j, tv in enumerate(tc):
+            ch[-(len(tc) - j)] = float(tv)
+        value = np.zeros((ny, nx), dtype=np.float32)
+        mask_in = np.zeros((ny, nx), dtype=np.float32)
+        value[r[keep], c[keep]] = obs[keep] - pts[keep]
+        mask_in[r[keep], c[keep]] = 1.0
+        ch[0] = np.where(mask_in > 0, (value - model.y_mean) / model.y_std, 0.0)
+        ch[1] = mask_in
+        qmask = np.zeros((ny, nx), dtype=np.float32)
+        if drop.any():
+            qmask[r[drop], c[drop]] = 1.0
+        else:
+            qmask[r, c] = 1.0
+        field = np.zeros((ny, nx), dtype=np.float32)
+        base = np.zeros((ny, nx), dtype=np.float32)
+        wet = np.zeros((ny, nx), dtype=np.float32)
+        field[r, c] = obs
+        base[r, c] = pts
+        wet[r, c] = np.asarray(fr["wet"], dtype=np.float32)
+        chans.append(ch)
+        tgts.append(((field - base - model.y_mean) / model.y_std).astype(np.float32))
+        qmasks.append(qmask)
+        wets.append(wet)
+        bases.append(base)
+        fields.append(field)
+    return tuple(np.stack(a).astype(np.float32) for a in (chans, tgts, qmasks, wets, bases, fields))
 
 
 def pack_batch(frames, idx, elev, clc, model: CNNInterpolator, rng, mask_frac, train: bool,
@@ -156,7 +415,11 @@ def pack_batch(frames, idx, elev, clc, model: CNNInterpolator, rng, mask_frac, t
         if keep.sum() < 4:
             keep = np.ones(len(r), dtype=bool)
             drop = ~keep
-        base = idw_raster(r[keep], c[keep], obs[keep], ny, nx, k=model.cfg.idw_k, exclude_self=True)
+        # Full-grid IDW is cached on the frame. Rebuilding it per batch is the
+        # CPU stall that leaves the GPU idle.
+        base = fr.get("base")
+        if base is None:
+            base = idw_raster(r[keep], c[keep], obs[keep], ny, nx, k=model.cfg.idw_k, exclude_self=True)
         value = np.zeros_like(field)
         mask_in = np.zeros_like(field)
         value[r[keep], c[keep]] = field[r[keep], c[keep]] - base[r[keep], c[keep]]
@@ -175,31 +438,52 @@ def pack_batch(frames, idx, elev, clc, model: CNNInterpolator, rng, mask_frac, t
         tgt = ((field - base) - model.y_mean) / model.y_std
         tgts.append(tgt.astype(np.float32))
         qmasks.append(qmask.astype(np.float32))
-        wets.append(fr.get("wet", np.zeros_like(fr["mask"])).astype(np.float32))
+        wet = np.zeros_like(fr["field"])
+        wet[r, c] = np.asarray(fr.get("wet", 0.0), dtype=np.float32)
+        wets.append(wet)
         bases.append(np.asarray(base, dtype=np.float32))
         fields.append(field)
-    x = torch.from_numpy(np.stack(chans).astype(np.float32)).to(model.device)
-    y = torch.from_numpy(np.stack(tgts)).to(model.device)
-    m = torch.from_numpy(np.stack(qmasks)).to(model.device)
-    w = torch.from_numpy(np.stack(wets)).to(model.device)
-    b = torch.from_numpy(np.stack(bases)).to(model.device)
-    f = torch.from_numpy(np.stack(fields)).to(model.device)
-    return x, y, m, w, b, f
+    return (
+        np.stack(chans).astype(np.float32),
+        np.stack(tgts).astype(np.float32),
+        np.stack(qmasks).astype(np.float32),
+        np.stack(wets).astype(np.float32),
+        np.stack(bases).astype(np.float32),
+        np.stack(fields).astype(np.float32),
+    )
 
 
 def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp=None, cosasp=None,
-              time_res: str | None = None, trace: float = 0.1):
+              time_res: str | None = None, trace: float = 0.1, jobs: int = 1):
     subdaily = is_subdaily(panel, time_res)
-    out_ch = 2 if (ccfg.two_step and two_step_var(var)) else 1
+    use_two = bool(ccfg.two_step) and two_step_var(var)
+    if use_two:
+        obs = panel.loc[panel["split"] == "train", var].to_numpy()
+        wet = float(np.mean(obs > trace)) if len(obs) else 0.0
+        # One class 80% of the time: the indicator cannot move the score.
+        if wet >= 0.80 or wet <= 0.20:
+            use_two = False
+            print(f"  two_step off: wet={wet:.3f} (indicator is constant)", flush=True)
+        else:
+            print(f"  two_step on: wet={wet:.3f}", flush=True)
+    ccfg.two_step = use_two
+    out_ch = 2 if use_two else 1
     in_ch = n_in_channels(ccfg, subdaily)
     model = CNNInterpolator(ccfg, in_ch=in_ch, out_ch=out_ch)
     if slope is None and ccfg.use_terrain:
         slope, sinasp, cosasp = grid_terrain(elev, gx, gy)
-    train_fr = build_frames(panel, var, gx, gy, elev, clc, ccfg, "train", subdaily, trace)
-    dev_fr = build_frames(panel, var, gx, gy, elev, clc, ccfg, "dev", subdaily, trace)
+    p_idw, fz, k_idw = _idw_baseline(var, time_res)
+    ccfg.idw_p, ccfg.idw_fz, ccfg.idw_k = p_idw, fz, k_idw
+    print(f"  baseline IDW p={p_idw} Fz={fz} k={k_idw}", flush=True)
+    train_fr = build_frames(panel, var, gx, gy, elev, clc, ccfg, "train", subdaily, trace, time_res=time_res, jobs=jobs)
+    pool = panel[panel["split"].isin(["train", "pool"])]
+    dev_fr = build_frames(panel, var, gx, gy, elev, clc, ccfg, "dev", subdaily, trace, donors=pool, time_res=time_res, jobs=jobs)
     if not train_fr:
         raise RuntimeError(f"no train frames for {var}")
-    vals = np.concatenate([f["target"][f["mask"] > 0] for f in train_fr])
+    if dev_fr:
+        err = np.concatenate([f["obs"] - f["pts"] for f in dev_fr])
+        print(f"  dev baseline IDW RMSE={np.sqrt(np.mean(err**2)):.2f}  n={len(err)}", flush=True)
+    vals = np.concatenate([f["obs"] - f["pts"] for f in train_fr])
     model.y_mean = float(vals.mean())
     model.y_std = float(vals.std() + 1e-6)
     model.z_mean = float(np.nanmean(elev))
@@ -215,19 +499,47 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
             scaler = torch.cuda.amp.GradScaler(enabled=True)
     rng = np.random.default_rng(ccfg.seed)
     best_state, best_loss, wait = None, np.inf, 0
-    n = len(train_fr)
     two = out_ch == 2
+    n = len(train_fr)
+    b = max(1, int(ccfg.batch_times))
+    order = rng.permutation(n)
+    batches = [order[i:i + b] for i in range(0, n, b)]
+    # Monthly has ~48 images, so the mask must change or the net memorizes them.
+    # Daily and finer have enough fields that one mask is fine, and prebuilding
+    # it keeps the GPU busy.
+    remask = time_res in (None, "monthly", "weekly", "seasonal")
+    _attach_static(train_fr + dev_fr, elev, clc, model, slope, sinasp, cosasp)
+    dev_idx = [list(range(i, min(i + b, len(dev_fr)))) for i in range(0, len(dev_fr), b)]
+    dev_batches = None  # packed inside the eval loop
+    train_batches = None
+    fut = None
+    pool = None
+    if remask:
+        print(f"  full grid  batch={b}  static once, new mask each epoch", flush=True)
+        from concurrent.futures import ThreadPoolExecutor
+        pool = ThreadPoolExecutor(max_workers=1)
+
+        def _epoch_batches(seed):
+            rr = np.random.default_rng(seed)
+            return [_pack_from_static(train_fr, idx, model, rr, ccfg.train_mask_frac) for idx in batches]
+
+        fut = pool.submit(_epoch_batches, int(rng.integers(1e9)))
+    else:
+        print(f"  full grid  batch={b}  pack one batch at a time ({len(batches)} / epoch)", flush=True)
     for epoch in range(ccfg.epochs):
+        t_ep = time.perf_counter()
+        if remask:
+            train_batches = fut.result()
+            fut = pool.submit(_epoch_batches, int(rng.integers(1e9)))
+            epoch_batches = train_batches
+        else:
+            epoch_batches = (_pack_from_static(train_fr, idx, model, rng, ccfg.train_mask_frac) for idx in batches)
         model.net.train()
-        order = rng.permutation(n)
         total = 0.0
         seen = 0
-        for i0 in range(0, n, ccfg.batch_times):
-            idx = order[i0:i0 + ccfg.batch_times]
-            x, y, m, wet, base_t, field_t = pack_batch(
-                train_fr, idx, elev, clc, model, rng, ccfg.train_mask_frac, True,
-                slope, sinasp, cosasp,
-            )
+        n_b = len(batches)
+        for bi, arrs in enumerate(epoch_batches, start=1):
+            x, y, m, wet, base_t, field_t = _to_dev(arrs, model.device)
             opt.zero_grad(set_to_none=True)
             if use_amp:
                 try:
@@ -258,29 +570,27 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
                 opt.step()
             total += float(loss.detach()) * int(m.sum())
             seen += int(m.sum())
+            if bi == 1 or bi % 50 == 0 or bi == n_b:
+                print(f"    epoch {epoch:03d}  batch {bi}/{n_b}  "
+                      f"train_mse={total / max(seen, 1):.4f}", flush=True)
         model.net.eval()
         dloss, dseen = 0.0, 0
         with torch.no_grad():
-            for i0 in range(0, len(dev_fr), ccfg.batch_times):
-                idx = list(range(i0, min(i0 + ccfg.batch_times, len(dev_fr))))
-                x, y, m, wet, base_t, field_t = pack_batch(
-                    dev_fr, idx, elev, clc, model, rng, ccfg.train_mask_frac, False,
-                    slope, sinasp, cosasp,
-                )
+            for arrs in (_pack_from_static(dev_fr, idx, model, rng, 0.0) for idx in dev_idx):
+                x, y, m, wet, base_t, field_t = _to_dev(arrs, model.device)
                 hat = model.net(x)
                 if two:
                     p = torch.sigmoid(hat[:, 0])
                     amt = hat[:, 1] * model.y_std + model.y_mean
                     if ccfg.residual_idw:
                         amt = amt + base_t
-                    recon = torch.where(p >= ccfg.tau_wet, amt, torch.zeros_like(amt))
-                    dloss += float(((recon - field_t) ** 2 * m).sum())
+                    recon = torch.where(p + 1e-4 >= ccfg.tau_wet, amt, torch.zeros_like(amt))
                 else:
                     pred = hat[:, 0] if hat.dim() == 4 else hat
                     recon = pred * model.y_std + model.y_mean
                     if ccfg.residual_idw:
                         recon = recon + base_t
-                    dloss += float(((recon - field_t) ** 2 * m).sum())
+                dloss += float((((recon - field_t) ** 2) * m).sum())
                 dseen += int(m.sum())
         if not dev_fr:
             dev = total / max(seen, 1)
@@ -288,7 +598,8 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
             dev = dloss / max(dseen, 1)
         print(
             f"epoch {epoch:03d} train_mse={total/max(seen,1):.4f} "
-            f"dev_mse={dev:.4f} dev_rmse={np.sqrt(max(dev, 0.0)):.3f}",
+            f"dev_mse={dev:.4f} dev_rmse={np.sqrt(max(dev, 0.0)):.3f} "
+            f"{time.perf_counter()-t_ep:.1f}s",
             flush=True,
         )
         if dev < best_loss:
@@ -299,6 +610,8 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
             wait += 1
             if wait >= ccfg.patience:
                 break
+    if pool is not None:
+        pool.shutdown(wait=False)
     if best_state is not None:
         model.net.load_state_dict(best_state)
     return model, best_loss

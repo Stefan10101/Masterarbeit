@@ -28,6 +28,7 @@ warnings.filterwarnings("ignore")
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from paths import (
+    get_rfsi_tuned_params_path,
     get_aggregated_data_path,
     get_domain_stations_path,
     get_interpolated_map_path,
@@ -223,6 +224,21 @@ def main():
 
     for var in wanted:
         print(f"\n{'=' * 60}\nVARIABLE: {var}")
+        n_obs = N_OBS
+        var_params = dict(rf_params)
+        tpath = get_rfsi_tuned_params_path(var, TIME_RES)
+        if tpath.exists():
+            tuned = yaml.safe_load(tpath.read_text(encoding="utf-8")) or {}
+            n_obs = int(tuned.get("n_obs", n_obs))
+            if tuned.get("max_depth") is not None:
+                var_params["max_depth"] = int(tuned["max_depth"])
+            if tuned.get("min_samples_leaf") is not None:
+                var_params["min_samples_leaf"] = int(tuned["min_samples_leaf"])
+            if tuned.get("max_features") is not None:
+                var_params["max_features"] = tuned["max_features"]
+            if tuned.get("n_estimators") is not None:
+                var_params["n_estimators"] = int(tuned["n_estimators"])
+            print(f"  tuned {tpath.name}  n_obs={n_obs} depth={var_params.get('max_depth')}")
         valid = station_data[["station_name", "time", var]].dropna()
         valid = valid.merge(stations, on="station_name", how="inner")
         valid = valid.dropna(subset=["x", "y", var])
@@ -252,7 +268,7 @@ def main():
             extras=extras_for_var(valid, var, rh_t_mode),
         )
         model = RFSI(
-            n_obs=N_OBS, rf_params=rf_params,
+            n_obs=n_obs, rf_params=var_params,
             two_step=bool(rfsi_cfg.get("two_step", True)) and two_step_var(var),
             tau_wet=float(rfsi_cfg.get("tau_wet", 0.5)),
             var_name=var,
@@ -270,7 +286,7 @@ def main():
         if SAVE_MODEL:
             model_path = get_rfsi_model_path(var, TIME_RES)
             dump({"model": model, "encoder": encoder, "variable": var,
-                  "n_obs": N_OBS, "rf_params": rf_params}, model_path)
+                  "n_obs": n_obs, "rf_params": var_params}, model_path)
             print(f"  saved model → {model_path}")
 
         llocv_records = []
@@ -311,7 +327,7 @@ def main():
                 Xt, _ = prepare_covariates(
                     valid, encoder=encoder, use_elev=use_elev, use_lc=use_lc
                 )
-                t_model = RFSI(n_obs=N_OBS, rf_params=rf_params, var_name="temp_mean")
+                t_model = RFSI(n_obs=n_obs, rf_params=var_params, var_name="temp_mean")
                 t_model.fit_pooled(
                     times=valid["time"].to_numpy(),
                     coords=valid[["x", "y"]].to_numpy(),
@@ -322,11 +338,11 @@ def main():
                 print(f"  RH T-model trained on {t_model.n_train_rows_:,} rows")
             if X_grid is not None and model.n_features_ is not None and t_model is None:
                 expect = model.n_features_
-                got = neighbor_width(N_OBS) + X_grid.shape[1]
+                got = neighbor_width(n_obs) + X_grid.shape[1]
                 if got != expect:
                     raise RuntimeError(
                         f"covariate mismatch: train features={expect}, "
-                        f"predict features={got} (n_obs={N_OBS}, "
+                        f"predict features={got} (n_obs={n_obs}, "
                         f"X_grid={X_grid.shape[1]})"
                     )
 
@@ -364,7 +380,7 @@ def main():
                         extras=extras_for_var(grid_df_t, var, rh_t_mode),
                     )
                     expect = model.n_features_
-                    got = neighbor_width(N_OBS) + X_grid_t.shape[1]
+                    got = neighbor_width(n_obs) + X_grid_t.shape[1]
                     if got != expect:
                         raise RuntimeError(
                             f"RH covariate mismatch: train={expect} predict={got}"
@@ -401,7 +417,7 @@ def main():
             )
             if "elev" in grid_crop:
                 ds["elev"] = (("y", "x"), grid_crop.elev.values.astype(np.float32))
-            ds["n_obs"] = ("time", np.full(n_kept, N_OBS, dtype=np.int16))
+            ds["n_obs"] = ("time", np.full(n_kept, n_obs, dtype=np.int16))
             ds["station_rmse"] = ("time", np.asarray(station_rmse, dtype=np.float32))
             ds.attrs.update({
                 "title": f"{var} - RFSI pooled - {TIME_RES} - {DOMAIN}",
@@ -412,7 +428,7 @@ def main():
                 "architecture": "pooled",
                 "time_resolution": TIME_RES,
                 "variable": var,
-                "n_obs": N_OBS,
+                "n_obs": n_obs,
                 "n_estimators": int(rf_params.get("n_estimators", 250)),
                 "n_train_rows": int(model.n_train_rows_),
                 "start_date": str(START_DATE.date()),

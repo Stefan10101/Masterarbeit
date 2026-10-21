@@ -8,6 +8,8 @@ import argparse
 import sys
 
 import numpy as np
+import pandas as pd
+from tqdm import tqdm
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODE_DIR = SCRIPT_DIR.parent
@@ -96,7 +98,8 @@ def main():
                 f"years={years or 'all'} months={months or 'all'} rh_t={fcfg.rh_t_mode}",
                 flush=True,
             )
-            for ts, sl in panel.groupby("time"):
+            groups = list(panel.groupby("time"))
+            for ts, sl in tqdm(groups, desc=f"  {var}", unit="month"):
                 if sl["station_name"].nunique() < min_stations:
                     continue
                 t_obs = sl["temp_mean"].to_numpy() if "temp_mean" in sl.columns else None
@@ -106,7 +109,10 @@ def main():
                     t_obs=t_obs, t_obs_q=None,
                 )
                 fields.append(hat.reshape(yy.shape).astype(np.float32))
-                used.append(np.datetime64(ts, "ns"))
+                stamp = pd.Timestamp(ts)
+                if stamp.tzinfo is not None:
+                    stamp = stamp.tz_convert("UTC").tz_localize(None)
+                used.append(np.datetime64(stamp, "ns"))
             if not fields:
                 print(f"{var} no fields written", flush=True)
                 continue

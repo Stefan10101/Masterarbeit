@@ -27,7 +27,7 @@ rfsi:
   variables_to_process: ["temp_mean", "precip_sum"]
 
   # --- search space (old per-field tuner; unused by pooled production) ---
-  n_obs_list: [5, 10, 20, 30]
+  n_obs_list: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50]  # shared: 2-20 step 2, then 5 to 50
 
   rf_fixed:
     n_estimators: 250

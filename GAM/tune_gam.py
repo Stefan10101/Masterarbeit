@@ -56,7 +56,7 @@ def _eval_cell(form, ns, tau):
     t0 = time.time()
     try:
         gcfg = cfg_to_gam(_CFG, {"formula": form, "n_splines": ns, "tau_wet": tau})
-        pred = run_llocv(_PANEL, _VAR, gcfg, _N_FOLDS, {"train"}, {"dev"}, progress=tag)
+        pred = run_llocv(_PANEL, _VAR, gcfg, _N_FOLDS, {"train"}, {"tune"}, progress=tag)
         met = compute_metrics(pred["observed"], pred["predicted"])
         nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0
         row = {
@@ -103,7 +103,9 @@ def main():
 
     for var in variables:
         panel = load_panel(cfg, var)
-        panel = prepare_for_tuning(panel)
+        from shared.splits.evaluation_sets import apply_evaluation_protocol
+        tagged, _, _, _ = apply_evaluation_protocol(panel)
+        panel = tagged[tagged["split"].isin(["train", "tune"])].copy()
         rh_mode = args.rh_t_mode or block.get("rh_t_mode", "none")
         if str(var).lower().startswith("rh") and rh_mode in ("predicted", "observed"):
             panel = attach_temperature(panel, cfg)

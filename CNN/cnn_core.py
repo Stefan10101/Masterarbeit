@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 
 try:
     import torch
@@ -28,7 +29,9 @@ class CNNConfig:
     n_levels: int = 4
     base_ch: int = 32
     residual_idw: bool = True
-    idw_k: int = 8
+    idw_k: int = 40
+    idw_p: float = 1.5
+    idw_fz: float = 1.0
     use_terrain: bool = True
     cyclic_time: bool = True
     two_step: bool = True
@@ -39,6 +42,8 @@ class CNNConfig:
     lr: float = 1e-3
     weight_decay: float = 1e-4
     batch_times: int = 4
+    tile_size: int = 64
+    tiles_per_batch: int = 64
     seed: int = 22
     device: str = "auto"
     use_amp: bool = True
@@ -146,6 +151,112 @@ class SmallUNet(nn.Module):
         return self.out(h)
 
 
+
+def idw_fz_raster(sx, sy, sz, sv, gx, gy, elev, p=1.5, Fz=1.0, k=40, exclude_self=True):
+    """Same distance as the IDW method: w^2 = (1-Fz)*w_xy^2 + Fz*w_z^2, w = d^(-p).
+
+    exclude_self drops a station from its own cell so the residual is not identically 0.
+    """
+    from scipy.spatial import cKDTree
+
+    sx = np.asarray(sx, dtype=np.float64)
+    sy = np.asarray(sy, dtype=np.float64)
+    sz = np.asarray(sz, dtype=np.float64)
+    sv = np.asarray(sv, dtype=np.float64)
+    elev = np.asarray(elev, dtype=np.float64)
+    ny, nx = elev.shape
+    yy, xx = np.meshgrid(np.asarray(gy, dtype=np.float64), np.asarray(gx, dtype=np.float64), indexing="ij")
+    txy = np.column_stack([xx.ravel(), yy.ravel()])
+    tz = elev.ravel()
+    tree = cKDTree(np.column_stack([sx, sy]))
+    kk = int(min(max(k, 1), len(sv)))
+    qk = min(kk + 1, len(sv)) if exclude_self else kk
+    # A station sits in a cell, not on its centre. Half a cell (~707 m at 1 km)
+    # is the geographic equivalent of the old exact pixel match.
+    dx = float(gx[1] - gx[0]) if len(gx) > 1 else 1000.0
+    dy = float(gy[1] - gy[0]) if len(gy) > 1 else 1000.0
+    self_tol = 0.5 * (abs(dx) ** 2 + abs(dy) ** 2) ** 0.5
+    out = np.empty(txy.shape[0], dtype=np.float32)
+    chunk = 120_000
+    for s in range(0, txy.shape[0], chunk):
+        e = min(s + chunk, txy.shape[0])
+        d, ix = tree.query(txy[s:e], k=qk)
+        d = np.atleast_2d(np.asarray(d, dtype=np.float64))
+        ix = np.atleast_2d(np.asarray(ix))
+        if exclude_self and d.shape[1] > 1:
+            use_d, use_i = d[:, :kk].copy(), ix[:, :kk].copy()
+            hit = d[:, 0] <= self_tol
+            if hit.any():
+                use_d[hit] = d[hit, 1:kk + 1]
+                use_i[hit] = ix[hit, 1:kk + 1]
+            d, ix = use_d, use_i
+        d = np.maximum(d, 1e-6)
+        dz = np.maximum(np.abs(sz[ix] - tz[s:e, None]), 1e-6)
+        w_xy = d ** (-p)
+        w_z = dz ** (-p)
+        w = (1.0 - Fz) * w_xy ** 2 + Fz * w_z ** 2
+        w /= w.sum(axis=1, keepdims=True)
+        out[s:e] = (w * sv[ix]).sum(axis=1).astype(np.float32)
+    return out.reshape(ny, nx)
+
+
+
+def idw_fz_points(sx, sy, sz, sv, tx, ty, tz, p=1.5, Fz=1.0, k=40, exclude_self=False):
+    """Point IDW at the target coordinates, same weights as the IDW method.
+
+    exclude_self is for targets that are the source stations: drop the nearest
+    neighbour, which is the station itself.
+    """
+    from scipy.spatial import cKDTree
+
+    sx = np.asarray(sx, dtype=np.float64)
+    sy = np.asarray(sy, dtype=np.float64)
+    sz = np.asarray(sz, dtype=np.float64)
+    sv = np.asarray(sv, dtype=np.float64)
+    tx = np.asarray(tx, dtype=np.float64)
+    ty = np.asarray(ty, dtype=np.float64)
+    tz = np.asarray(tz, dtype=np.float64)
+    if len(tx) == 0 or len(sx) == 0:
+        return np.zeros(len(tx), dtype=np.float32)
+    tree = cKDTree(np.column_stack([sx, sy]))
+    kk = int(min(max(k, 1), len(sv) - (1 if exclude_self and len(sv) > 1 else 0)))
+    qk = min(kk + 1, len(sv)) if exclude_self else kk
+    d, ix = tree.query(np.column_stack([tx, ty]), k=max(qk, 1))
+    d = np.atleast_2d(np.asarray(d, dtype=np.float64))
+    ix = np.atleast_2d(np.asarray(ix))
+    if exclude_self and d.shape[1] > 1:
+        d, ix = d[:, 1:kk + 1], ix[:, 1:kk + 1]
+    d = np.maximum(d, 1e-6)
+    dz = np.maximum(np.abs(sz[ix] - tz[:, None]), 1e-6)
+    w_xy = d ** (-p)
+    w_z = dz ** (-p)
+    w = (1.0 - Fz) * w_xy ** 2 + Fz * w_z ** 2
+    w /= np.maximum(w.sum(axis=1, keepdims=True), 1e-12)
+    return (w * sv[ix]).sum(axis=1).astype(np.float32)
+
+
+def sample_at_points(field, x, y, gx, gy):
+    """Bilinear sample of a raster at exact station coordinates."""
+    field = np.asarray(field, dtype=np.float64)
+    gx = np.asarray(gx, dtype=np.float64)
+    gy = np.asarray(gy, dtype=np.float64)
+    dx = float(gx[1] - gx[0]) if len(gx) > 1 else 1.0
+    dy = float(gy[1] - gy[0]) if len(gy) > 1 else 1.0
+    fc = np.clip((np.asarray(x) - gx[0]) / dx, 0, len(gx) - 1.001)
+    fr = np.clip((np.asarray(y) - gy[0]) / dy, 0, len(gy) - 1.001)
+    r0 = np.floor(fr).astype(int)
+    c0 = np.floor(fc).astype(int)
+    r1 = np.minimum(r0 + 1, field.shape[0] - 1)
+    c1 = np.minimum(c0 + 1, field.shape[1] - 1)
+    wr, wc = fr - r0, fc - c0
+    return (
+        field[r0, c0] * (1 - wr) * (1 - wc)
+        + field[r0, c1] * (1 - wr) * wc
+        + field[r1, c0] * wr * (1 - wc)
+        + field[r1, c1] * wr * wc
+    ).astype(np.float32)
+
+
 def idw_raster(rows, cols, values, ny, nx, k: int = 8, exclude_self: bool = True) -> np.ndarray:
     """IDW in pixel space. exclude_self drops the 0-distance hit so station
     cells get a real neighbour baseline (otherwise residual is identically 0).
@@ -216,15 +327,16 @@ def station_to_raster(rows, cols, values, ny, nx):
 
 
 def cyclic_time(ts, subdaily: bool):
-    t = np.datetime64(ts, "ns").astype("datetime64[D]")
-    # day of year
-    start = np.datetime64(str(t)[:4] + "-01-01")
-    doy = int((t - start) / np.timedelta64(1, "D")) + 1
+    """Day-of-year, plus hour at sub-daily. Times are UTC. No np.datetime64 tz warning."""
+    t = pd.Timestamp(ts)
+    if t.tzinfo is not None:
+        t = t.tz_convert("UTC").tz_localize(None)
+    doy = int(t.dayofyear)
     ang = 2 * np.pi * doy / 365.25
     out = [np.sin(ang), np.cos(ang)]
     if subdaily:
-        hour = (np.datetime64(ts, "ns") - np.datetime64(ts, "D")) / np.timedelta64(1, "h")
-        ha = 2 * np.pi * float(hour) / 24.0
+        hour = t.hour + t.minute / 60.0
+        ha = 2 * np.pi * hour / 24.0
         out += [np.sin(ha), np.cos(ha)]
     return out
 

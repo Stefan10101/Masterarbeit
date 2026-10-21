@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
 identify_regimes.py
-Identify meteorological regimes by clustering half-hourly (or coarser)
-station fields.  Produces regime assignments and rich diagnostics that
-later interpolation methods (BSS, IDW, RFSI, ...) can reuse.
+Identify meteorological regimes by clustering station fields.
+Produces regime assignments, medoids, and a fitted model that
+assign_regimes.py applies to the full period.
 
-Designed to live in CODE/shared/clustering/ and to be driven entirely
-through paths.py.
+Protocol (matches the rest of the suite):
+  - Fit only on the 'tune' quarters from shared/splits/quarter_splits.yaml
+    (override with --split train|tune|test or --quarters).
+  - Exclude held-out stations (shared/splits/holdout_stations.yaml) so
+    evaluation stations never influence the regime definition.
+  - Write artefacts to the undated clusters/{resolution}/{method}/ folder
+    that train_cluster_params.py and produce_* expect.
 """
 
 from __future__ import annotations
@@ -71,22 +76,32 @@ def parse_args():
                         "(0 to disable, default 0.95)")
     p.add_argument("--filter", default="all", choices=["all", "day", "night"])
     p.add_argument("--start-date", type=str, default=None,
-                   help="Override window start (default = DEV from time_splits.yaml)")
+                   help="Optional extra date filter (after quarter filter)")
     p.add_argument("--end-date", type=str, default=None,
-                   help="Override window end (default = DEV from time_splits.yaml)")
-    p.add_argument("--split", default="dev", choices=["train", "dev", "test"],
-                   help="Which time_splits.yaml window to use when dates are omitted")
+                   help="Optional extra date filter (after quarter filter)")
+    p.add_argument("--split", default="tune", choices=["train", "tune", "test"],
+                   help="Quarter split to fit on (default: tune). "
+                        "Uses shared/splits/quarter_splits.yaml.")
+    p.add_argument("--quarters", nargs="+", default=None,
+                   help="Explicit quarters (e.g. 2020-Q3 2021-Q1). Overrides --split.")
+    p.add_argument("--include-heldout", action="store_true",
+                   help="Do not drop held-out stations (default: drop them)")
     p.add_argument("--random-state", type=int, default=42)
     return p.parse_args()
 
 
-def _window_from_splits(split: str) -> tuple[str, str]:
-    spec_path = CODE_DIR / "shared" / "splits" / "splits.py"
-    spec = _ilu.spec_from_file_location("thesis_time_splits", spec_path)
-    mod = _ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    start, end = mod.load_time_splits()["windows"][split]
-    return str(start.date()), str(end.date())
+def _quarters_for_split(split: str) -> list[str]:
+    from shared.splits.evaluation_sets import load_quarter_splits
+    splits = load_quarter_splits()
+    if split not in splits:
+        raise KeyError(f"split '{split}' not in quarter_splits.yaml")
+    return list(splits[split])
+
+
+def _heldout_set() -> set[str]:
+    from shared.splits.evaluation_sets import load_holdout
+    held, _pool = load_holdout()
+    return set(held)
 
 
 def _time_col_name(resolution: str) -> str:
@@ -246,11 +261,14 @@ def main():
     resolution = args.time_resolution or args.resolution
     if not resolution:
         raise SystemExit("need --resolution or --time-resolution")
-    if not args.start_date or not args.end_date:
-        d0, d1 = _window_from_splits(args.split)
-        args.start_date = args.start_date or d0
-        args.end_date = args.end_date or d1
-        print(f"Using {args.split} window from time_splits.yaml: {args.start_date} → {args.end_date}")
+
+    from shared.splits.evaluation_sets import quarter_of
+    quarters = args.quarters or _quarters_for_split(args.split)
+    print(f"Fitting on {len(quarters)} quarters ({args.split}): {quarters}")
+    heldout = set() if args.include_heldout else _heldout_set()
+    if heldout:
+        print(f"Excluding {len(heldout)} held-out stations")
+
     time_col = _time_col_name(resolution)
 
     print("=" * 78)
@@ -289,6 +307,25 @@ def main():
     print(f"Loaded data from {source_method}: "
           f"{len(data):,} rows, {data[time_col].nunique():,} timestamps")
 
+    # Quarter filter (non-contiguous) + held-out exclusion
+    if pd.api.types.is_datetime64_any_dtype(data[time_col]):
+        ts_for_q = data[time_col]
+        if getattr(ts_for_q.dt, "tz", None) is not None:
+            ts_for_q = ts_for_q.dt.tz_convert(None)
+    else:
+        from clustering_core import parse_time_label
+        ts_for_q = data[time_col].map(lambda x: parse_time_label(x, resolution))
+    qmask = ts_for_q.map(quarter_of).isin(set(quarters))
+    n_before = len(data)
+    data = data.loc[qmask].copy()
+    print(f"Quarter filter ({args.split}): {n_before:,} → {len(data):,} rows "
+          f"({data[time_col].nunique():,} timestamps)")
+    if heldout and "station_name" in data.columns:
+        n_before = len(data)
+        data = data.loc[~data["station_name"].astype(str).isin(heldout)].copy()
+        print(f"Held-out exclusion: {n_before:,} → {len(data):,} rows "
+              f"({data['station_name'].nunique():,} stations)")
+
     var_to_col = _discover_value_columns(data, args.variables)
     print(f"Variables to process: {list(var_to_col.keys())}")
 
@@ -298,9 +335,10 @@ def main():
             temp_col = cand
             break
 
+    # Undated root: matches get_medoids_path / load_cluster_assignments
     out_roots = _output_roots(
         methods, resolution, args.cluster_method,
-        args.start_date, args.end_date,
+        None, None,
     )
     for r in out_roots:
         print(f"Output root: {r}")
