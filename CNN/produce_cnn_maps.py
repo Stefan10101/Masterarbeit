@@ -17,7 +17,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_model_path, get_interpolated_map_path, get_master_grid_path
-from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_raster, station_to_raster, two_step_var
+from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_fz_raster, idw_raster, station_to_raster, two_step_var
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace
 from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned, train_one
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
@@ -112,8 +112,13 @@ def main():
                 rows, cols = grid_index(sl["x"].to_numpy(), sl["y"].to_numpy(), gx, gy)
                 val = sl[var].to_numpy()
                 field, mask = station_to_raster(rows, cols, val, ny, nx)
-                base = idw_raster(rows, cols, val, ny, nx, k=ccfg.idw_k) if model.cfg.residual_idw else None
-                inp = np.where(mask > 0, field - base, 0.0).astype(np.float32) if base is not None else field
+                base = idw_fz_raster(sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(), val, x, y, zz, p=model.cfg.idw_p, Fz=model.cfg.idw_fz, k=model.cfg.idw_k) if model.cfg.residual_idw else None
+                if getattr(model, "log_amount", False):
+                    inp = np.log1p(np.maximum(field, 0.0)).astype(np.float32)
+                elif base is not None:
+                    inp = np.where(mask > 0, field - base, 0.0).astype(np.float32)
+                else:
+                    inp = field.astype(np.float32)
                 tch = cyclic_time(ts, subdaily) if model.cfg.cyclic_time else None
                 hat = model.predict_raster(
                     inp, mask, elev, clc,

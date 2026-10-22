@@ -137,7 +137,7 @@ def _idw_cache_path(var, time_res, ts, p, fz, k):
         key = key.tz_convert("UTC").tz_localize(None)
     d = get_method_output_dir("CNN") / "idw_cache" / (time_res or "monthly") / var
     d.mkdir(parents=True, exist_ok=True)
-    return d / f"{key:%Y%m%dT%H%M}_p{p}_fz{fz}_k{k}.npz"
+    return d / f"{key:%Y%m%dT%H%M}_p{p}_fz{fz}_k{k}_pool.npz"
 
 
 def _load_idw(path):
@@ -365,9 +365,13 @@ def _pack_from_static(frames, idx, model, rng, mask_frac):
         tc = fr.get("time_ch") or []
         for j, tv in enumerate(tc):
             ch[-(len(tc) - j)] = float(tv)
+        log_amt = bool(getattr(model, "log_amount", False))
         value = np.zeros((ny, nx), dtype=np.float32)
         mask_in = np.zeros((ny, nx), dtype=np.float32)
-        value[r[keep], c[keep]] = obs[keep] - pts[keep]
+        if log_amt:
+            value[r[keep], c[keep]] = np.log1p(np.maximum(obs[keep], 0.0))
+        else:
+            value[r[keep], c[keep]] = obs[keep] - pts[keep]
         mask_in[r[keep], c[keep]] = 1.0
         ch[0] = np.where(mask_in > 0, (value - model.y_mean) / model.y_std, 0.0)
         ch[1] = mask_in
@@ -380,10 +384,15 @@ def _pack_from_static(frames, idx, model, rng, mask_frac):
         base = np.zeros((ny, nx), dtype=np.float32)
         wet = np.zeros((ny, nx), dtype=np.float32)
         field[r, c] = obs
-        base[r, c] = pts
+        base[r, c] = 0.0 if log_amt else pts
         wet[r, c] = np.asarray(fr["wet"], dtype=np.float32)
+        if log_amt:
+            tgt_raw = np.zeros((ny, nx), dtype=np.float32)
+            tgt_raw[r, c] = np.log1p(np.maximum(obs, 0.0))
+        else:
+            tgt_raw = field - base
         chans.append(ch)
-        tgts.append(((field - base - model.y_mean) / model.y_std).astype(np.float32))
+        tgts.append(((tgt_raw - model.y_mean) / model.y_std).astype(np.float32))
         qmasks.append(qmask)
         wets.append(wet)
         bases.append(base)
@@ -467,6 +476,11 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
         else:
             print(f"  two_step on: wet={wet:.3f}", flush=True)
     ccfg.two_step = use_two
+    log_amount = two_step_var(var)
+    if log_amount:
+        # Precip/snow: no residual-to-IDW. Train on log1p(amount).
+        ccfg.residual_idw = False
+        print("  precip path: residual_idw off, target=log1p", flush=True)
     out_ch = 2 if use_two else 1
     in_ch = n_in_channels(ccfg, subdaily)
     model = CNNInterpolator(ccfg, in_ch=in_ch, out_ch=out_ch)
@@ -476,16 +490,25 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
     ccfg.idw_p, ccfg.idw_fz, ccfg.idw_k = p_idw, fz, k_idw
     print(f"  baseline IDW p={p_idw} Fz={fz} k={k_idw}", flush=True)
     train_fr = build_frames(panel, var, gx, gy, elev, clc, ccfg, "train", subdaily, trace, time_res=time_res, jobs=jobs)
-    pool = panel[panel["split"].isin(["train", "pool"])]
-    dev_fr = build_frames(panel, var, gx, gy, elev, clc, ccfg, "dev", subdaily, trace, donors=pool, time_res=time_res, jobs=jobs)
+    # Donors are same-timestamp stations. Train and dev are different months,
+    # so the donor pool must be the full (held-out-free) panel, not train times only.
+    dev_fr = build_frames(panel, var, gx, gy, elev, clc, ccfg, "dev", subdaily, trace, donors=panel, time_res=time_res, jobs=jobs)
     if not train_fr:
         raise RuntimeError(f"no train frames for {var}")
-    if dev_fr:
+    print(f"  frames train={len(train_fr)}  dev={len(dev_fr)}", flush=True)
+    if not dev_fr:
+        print("  WARNING: no dev frames; dev loss will mirror train", flush=True)
+    if dev_fr and not log_amount:
         err = np.concatenate([f["obs"] - f["pts"] for f in dev_fr])
         print(f"  dev baseline IDW RMSE={np.sqrt(np.mean(err**2)):.2f}  n={len(err)}", flush=True)
-    vals = np.concatenate([f["obs"] - f["pts"] for f in train_fr])
+    elif dev_fr and log_amount:
+        print("  precip path: no IDW baseline in the loop; score is raw mm after expm1", flush=True)
+    vals = np.concatenate([f["obs"] for f in train_fr]).astype(np.float64)
+    if log_amount:
+        vals = np.log1p(np.maximum(vals, 0.0))
     model.y_mean = float(vals.mean())
     model.y_std = float(vals.std() + 1e-6)
+    model.log_amount = log_amount
     model.z_mean = float(np.nanmean(elev))
     model.z_std = float(np.nanstd(elev) + 1.0)
 
@@ -580,25 +603,35 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
                 x, y, m, wet, base_t, field_t = _to_dev(arrs, model.device)
                 hat = model.net(x)
                 if two:
-                    p = torch.sigmoid(hat[:, 0])
+                    pw = torch.sigmoid(hat[:, 0])
                     amt = hat[:, 1] * model.y_std + model.y_mean
-                    if ccfg.residual_idw:
+                    if model.log_amount:
+                        amt = torch.expm1(amt)
+                    elif ccfg.residual_idw:
                         amt = amt + base_t
-                    recon = torch.where(p + 1e-4 >= ccfg.tau_wet, amt, torch.zeros_like(amt))
+                    recon = amt
+                    gate = float(((pw + 1e-4 >= ccfg.tau_wet) * m).sum() / m.sum().clamp_min(1))
                 else:
                     pred = hat[:, 0] if hat.dim() == 4 else hat
                     recon = pred * model.y_std + model.y_mean
-                    if ccfg.residual_idw:
+                    if model.log_amount:
+                        recon = torch.expm1(recon)
+                    elif ccfg.residual_idw:
                         recon = recon + base_t
+                    gate = 1.0
                 dloss += float((((recon - field_t) ** 2) * m).sum())
                 dseen += int(m.sum())
+                if epoch == 0 and dseen == int(m.sum()):
+                    bmean = float((base_t * m).sum() / m.sum().clamp_min(1))
+                    print(f"    dev check  gate_open={gate:.2f}  base_at_stations={bmean:.2f}  "
+                          f"y_mean={model.y_mean:.2f}", flush=True)
         if not dev_fr:
             dev = total / max(seen, 1)
         else:
             dev = dloss / max(dseen, 1)
         print(
             f"epoch {epoch:03d} train_mse={total/max(seen,1):.4f} "
-            f"dev_mse={dev:.4f} dev_rmse={np.sqrt(max(dev, 0.0)):.3f} "
+            f"dev_mse={dev:.4f} dev_rmse_mm={np.sqrt(max(dev, 0.0)):.3f} "
             f"{time.perf_counter()-t_ep:.1f}s",
             flush=True,
         )

@@ -389,9 +389,10 @@ class GAMInterpolator:
             p = np.clip(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q, tmean=tmean_q), 0.0, 1.0)
             wet_m = values > tr
             if wet_m.sum() >= 5:
+                amt_in = np.log1p(np.maximum(np.asarray(values)[wet_m], 0.0))
                 self.fit_gaussian(
                     np.asarray(x)[wet_m], np.asarray(y)[wet_m], np.asarray(elev)[wet_m],
-                    values[wet_m],
+                    amt_in,
                     None if clc is None else np.asarray(clc)[wet_m],
                     None if slope is None else np.asarray(slope)[wet_m],
                     None if sinasp is None else np.asarray(sinasp)[wet_m],
@@ -399,7 +400,7 @@ class GAMInterpolator:
                     family="gaussian",
                     tmean=None if tmean is None else np.asarray(tmean)[wet_m],
                 )
-                amt = np.maximum(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q, tmean=tmean_q), 0.0)
+                amt = np.maximum(np.expm1(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q, tmean=tmean_q)), 0.0)
             else:
                 amt = np.zeros(np.asarray(xq).size)
             return np.where(p >= self.cfg.tau_wet, amt, 0.0)

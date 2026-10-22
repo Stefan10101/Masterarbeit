@@ -27,6 +27,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from paths import get_nested_llocv_path, get_rgi_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from rgi_core import RGI, RGIConfig
+from rgi_data import attach_extras, extra_cols_for_var, load_config, load_panel, print_split_metrics, subset_times
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 import yaml
 
@@ -91,7 +92,6 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
     panel = attach_extras(load_panel(cfg, var), cfg, var)
     panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
     if cfg.get("_quick_months"):
-        from Kriging.kriging_data import subset_times
         panel = subset_times(panel, cfg["_quick_months"])
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
     # Protocol
@@ -182,10 +182,7 @@ def main():
         cfg.setdefault("rgi", {})
         cfg["rgi"]["epochs"] = min(int(cfg["rgi"].get("epochs", 80)), 15)
         cfg["rgi"]["patience"] = min(int(cfg["rgi"].get("patience", 12)), 4)
-        if args.months or True:
-            from Kriging.kriging_data import subset_times
-            # applied inside run after load — store on cfg
-            cfg["_quick_months"] = args.months or "seasonal4"
+        cfg["_quick_months"] = args.months or "seasonal4"
     from rgi_core import describe_device, resolve_device
     print("=" * 72)
     print("RGI station LLOCV")

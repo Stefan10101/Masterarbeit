@@ -56,7 +56,7 @@ def _init(panel, cfg, packs, n_folds, var):
 def _eval_cell(nr, sh, k, aw):
     fcfg = cfg_to_frei(_CFG, {"n_regions": nr, "shrink": sh, "k": k, "across_w": aw})
     fcfg.select_metric = False
-    # Held-out stations x tune quarters. Donors are the pool, so no station folds.
+    # Pool stations x tune quarters. Donors are the other pool stations.
     pred = run_llocv(_PANEL, _VAR, fcfg, _N_FOLDS, {"train"}, {"tune"}, _PACKS.get(int(nr)))
     met = compute_metrics(pred["observed"], pred["predicted"])
     nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0
@@ -104,6 +104,7 @@ def _coord_search(nregs, shrinks, ks, aws, jobs, var, defaults):
     locked = dict(defaults)
     best = None
     seen = set()
+    all_rows = []
     builders = [
         ("n_regions", lambda: [(nr, locked["shrink"], locked["k"], locked["across_w"]) for nr in nregs]),
         ("shrink", lambda: [(locked["n_regions"], sh, locked["k"], locked["across_w"]) for sh in shrinks]),
@@ -118,12 +119,13 @@ def _coord_search(nregs, shrinks, ks, aws, jobs, var, defaults):
         rows = _run_cells(cells, jobs)
         for c in cells:
             seen.add(c)
+        all_rows.extend(rows)
         best = _print_rows(var, rows, best)
         locked["n_regions"] = best["n_regions"]
         locked["shrink"] = best["shrink"]
         locked["k"] = best["k"]
         locked["across_w"] = best["across_w"]
-    return best
+    return best, all_rows
 
 
 def main():
@@ -133,7 +135,8 @@ def main():
     p.add_argument("--mode", choices=["coord", "grid"], default=None)
     p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
     p.add_argument("--folds", type=int, default=None)
-    p.add_argument("--quick", action="store_true")
+    p.add_argument("--max-times", type=int, default=400,
+                   help="cap timestamps, sampled within each split")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -151,11 +154,20 @@ def main():
 
     for var in variables:
         panel = load_panel(cfg, var)
-        # Keep held-out stations: they are the tune targets.
-        # Drop test quarters only, so the score cannot see the final split.
         from shared.splits.evaluation_sets import apply_evaluation_protocol
         tagged, _, _, _ = apply_evaluation_protocol(panel)
-        panel = tagged[tagged["split"].isin(["train", "tune"])].copy()
+        # Pool stations only for the search. Drop the official held-out set.
+        panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
+        if args.max_times and panel["time"].nunique() > args.max_times:
+            rng = np.random.default_rng(int(block.get("seed", 22)))
+            keep = []
+            for sp in ("train", "tune"):
+                ts = panel.loc[panel["split"] == sp, "time"].drop_duplicates().to_numpy()
+                if len(ts) == 0:
+                    continue
+                n = max(1, int(round(args.max_times * len(ts) / max(panel["time"].nunique(), 1))))
+                keep.extend(rng.choice(ts, size=min(n, len(ts)), replace=False).tolist())
+            panel = panel[panel["time"].isin(keep)].copy()
         rh_mode = args.rh_t_mode or block.get("rh_t_mode", "none")
         if var.lower().startswith("rh") and rh_mode in ("predicted", "observed"):
             panel = attach_temperature(panel, cfg)
@@ -188,8 +200,9 @@ def main():
             print(f"{var} grid cells={len(cells)}", flush=True)
             results = _run_cells(cells, jobs)
             best = _print_rows(var, results, None)
+            all_rows = results
         else:
-            best = _coord_search(nregs, shrinks, ks, aws, jobs, var, defaults)
+            best, all_rows = _coord_search(nregs, shrinks, ks, aws, jobs, var, defaults)
         if best is None:
             print(f"{var} no finite DEV result", flush=True)
             continue
@@ -201,6 +214,11 @@ def main():
         path = get_frei_tuned_params_path(var, time_res)
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(best, f)
+        if all_rows:
+            import pandas as pd
+            sp = path.with_name(f"{var}_search.csv")
+            pd.DataFrame(all_rows).to_csv(sp, index=False)
+            print(f"wrote {sp}  ({len(all_rows)} trials)", flush=True)
         print(f"wrote {path} best={best}", flush=True)
 
 

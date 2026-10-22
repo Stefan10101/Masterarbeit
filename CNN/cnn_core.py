@@ -350,6 +350,7 @@ class CNNInterpolator:
         self.y_std = 1.0
         self.z_mean = 0.0
         self.z_std = 1.0
+        self.log_amount = False
         self.in_ch = in_ch
         self.out_ch = out_ch
 
@@ -358,6 +359,7 @@ class CNNInterpolator:
             "net": self.net.state_dict(),
             "y_mean": self.y_mean, "y_std": self.y_std,
             "z_mean": self.z_mean, "z_std": self.z_std,
+            "log_amount": bool(self.log_amount),
             "in_ch": self.in_ch, "out_ch": self.out_ch,
             "cfg": self.cfg.__dict__,
         }
@@ -384,6 +386,7 @@ class CNNInterpolator:
         self.y_std = blob["y_std"]
         self.z_mean = blob["z_mean"]
         self.z_std = blob["z_std"]
+        self.log_amount = bool(blob.get("log_amount", False))
 
     def pack_channels(self, value, mask, elev, clc, slope=None, sinasp=None, cosasp=None,
                       time_ch=None, extras=None):
@@ -426,12 +429,16 @@ class CNNInterpolator:
         if two_step and hat.ndim == 3 and hat.shape[0] >= 2:
             p = 1.0 / (1.0 + np.exp(-hat[0]))
             amt = hat[1] * self.y_std + self.y_mean
-            if base is not None:
+            if self.log_amount:
+                amt = np.expm1(amt)
+            elif base is not None:
                 amt = amt + base
             amt = np.maximum(amt, 0.0)
             return clip_var(var, np.where(p >= self.cfg.tau_wet, amt, 0.0)).astype(np.float32)
         raw = hat[0] if hat.ndim == 3 else hat
         out = raw * self.y_std + self.y_mean
-        if base is not None:
+        if self.log_amount:
+            out = np.expm1(out)
+        elif base is not None:
             out = out + base
         return clip_var(var, out).astype(np.float32)

@@ -85,7 +85,8 @@ def main():
     p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4) - 1))
     p.add_argument("--months", default=None)
     p.add_argument("--folds", type=int, default=None)
-    p.add_argument("--quick", action="store_true")
+    p.add_argument("--max-times", type=int, default=400,
+                   help="cap timestamps, sampled within each split")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -105,7 +106,17 @@ def main():
         panel = load_panel(cfg, var)
         from shared.splits.evaluation_sets import apply_evaluation_protocol
         tagged, _, _, _ = apply_evaluation_protocol(panel)
-        panel = tagged[tagged["split"].isin(["train", "tune"])].copy()
+        panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
+        if args.max_times and panel["time"].nunique() > args.max_times:
+            rng = np.random.default_rng(int(block.get("seed", 22)))
+            keep = []
+            for sp in ("train", "tune"):
+                ts = panel.loc[panel["split"] == sp, "time"].drop_duplicates().to_numpy()
+                if len(ts) == 0:
+                    continue
+                n = max(1, int(round(args.max_times * len(ts) / max(panel["time"].nunique(), 1))))
+                keep.extend(rng.choice(ts, size=min(n, len(ts)), replace=False).tolist())
+            panel = panel[panel["time"].isin(keep)].copy()
         rh_mode = args.rh_t_mode or block.get("rh_t_mode", "none")
         if str(var).lower().startswith("rh") and rh_mode in ("predicted", "observed"):
             panel = attach_temperature(panel, cfg)
@@ -187,6 +198,11 @@ def main():
         path = get_gam_tuned_params_path(var, time_res)
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(best, f)
+        if results:
+            import pandas as pd
+            sp = path.with_name(f"{var}_search.csv")
+            pd.DataFrame(results).to_csv(sp, index=False)
+            print(f"wrote {sp}  ({len(results)} trials)", flush=True)
         print(f"wrote {path}", flush=True)
 
 

@@ -415,6 +415,7 @@ class KrigingInterpolator:
     def fit(self, train: pd.DataFrame, var: str, time_res: str, cfg_yaml: dict) -> dict:
         self.var_name = var
         self.two_step = is_precip(var)
+        self.log_amount = self.two_step
         self.trace = precip_trace(cfg_yaml, time_res, var) if self.two_step else 0.0
         z = train[var].to_numpy(dtype=np.float64)
         st, self.coord_stats = _standardize_fit(train["x"], train["y"], train["elev"])
@@ -467,7 +468,7 @@ class KrigingInterpolator:
                     self.cfg.interactions, self.cfg.trend,
                     extras=self._extras(wet_df, fit=False),
                 )
-                zw = wet_df[var].to_numpy(dtype=np.float64)
+                zw = np.log1p(np.maximum(wet_df[var].to_numpy(dtype=np.float64), 0.0))
                 if self.cfg.trend == "linear":
                     self.beta, self.col_ok = fit_ols(Xw, zw)
                     wet_df = wet_df.assign(_resid_amt=zw - (Xw @ self.beta))
@@ -569,8 +570,12 @@ class KrigingInterpolator:
             m_d = self._trend(wet, self.beta, self.col_ok)
             m_q = self._trend(queries, self.beta, self.col_ok)
             resid = wet[var].to_numpy(dtype=np.float64) - m_d
+            if self.log_amount:
+                resid = np.log1p(np.maximum(wet[var].to_numpy(dtype=np.float64), 0.0)) - m_d
             ehat = ordinary_krige(self._metric(wet), resid, q_c, self.cfg.k, self._pick_vgm(cid, False))
             amount = m_q + ehat
+            if self.log_amount:
+                amount = np.expm1(amount)
         amount = np.maximum(amount, 0.0)
         out = np.where(p_wet >= float(self.cfg.tau_wet), amount, 0.0)
         return out

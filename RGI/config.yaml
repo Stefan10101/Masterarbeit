@@ -58,15 +58,15 @@ rgi:
 
   # DEV search (two-phase in tune_rgi.py)
   search:
-    k: [5, 10, 20]
-    n_layers: [2, 3, 4]
-    alpha: [0.1, 0.2, 0.3]
-    alpha_z: [0.0, 10.0, 50.0]
-  # used by --phase 3 after the first grid hits a corner
+    # 4 parameters, so the search stays phased (k x layers, then alpha x alpha_z).
+    k: [4, 8, 16, 32]
+    n_layers: [2, 3, 4, 5]
+    alpha: [0.1, 0.2, 0.4, 0.6]
+    alpha_z: [1.0, 10.0, 50.0, 200.0, 500.0]
   search_expand:
-    k: [5, 10, 15, 20]
-    alpha: [0.30, 0.40, 0.50, 0.60]
-    alpha_z: [50.0, 100.0, 150.0, 200.0]
+    k: [4, 8, 16, 32, 64]
+    alpha: [0.2, 0.4, 0.6, 0.8]
+    alpha_z: [50.0, 200.0, 500.0, 1000.0]
   n_folds: 5
 
 aggregation:

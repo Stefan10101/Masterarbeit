@@ -2,11 +2,14 @@
 """
 Global IDW hyperparameter tune.
 
-One (p, Fz, k) per variable on the designated subset:
-  held-out stations excluded, test quarters removed (prepare_for_tuning).
-Optional --months / --max-times thin the timestamps for a dry run.
+One (p, Fz, k) per variable.
+Score: pool stations at tune quarters only (prepare_for_tuning drops held-out
+and test quarters; this script then keeps split=='dev').
+Proof runs: --max-times caps the tune timestamps (default 400).
 
-Writes IDW/Output/global_params/{time_resolution}/{var}_params.yaml
+Writes:
+  Methods/IDW/Output/global_params/{time_res}/{var}_params.yaml
+  Methods/IDW/Output/global_params/{time_res}/{var}_search.csv   (every combo)
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from idw_core import clip_var, two_step_var
 from idw_data import (
     build_field,
     compute_metrics,
@@ -37,50 +41,66 @@ from shared.splits.evaluation_sets import load_holdout, prepare_for_tuning
 from shared.time_res import add_time_res_arg, apply_time_res
 
 
+TRACE = {
+    "precip_sum": {"half_hourly": 0.05, "daily": 0.1, "weekly": 0.7, "monthly": 1.0},
+    "snow_mean": {"half_hourly": 0.5, "daily": 0.5, "weekly": 1.0, "monthly": 1.0},
+}
+MAX_TIMES_DEFAULT = 400
+
+
+def _predict_loo(dists, idxs, elev, vals, p, Fz):
+    dists = np.maximum(dists, 1e-6)
+    d_z = np.abs(elev[idxs] - elev[:, None])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        w_xy = dists ** (-p)
+        w_z = np.where(d_z > 0, d_z ** (-p), 0.0)
+    w = ((1.0 - Fz) * w_xy ** 2 + Fz * w_z ** 2) / 0.5
+    nb = vals[idxs]
+    valid = np.isfinite(nb)
+    w = np.where(valid, w, 0.0)
+    wsum = w.sum(axis=1)
+    return np.divide((w * np.where(valid, nb, 0.0)).sum(axis=1), wsum,
+                      out=np.full(len(vals), np.nan), where=wsum > 0)
+
+
 def _score_one(field: pd.DataFrame, p: float, Fz: float, k: int,
-               tree: KDTree | None = None) -> dict:
-    """Vectorized leave-one-out score for one (p, Fz, k)."""
+               tree: KDTree | None = None, var: str = "", trace: float = 1.0) -> dict:
+    """Leave-one-out score for one (p, Fz, k). Two-step for precip/snow."""
     coords = field[["x", "y"]].to_numpy()
     elev = field["elev"].to_numpy()
     vals = field["value"].to_numpy()
     n = len(field)
     k_use = min(int(k), n - 1)
     if k_use < 1:
-        return {"rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan}
+        return {"rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan, "n": 0}
     if tree is None:
         tree = KDTree(coords)
-    # k+1 so we can drop self (distance 0)
     dists, idxs = tree.query(coords, k=k_use + 1)
-    # drop the self column (smallest distance)
-    dists = np.maximum(dists[:, 1:], 1e-6)
-    idxs = idxs[:, 1:]
-    d_z = np.abs(elev[idxs] - elev[:, None])
-    with np.errstate(divide="ignore", invalid="ignore"):
-        w_xy = dists ** (-p)
-        w_z = np.where(d_z > 0, d_z ** (-p), 0.0)
-    w = ((1.0 - Fz) * w_xy ** 2 + Fz * w_z ** 2) / 0.5
-    nb_vals = vals[idxs]
-    valid = np.isfinite(nb_vals)
-    w = np.where(valid, w, 0.0)
-    wsum = w.sum(axis=1)
-    pred = np.divide((w * np.where(valid, nb_vals, 0.0)).sum(axis=1), wsum,
-                      out=np.full(n, np.nan), where=wsum > 0)
+    dists, idxs = dists[:, 1:], idxs[:, 1:]
+    if two_step_var(var):
+        wet = (vals > trace).astype(float)
+        p_wet = np.clip(_predict_loo(dists, idxs, elev, wet, p, Fz), 0.0, 1.0)
+        amt = _predict_loo(dists, idxs, elev, vals, p, Fz)
+        pred = np.where(p_wet >= 0.5, np.maximum(amt, 0.0), 0.0)
+        pred = clip_var(var, pred)
+    else:
+        pred = clip_var(var, _predict_loo(dists, idxs, elev, vals, p, Fz))
     return compute_metrics(vals, pred)
 
 
 def _eval_combo(args):
-    field, p, Fz, k, tree = args
-    return {"p": p, "Fz": Fz, "k": k, **_score_one(field, p, Fz, k, tree)}
+    field, p, Fz, k, tree, var, trace = args
+    return {"p": p, "Fz": Fz, "k": k, **_score_one(field, p, Fz, k, tree, var, trace)}
 
 
 def optimize_field(field, param_grid, primary="rmse", n_jobs=1,
-                   show_progress=False) -> tuple[dict, dict]:
+                   show_progress=False, var: str = "", trace: float = 1.0):
     p_list = param_grid.get("p", [2.0])
-    Fz_list = param_grid.get("Fz", [0.0, 0.3])
-    k_list = param_grid.get("k_neighbors", [12])
+    Fz_list = param_grid.get("Fz", [0.0, 0.5])
+    k_list = param_grid.get("k_neighbors", [16])
     tree = KDTree(field[["x", "y"]].to_numpy())
-    combos = [(field, p, Fz, k, tree) for p in p_list for Fz in Fz_list for k in k_list]
-    # Threads only. Process workers crash on Windows (0xc0000139).
+    combos = [(field, p, Fz, k, tree, var, trace)
+              for p in p_list for Fz in Fz_list for k in k_list]
     if n_jobs == 1:
         iterator = tqdm(combos, leave=False, desc="    combos") if show_progress else combos
         results = [_eval_combo(c) for c in iterator]
@@ -90,13 +110,14 @@ def optimize_field(field, param_grid, primary="rmse", n_jobs=1,
         )
     df = pd.DataFrame(results)
     if df[primary].isna().all():
-        return {"p": 2.0, "Fz": 0.3, "k": 12}, {"rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan}
+        return {"p": 2.0, "Fz": 0.5, "k": 16}, {"rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan}, df
     best_idx = df[primary].idxmax() if primary in ("kge", "nse") else df[primary].idxmin()
     row = df.loc[best_idx]
     return (
         {"p": float(row["p"]), "Fz": float(row["Fz"]), "k": int(row["k"])},
         {"rmse": float(row["rmse"]), "mae": float(row["mae"]),
          "nse": float(row["nse"]), "kge": float(row["kge"])},
+        df,
     )
 
 
@@ -104,7 +125,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variables", nargs="+", default=None)
     p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
-    p.add_argument("--max-times", type=int, default=None)
+    p.add_argument("--max-times", type=int, default=MAX_TIMES_DEFAULT,
+                   help="cap tune timestamps (sampled within the tune split)")
     p.add_argument("--force", action="store_true")
     p.add_argument("--early-stop", action="store_true", help="stop once the winner is stable")
     p.add_argument("--patience", type=int, default=40, help="timestamps the winner must hold")
@@ -131,9 +153,16 @@ def main():
     for var in variables:
         panel = load_panel(cfg, var)
         panel = prepare_for_tuning(panel)
+        # Tune quarters only. prepare_for_tuning remaps tune -> dev.
+        panel = panel[panel["split"] == "dev"].copy()
         if args.months and args.months != "all":
             from idw_data import subset_times
             panel = subset_times(panel, args.months)
+        trace = TRACE.get(var, {}).get(time_res, 1.0)
+        two = two_step_var(var)
+        print(f"  {var}  two_step={two}  trace={trace}  "
+              f"tune times={panel['time'].nunique()}  "
+              f"stations={panel['station_name'].nunique()}")
 
         out_exists = (SCRIPT_DIR / "Output" / "global_params" / time_res / f"{var}_params.yaml")
         if out_exists.exists() and not args.force:
@@ -152,6 +181,7 @@ def main():
                     * len(param_grid.get("k_neighbors", [])))
         print(f"  grid={n_combos} combos/timestamp  jobs={n_jobs}")
         rows = []
+        search_parts = []
         # Daily and finer: stop once the most common (p, Fz, k) has not changed.
         early = args.early_stop or time_res in ("daily", "half_hourly")
         patience = args.patience
@@ -164,11 +194,14 @@ def main():
             field = build_field(panel, ts, min_stations, held_set)
             if field is None:
                 continue
-            best_params, best_scores = optimize_field(
+            best_params, best_scores, combo_df = optimize_field(
                 field, param_grid, primary=primary, n_jobs=n_jobs,
-                show_progress=(n_jobs == 1),
+                show_progress=(n_jobs == 1), var=var, trace=trace,
             )
-            rows.append({**best_params, **best_scores})
+            rows.append({**best_params, **best_scores, "time": str(ts)})
+            combo_df = combo_df.copy()
+            combo_df["time"] = str(ts)
+            search_parts.append(combo_df)
             if early and len(rows) >= min_times:
                 keys = [(r["p"], r["Fz"], r["k"]) for r in rows]
                 mode = max(set(keys), key=keys.count)
@@ -204,9 +237,17 @@ def main():
             "n_times_used": int(len(df)),
         }
         path = save_global_params(time_res, var, result)
+        search = pd.concat(search_parts, ignore_index=True)
+        summary = (search.groupby(["p", "Fz", "k"], as_index=False)
+                   .agg(rmse=("rmse", "median"), mae=("mae", "median"),
+                        nse=("nse", "median"), kge=("kge", "median"),
+                        n_times=("rmse", "size")))
+        search_path = path.with_name(f"{var}_search.csv")
+        summary.to_csv(search_path, index=False)
         print(f"  p={result['p']:.2f}  Fz={result['Fz']:.2f}  k={result['k']}  "
               f"rmse={result['rmse']:.3f}  (n={result['n_times_used']})")
         print(f"  wrote {path}")
+        print(f"  wrote {search_path}  ({len(summary)} combos)")
 
     print("\nDone.")
 

@@ -141,6 +141,7 @@ def main():
     # For evaluation: context = all training-pool stations present that day
     # target = held-out stations present that day
     rows = []
+    diag_p, diag_amt, diag_wet = [], [], []
     days = df["time"].unique()
     for day in days:
         if day not in test_days:
@@ -159,10 +160,14 @@ def main():
         with torch.no_grad():
             pred = model(x_ctx, y_ctx, x_tgt)
         if ckpt["two_step"]:
-            # occurrence probability * expected amount (simplified)
             p_occ = torch.sigmoid(pred["occurrence_logits"]).cpu().numpy().squeeze()
-            amt = scaler.inverse(pred["amount_mu"].cpu().numpy().squeeze())
-            y_hat = p_occ * np.maximum(amt, 0.0)
+            mu_n = pred["amount_mu"].cpu().numpy().squeeze()
+            var_n = pred["amount_variance"].cpu().numpy().squeeze()
+            amt = scaler.inverse_mean(mu_n, var_n)
+            y_hat = np.where(p_occ >= 0.5, np.maximum(amt, 0.0), 0.0)
+            diag_p.append(np.atleast_1d(p_occ))
+            diag_amt.append(np.atleast_1d(amt))
+            diag_wet.append(df_tgt["value"].to_numpy(dtype=np.float64) > 1e-6)
         else:
             y_hat = scaler.inverse(pred["mu"].cpu().numpy().squeeze())
         y_true = df_tgt["value"].to_numpy(dtype=np.float64)
@@ -173,6 +178,16 @@ def main():
     if res.empty:
         print("no evaluation pairs produced")
         return
+    if diag_p:
+        p = np.concatenate(diag_p)
+        a = np.concatenate(diag_amt)
+        wet = np.concatenate(diag_wet)
+        print(
+            f"diag  p_occ mean={p.mean():.3f}  p>=0.5={float(np.mean(p >= 0.5)):.3f}  "
+            f"amt mean={float(np.nanmean(a)):.1f}  "
+            f"amt|wet mean={float(np.nanmean(a[wet])) if wet.any() else float('nan'):.1f}  "
+            f"obs wet frac={float(wet.mean()):.3f}"
+        )
     met = metrics(res["obs"].to_numpy(), res["pred"].to_numpy())
     print(f"held-out  RMSE={met['rmse']:.3f}  MAE={met['mae']:.3f}  bias={met['bias']:.3f}  r={met['r']:.3f}  n={met['n']}")
 

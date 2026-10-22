@@ -111,10 +111,11 @@ def _score_one(payload):
 
 def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, progress: str | None = None,
               pack=None, jobs: int = 1):
-    """Protocol-aware. Final scores: held-out × test. Tuning: pool × requested splits."""
+    """Protocol-aware. Final scores: held-out x test. Tuning: pool x requested splits."""
     panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
     score_ok = {"tune" if s == "dev" else s for s in score_splits}
-    if score_splits == {"all"} or bool(score_ok & {"test", "tune"}):
+    # Only the final test uses the held-out stations. Tune scores the pool.
+    if score_splits == {"all"} or "test" in score_ok:
         score_df = panel[(panel["is_heldout"]) & (panel["split"].isin(score_ok))]
     else:
         score_df = panel[(~panel["is_heldout"]) & (panel["split"].isin(score_ok))]

@@ -38,6 +38,7 @@ from rgi_data import (
     extra_cols_for_var,
     load_config,
     load_panel,
+    subset_times,
 )
 from llocv_rgi import cfg_to_rgi
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
@@ -108,7 +109,6 @@ def main():
     for var in variables:
         panel = attach_extras(load_panel(cfg, var), cfg, var)
         if cfg.get("_quick_months"):
-            from Kriging.kriging_data import subset_times, subset_splits
             panel = subset_times(panel, cfg["_quick_months"])
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         fit = panel[panel["split"].isin(("train", "dev"))]

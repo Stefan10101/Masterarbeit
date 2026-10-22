@@ -201,6 +201,7 @@ class RFSI:
             "n_jobs": -1,
         }
         self.two_step = bool(two_step)
+        self.log_amount = bool(two_step)
         self.tau_wet = float(tau_wet)
         self.trace = float(trace)
         self.var_name = str(var_name)
@@ -238,10 +239,11 @@ class RFSI:
             self.model_ind = self.RandomForestRegressor(**self.rf_params)
             self.model_ind.fit(Xi, yi)
             wet_m = z > self.trace
+            z_amt = np.log1p(np.maximum(z, 0.0))
             if int(wet_m.sum()) >= max(min_stations * 3, 30):
                 Xc = None if X_cov is None else np.asarray(X_cov)[wet_m]
                 X, y, n = assemble_pooled_training(
-                    np.asarray(times)[wet_m], np.asarray(coords)[wet_m], z[wet_m],
+                    np.asarray(times)[wet_m], np.asarray(coords)[wet_m], z_amt[wet_m],
                     self.n_obs, X_cov=Xc, min_stations=max(4, min_stations // 2),
                 )
             else:
@@ -306,6 +308,14 @@ class RFSI:
             )
             Xi = np.hstack([X_nb_i, np.asarray(X_cov_pred)]) if X_cov_pred is not None else X_nb_i
             p = np.clip(self.model_ind.predict(Xi), 0.0, 1.0)
+            if self.log_amount:
+                z_log = np.log1p(np.maximum(z_obs, 0.0))
+                X_nb_a = build_neighbor_features(
+                    coords_obs, z_log, coords_pred,
+                    n_obs=self.n_obs, exclude_self=False,
+                )
+                Xa = np.hstack([X_nb_a, np.asarray(X_cov_pred)]) if X_cov_pred is not None else X_nb_a
+                hat = np.expm1(self.model.predict(Xa))
             hat = np.where(p >= self.tau_wet, np.maximum(hat, 0.0), 0.0)
         return clip_var(self.var_name, hat)
 

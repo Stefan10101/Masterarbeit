@@ -356,8 +356,15 @@ def gaussian_nll(mu: torch.Tensor, var: torch.Tensor, target: torch.Tensor) -> t
     return torch.nan_to_num(nll, nan=0.0, posinf=1e4, neginf=1e4).mean()
 
 
-def two_step_loss(pred: Dict[str, torch.Tensor], y: torch.Tensor, pos_weight_cap: float = 20.0) -> torch.Tensor:
-    is_pos = (y > 1e-6).float()
+def two_step_loss(
+    pred: Dict[str, torch.Tensor],
+    y: torch.Tensor,
+    y_raw: torch.Tensor | None = None,
+    pos_weight_cap: float = 20.0,
+) -> torch.Tensor:
+    """Occurrence from raw values; amount NLL on the scaled targets."""
+    raw = y if y_raw is None else y_raw
+    is_pos = (raw > 1e-6).float()
     num_pos = is_pos.sum().clamp(min=1)
     num_neg = is_pos.numel() - num_pos
     pos_weight = (num_neg / num_pos).clamp(max=pos_weight_cap)

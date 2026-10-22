@@ -103,13 +103,16 @@ def run_epoch(model, day_tensors, cfg, device, optimizer=None):
         y_ctx = torch.from_numpy(tensors["y_context"]).unsqueeze(0).to(device, non_blocking=True)
         x_tgt = torch.from_numpy(tensors["x_target"]).unsqueeze(0).to(device, non_blocking=True)
         y_tgt = torch.from_numpy(tensors["y_target"]).unsqueeze(0).to(device, non_blocking=True)
+        y_raw = None
+        if "y_raw" in tensors:
+            y_raw = torch.from_numpy(tensors["y_raw"]).unsqueeze(0).to(device, non_blocking=True)
 
         if optimizer is not None:
             optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=use_amp):
             pred = model(x_ctx, y_ctx, x_tgt)
             if two_step:
-                loss = two_step_loss(pred, y_tgt)
+                loss = two_step_loss(pred, y_tgt, y_raw=y_raw)
             else:
                 loss = gaussian_nll(pred["mu"], pred["variance"], y_tgt)
         if not torch.isfinite(loss):
@@ -131,11 +134,19 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--variable", default="temp_mean")
     parser.add_argument("--time-resolution", default=None)
+    parser.add_argument("--quick", action="store_true")
+    parser.add_argument("--max-times", type=int, default=400,
+                        help="cap timestamps, sampled within each split")
     args = parser.parse_args()
 
     cfg = load_config()
     if args.time_resolution:
         cfg["time_resolution"] = args.time_resolution
+    if args.quick:
+        cfg["smacnp"]["num_epochs"] = min(int(cfg["smacnp"].get("num_epochs", 500)), 15)
+        cfg["smacnp"]["early_stopping_patience"] = min(
+            int(cfg["smacnp"].get("early_stopping_patience", 50)), 4
+        )
     var = args.variable
     two_step = var in cfg["smacnp"].get("two_step_vars", [])
     set_seed(cfg["smacnp"]["seed"])
@@ -178,6 +189,13 @@ def main():
     df["quarter"] = df["time"].map(quarter_of)
     train_days = df.loc[df["quarter"].isin(qsplits["train"]), "time"].unique()
     val_days = df.loc[df["quarter"].isin(qsplits["tune"]), "time"].unique()
+    if args.max_times:
+        rng = np.random.default_rng(int(cfg["smacnp"].get("seed", 42)))
+        if len(train_days) > args.max_times:
+            train_days = rng.choice(train_days, size=args.max_times, replace=False)
+        n_val = max(1, args.max_times // 4)
+        if len(val_days) > n_val:
+            val_days = rng.choice(val_days, size=n_val, replace=False)
     print(f"train quarters={len(qsplits['train'])}  tune quarters={len(qsplits['tune'])}")
     print(f"train days={len(train_days)}  val days={len(val_days)}")
     print("Precomputing day tensors...")
@@ -198,11 +216,13 @@ def main():
     ckpt_path = get_smacnp_model_path(var, cfg["time_resolution"])
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)
 
+    history = []
     for epoch in range(cfg["smacnp"]["num_epochs"]):
         tr_loss = run_epoch(model, train_tensors, cfg, device, optimizer)
         with torch.no_grad():
             va_loss = run_epoch(model, val_tensors, cfg, device, None)
         print(f"epoch {epoch:4d}  train={tr_loss:.4f}  val={va_loss:.4f}")
+        history.append({"epoch": epoch, "train": tr_loss, "val": va_loss})
         if not np.isfinite(va_loss):
             print("val loss is not finite, stopping")
             break
@@ -229,6 +249,11 @@ def main():
                 break
 
     print(f"best val={best_val:.4f}  saved to {ckpt_path}")
+    if history:
+        import pandas as pd
+        curve = ckpt_path.with_name(f"{var}_{cfg['time_resolution']}_curve.csv")
+        pd.DataFrame(history).to_csv(curve, index=False)
+        print(f"wrote {curve}  ({len(history)} epochs)")
 
 
 if __name__ == "__main__":

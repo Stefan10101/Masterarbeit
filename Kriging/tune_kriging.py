@@ -2,14 +2,12 @@
 """
 Staged DEV search for Kriging.
 
-Phase 1: k (then k_indicator for precip)
-Phase 2: variogram family
-Phase 3: theta × aniso_ratio × alpha_z
-Phase 4: interaction set
-Phase 5: expand alpha_z past the phase-3 corner, then re-search k
+More than 3 interacting hyperparameters, so the search stays phased:
+  1 k, 2 family, 3 metric (theta, aniso, alpha_z), 4 interactions, 5 refine.
 
-Score: 5-fold station CV. Fit on TRAIN times of in-fold stations,
-RMSE on held-out stations at DEV times. Same-timestamp donors.
+Score: pool stations at tune quarters. A seeded 20% of the pool is the
+tune target; the rest are donors. The official held-out set is never used.
+Fit on pool x train quarters.
 """
 
 from __future__ import annotations
@@ -46,22 +44,35 @@ from kriging_data import (
 from llocv_kriging import cfg_to_kriging, station_folds
 
 
+def _tune_split(panel, seed=22, frac=0.2):
+    """Seeded subset of pool stations used as the tune score targets."""
+    pool = panel.loc[~panel["is_heldout"], "station_name"].drop_duplicates()
+    rng = np.random.default_rng(seed)
+    names = pool.to_numpy()
+    rng.shuffle(names)
+    n = max(1, int(round(len(names) * frac)))
+    return set(names[:n])
+
+
 def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None) -> float:
-    """Held-out stations x tune quarters. Donors are the pool. No station folds."""
+    """Pool stations x tune quarters. Donors are the other pool stations."""
+    targets = _tune_split(panel, seed=int(cfg.get("kriging", {}).get("seed", 22)))
     train = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
-    ho = panel[(panel["is_heldout"]) & (panel["split"] == "tune")]
-    if ho.empty or train["station_name"].nunique() < kcfg.min_stations:
+    score = panel[(~panel["is_heldout"]) & (panel["split"] == "tune")
+                  & (panel["station_name"].isin(targets))]
+    if score.empty or train["station_name"].nunique() < kcfg.min_stations:
         return np.inf
     model = KrigingInterpolator(kcfg)
     model.pack = pack
     model.fit(train, var, cfg["time_resolution"], cfg)
     obs, pred = [], []
-    for t, ho_t in ho.groupby("time", sort=False):
-        others = panel[(panel["time"] == t) & (~panel["is_heldout"])]
-        if len(others) < kcfg.min_stations:
+    for t, sc_t in score.groupby("time", sort=False):
+        donors = panel[(panel["time"] == t) & (~panel["is_heldout"])
+                       & (~panel["station_name"].isin(targets))]
+        if len(donors) < kcfg.min_stations:
             continue
-        yhat = model.predict_frame(others, ho_t, var)
-        obs.append(ho_t[var].to_numpy())
+        yhat = model.predict_frame(donors, sc_t, var)
+        obs.append(sc_t[var].to_numpy())
         pred.append(np.asarray(yhat, dtype=float))
     if not obs:
         return np.inf
@@ -101,26 +112,39 @@ def _keys_from(best_over: dict, base: KrigingConfig) -> dict:
 def _eval_grid(panel, var, cfg, n_folds, locked: dict, varying: list[dict], label: str, pack=None):
     print(f"\n{var} {label}  {len(varying)} combos")
     best = (np.inf, dict(locked))
+    rows = []
     for extra in varying:
         over = {**locked, **extra}
         kcfg = cfg_to_kriging(cfg, over)
         t0 = time.perf_counter()
         rmse = score_combo(panel, var, kcfg, n_folds, cfg, pack=pack)
+        sec = time.perf_counter() - t0
         pretty = " ".join(f"{k}={v}" for k, v in extra.items())
-        print(f"  {pretty}  DEV RMSE={rmse:.4f}  ({time.perf_counter()-t0:.0f}s)")
+        print(f"  {pretty}  DEV RMSE={rmse:.4f}  ({sec:.0f}s)")
+        rows.append({**extra, "rmse": rmse, "seconds": round(sec, 1), "phase": label})
         if rmse < best[0]:
             best = (rmse, over)
-    return best
+    return best, rows
 
 
-def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None, rh_t_mode=None):
+def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
+                 rh_t_mode=None, max_times=400):
     panel = load_panel(cfg, var)
     # Keep held-out stations: they are the tune targets. Drop test quarters.
     from shared.splits.evaluation_sets import apply_evaluation_protocol
     tagged, _, _, _ = apply_evaluation_protocol(panel)
     panel = tagged[tagged["split"].isin(["train", "tune"])].copy()
+    args_max = max_times
     if months:
         panel = subset_times(panel, months)
+    if args_max and panel["time"].nunique() > args_max:
+        rng = np.random.default_rng(int(cfg.get("kriging", {}).get("seed", 22)))
+        keep = []
+        for sp in ("train", "tune"):
+            ts = panel.loc[panel["split"] == sp, "time"].drop_duplicates().to_numpy()
+            n = max(1, int(round(args_max * len(ts) / max(panel["time"].nunique(), 1))))
+            keep.extend(rng.choice(ts, size=min(n, len(ts)), replace=False).tolist())
+        panel = panel[panel["time"].isin(keep)].copy()
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
     if str(var).lower().startswith("rh") and (rh_t_mode or cfg.get("kriging", {}).get("rh_t_mode", "none")) in ("predicted", "observed"):
         panel = attach_temperature(panel, cfg)
@@ -142,23 +166,27 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None, rh_
             "trend": "linear",
         })
     best = (existing.get("dev_rmse", np.inf), locked)
+    search_rows = []
+
+    def _take(label, grid):
+        nonlocal best
+        best, rows = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label=label)
+        search_rows.extend(rows)
+        return dict(best[1])
 
     if phase in ("1", "all"):
         grid = [{"k": int(k), "k_indicator": int(k)} for k in search.get("k", [base.k])]
-        best = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label= "phase 1a  k")
-        locked = dict(best[1])
+        locked = _take("phase 1a  k", grid)
         if is_precip(var) and cfg["time_resolution"] != "monthly":
             grid = [{"k_indicator": int(k)} for k in search.get("k", [base.k])]
-            best = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label= "phase 1b  k_indicator")
-            locked = dict(best[1])
+            locked = _take("phase 1b  k_indicator", grid)
         elif is_precip(var):
             print(f"{var} phase 1b skipped: monthly fields are almost always wet, "
                   f"k_indicator does not change the score", flush=True)
 
     if phase in ("2", "all"):
         grid = [{"family": str(f)} for f in search.get("family", [base.family])]
-        best = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label= "phase 2  family")
-        locked = dict(best[1])
+        locked = _take("phase 2  family", grid)
 
     if phase in ("3", "all"):
         grid = [
@@ -169,13 +197,11 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None, rh_
                 search.get("alpha_z", [0.0]),
             )
         ]
-        best = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label= "phase 3  metric")
-        locked = dict(best[1])
+        locked = _take("phase 3  metric", grid)
 
     if phase in ("4", "all"):
         grid = [{"interactions": str(s)} for s in search.get("interactions", [base.interactions])]
-        best = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label= "phase 4  interactions")
-        locked = dict(best[1])
+        locked = _take("phase 4  interactions", grid)
 
     if phase in ("5", "all"):
         expand = kblock.get("search_expand", {})
@@ -183,17 +209,11 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None, rh_
         if float(locked["alpha_z"]) not in az_grid:
             az_grid.append(float(locked["alpha_z"]))
         az_grid = sorted(set(az_grid))
-        grid = [{"alpha_z": az} for az in az_grid]
-        best = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label= "phase 5a  alpha_z expand")
-        locked = dict(best[1])
+        locked = _take("phase 5a  alpha_z expand", [{"alpha_z": az} for az in az_grid])
         k_grid = [int(v) for v in expand.get("k", search.get("k", [locked["k"]]))]
-        grid = [{"k": k, "k_indicator": k} for k in k_grid]
-        best = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label= "phase 5b  k re-search")
-        locked = dict(best[1])
+        locked = _take("phase 5b  k re-search", [{"k": k, "k_indicator": k} for k in k_grid])
         if is_precip(var):
-            grid = [{"k_indicator": k} for k in k_grid]
-            best = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label= "phase 5c  k_indicator")
-            locked = dict(best[1])
+            locked = _take("phase 5c  k_indicator", [{"k_indicator": k} for k in k_grid])
 
     out = {
         **locked,
@@ -206,6 +226,12 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None, rh_
         "tune_months": months or "all",
     }
     _write_tuned(var, cfg["time_resolution"], out)
+    if search_rows:
+        import pandas as pd
+        sp = get_kriging_tuned_params_path(var, cfg["time_resolution"]).with_name(
+            f"{var}_search.csv")
+        pd.DataFrame(search_rows).to_csv(sp, index=False)
+        print(f"  wrote {sp}  ({len(search_rows)} trials)")
     return out
 
 
@@ -215,7 +241,8 @@ def parse_args():
     p.add_argument("--phase", choices=["1", "2", "3", "4", "5", "all"], default=None)
     p.add_argument("--months", default=None)
     p.add_argument("--folds", type=int, default=None)
-    p.add_argument("--quick", action="store_true")
+    p.add_argument("--max-times", type=int, default=400,
+                   help="cap tune timestamps, sampled within the tune split")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -241,7 +268,8 @@ def main():
     print(f"  time_resolution={cfg['time_resolution']}")
     print("=" * 72)
     for var in wanted:
-        run_variable(cfg, var, phase, months=months, n_folds=n_folds, pack=pack, rh_t_mode=args.rh_t_mode)
+        run_variable(cfg, var, phase, months=months, n_folds=n_folds, pack=pack,
+                     rh_t_mode=args.rh_t_mode, max_times=args.max_times)
     print("\nKriging tune finished.")
 
 

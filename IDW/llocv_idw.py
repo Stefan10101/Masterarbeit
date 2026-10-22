@@ -34,7 +34,14 @@ from shared.splits.evaluation_sets import (
 from shared.time_res import add_time_res_arg, apply_time_res
 
 
-def score_field(donors: pd.DataFrame, targets: pd.DataFrame, params: dict) -> pd.DataFrame:
+TRACE = {
+    "precip_sum": {"half_hourly": 0.05, "daily": 0.1, "weekly": 0.7, "monthly": 1.0},
+    "snow_mean": {"half_hourly": 0.5, "daily": 0.5, "weekly": 1.0, "monthly": 1.0},
+}
+
+
+def score_field(donors: pd.DataFrame, targets: pd.DataFrame, params: dict,
+                var: str = "", trace: float = 1.0) -> pd.DataFrame:
     if len(donors) < 5 or len(targets) < 1:
         return pd.DataFrame()
     k = min(int(params["k"]), len(donors))
@@ -47,6 +54,7 @@ def score_field(donors: pd.DataFrame, targets: pd.DataFrame, params: dict) -> pd
         target_elev=targets["elev"].to_numpy(),
         tree=tree,
         p=float(params["p"]), Fz=float(params["Fz"]), k=k,
+        var=var, trace=trace,
     )
     out = targets[["station_name", "x", "y", "time"]].copy()
     out["observed"] = targets["value"].to_numpy()
@@ -91,7 +99,8 @@ def main():
             field = tagged[tagged["time"] == t]
             donors = field[~field["station_name"].isin(held_set)]
             targets = field[field["station_name"].isin(held_set)]
-            scored = score_field(donors, targets, params)
+            scored = score_field(donors, targets, params, var=var,
+                                 trace=TRACE.get(var, {}).get(time_res, 1.0))
             if len(scored):
                 parts.append(scored)
 

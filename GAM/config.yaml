@@ -53,12 +53,14 @@ gam:
     tune_folds: 5
 
   search:
+    # 3 parameters, so the full product is scored.
     formula:
       - "te_xy_s_elev"
       - "te_xy_ti_elev"
       - "te_xyelev"
-    n_splines: [8, 10]
-    tau_wet: [0.4, 0.5, 0.6]
+      - "s_xy_s_elev"
+    n_splines: [6, 8, 10, 14]
+    tau_wet: [0.3, 0.5, 0.7]
 
 aggregation:
   weekly:

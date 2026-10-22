@@ -73,18 +73,18 @@ kriging:
     monthly: 1.0
     seasonal: 2.0
 
-  # staged DEV search (tune_kriging.py --phase)
+  # staged search. More than 3 interacting params, so phases stay.
+  # k and alpha_z use the shared wider levels.
   search:
-    k: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50]
+    k: [4, 8, 16, 32, 64, 128]
     family: ["spherical", "exponential", "matern15", "gaussian"]
-    theta_deg: [0.0, 30.0, 60.0, 90.0]
+    theta_deg: [0.0, 45.0, 90.0]
     aniso_ratio: [1.0, 0.5, 0.3]
-    alpha_z: [0.0, 10.0, 50.0, 100.0, 200.0]
+    alpha_z: [1.0, 10.0, 50.0, 200.0, 500.0, 1000.0]
     interactions: ["none", "elev_xy", "elev_clc", "both"]
-  # phase 5: expand past the phase-3 corner, then re-search k
   search_expand:
-    alpha_z: [10.0, 50.0, 100.0, 200.0, 300.0, 400.0, 600.0]
-    k: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50]
+    alpha_z: [1.0, 10.0, 50.0, 200.0, 500.0, 1000.0]
+    k: [4, 8, 16, 32, 64, 128]
 
 aggregation:
   weekly:

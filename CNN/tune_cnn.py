@@ -70,48 +70,48 @@ def main():
     variables = [args.variable] if args.variable else block.get("variables_to_process", ["temp_mean"])
     for var in variables:
         panel = load_panel(cfg, var)
-        # Fit on pool x train, score held-out x tune. train_one reads split=='dev'.
+        # Fit on pool x train. Score a seeded subset of pool x tune.
+        # train_one reads split=='dev' as the score set.
         from shared.splits.evaluation_sets import apply_evaluation_protocol
         tagged, _, _, _ = apply_evaluation_protocol(panel)
         train = tagged[(~tagged["is_heldout"]) & (tagged["split"] == "train")].copy()
-        dev = tagged[(tagged["is_heldout"]) & (tagged["split"] == "tune")].copy()
+        pool = tagged.loc[~tagged["is_heldout"], "station_name"].drop_duplicates().to_numpy()
+        rng = np.random.default_rng(int(block.get("seed", 22)))
+        rng.shuffle(pool)
+        targets = set(pool[:max(1, int(round(len(pool) * 0.2)))])
+        dev = tagged[(~tagged["is_heldout"]) & (tagged["split"] == "tune")
+                     & (tagged["station_name"].isin(targets))].copy()
         dev["split"] = "dev"
-        # Pool stations on the tune months are the IDW donors for the dev score.
-        pool_tune = tagged[(~tagged["is_heldout"]) & (tagged["split"] == "tune")].copy()
+        pool_tune = tagged[(~tagged["is_heldout"]) & (tagged["split"] == "tune")
+                           & (~tagged["station_name"].isin(targets))].copy()
         pool_tune["split"] = "pool"
         panel = pd.concat([train, dev, pool_tune], ignore_index=True)
         print(f"{var} train rows={len(train)} dev rows={len(dev)} "
               f"dev times={dev['time'].nunique()}", flush=True)
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         trace = precip_trace(cfg, time_res, var)
-        taus = list(search.get("tau_wet", [block.get("tau_wet", 0.5)])) if two_step_var(var) else [block.get("tau_wet", 0.5)]
         best = None
-        for levels, ch, frac, tau in itertools.product(
+        trials = []
+        for levels, ch in itertools.product(
             search.get("n_levels", [block.get("n_levels", 4)]),
             search.get("base_ch", [block.get("base_ch", 32)]),
-            search.get("train_mask_frac", [block.get("train_mask_frac", 0.25)]),
-            taus,
         ):
-            ccfg = cfg_to_cnn(cfg, {
-                "n_levels": levels, "base_ch": ch,
-                "train_mask_frac": frac, "tau_wet": tau,
-            })
+            ccfg = cfg_to_cnn(cfg, {"n_levels": levels, "base_ch": ch})
             _, dev = train_one(
                 panel, var, ccfg, elev, clc, gx, gy,
                 slope, sinasp, cosasp, time_res=time_res, trace=trace, jobs=max(1, args.jobs),
             )
-            print(f"{var} levels={levels} ch={ch} mask={frac} tau={tau} dev={dev:.4f}", flush=True)
+            print(f"{var} levels={levels} ch={ch} dev={dev:.4f}", flush=True)
+            trials.append({"n_levels": int(levels), "base_ch": int(ch), "dev": float(dev)})
             if best is None or dev < best["dev"]:
-                best = {
-                    "n_levels": int(levels),
-                    "base_ch": int(ch),
-                    "train_mask_frac": float(frac),
-                    "tau_wet": float(tau),
-                    "dev": float(dev),
-                }
+                best = {"n_levels": int(levels), "base_ch": int(ch), "dev": float(dev)}
         path = get_cnn_tuned_params_path(var, time_res)
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(best, f)
+        if trials:
+            sp = path.with_name(f"{var}_search.csv")
+            pd.DataFrame(trials).to_csv(sp, index=False)
+            print(f"wrote {sp}  ({len(trials)} trials)")
         print(f"wrote {path}")
 
 

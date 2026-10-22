@@ -365,11 +365,12 @@ class FreiInterpolator:
             extra_q = [sl_q, no_q]
             bg = "linear"
         if wet_m.sum() >= 5:
+            amt_in = np.log1p(np.maximum(t[wet_m], 0.0))
             amt, info2 = self._field(
-                x[wet_m], y[wet_m], z[wet_m], t[wet_m], xq, yq, zq,
+                x[wet_m], y[wet_m], z[wet_m], amt_in, xq, yq, zq,
                 bg=bg, extra_s=extra_s, extra_q=extra_q,
             )
-            amt = np.maximum(amt, 0.0)
+            amt = np.maximum(np.expm1(amt), 0.0)
             info = {**info, "amount_across_w": info2.get("across_w"), "amount_bg": bg}
         else:
             amt = np.zeros(xq.size)

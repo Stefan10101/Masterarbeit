@@ -173,9 +173,9 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
     """
     Protocol-aware LLOCV.
     - Fitting always excludes held-out stations.
-    - If score_splits contains 'test' (or 'all'): score held-out × test (final numbers).
-    - Otherwise (tuning): score pool stations on the requested splits
-      (caller should have remapped 'tune' → 'dev').
+    - If score_splits contains 'test' (or 'all'): score held-out x test (final numbers).
+    - Otherwise (tuning): score pool stations on the requested splits,
+      with a station fold so targets are not also donors.
     """
     panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
     # Protocol uses 'tune'; older callers still say 'dev'.
@@ -185,8 +185,8 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
     fit_df = panel[(~panel["is_heldout"]) & (panel["split"].isin(fit_ok))]
 
     score_ok = _canon(set(score_splits))
-    # test and tune both score the held-out stations. Anything else is pool CV.
-    if score_splits == {"all"} or bool(score_ok & {"test", "tune"}):
+    # Only the final test uses the held-out stations. Tune scores the pool.
+    if score_splits == {"all"} or "test" in score_ok:
         score_df = panel[(panel["is_heldout"]) & (panel["split"].isin(score_ok))]
     else:
         score_df = panel[(~panel["is_heldout"]) & (panel["split"].isin(score_ok))]
@@ -197,9 +197,9 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
     model = FreiInterpolator(fcfg, pack=pack)
     rows = []
     first_err = None
-    # 'test' is the final number, 'tune' is the hyperparameter score.
-    # Both use held-out stations as targets and the pool as donors.
-    heldout_score = score_splits == {"all"} or bool(score_ok & {"test", "tune"})
+    # 'test' is the final number and uses held-out stations.
+    # 'tune' scores pool stations with a station fold.
+    heldout_score = score_splits == {"all"} or "test" in score_ok
 
     def _score_group(don, q):
         if don["station_name"].nunique() < fcfg.min_stations or q.empty:

@@ -228,6 +228,22 @@ class PaperScaler:
         else:
             return y_norm * (self.max_ - self.min_) + self.min_
 
+    def inverse_mean(self, mu_norm: np.ndarray, var_norm: np.ndarray) -> np.ndarray:
+        """Mean of the original scale for a Gaussian in log1p-normalized space.
+
+        inverse() recovers the median. For skewed precip the mean is higher:
+        E[expm1(s)] with s ~ N(mu_s, var_s).
+        """
+        mu_norm = np.asarray(mu_norm, dtype=np.float64)
+        var_norm = np.asarray(var_norm, dtype=np.float64)
+        if not self.two_step:
+            return self.inverse(mu_norm)
+        scale = self.log_max_ - self.log_min_
+        mu_s = mu_norm * scale + self.log_min_
+        var_s = np.maximum(var_norm, 0.0) * (scale ** 2)
+        # E[exp(s) - 1] = exp(mu_s + 0.5 var_s) - 1
+        return np.expm1(mu_s + 0.5 * var_s)
+
 
 def split_held_out(station_names: np.ndarray, fraction: float, seed: int) -> Tuple[np.ndarray, np.ndarray]:
     """Random station split. Held-out stations are never used as context."""
@@ -287,9 +303,11 @@ def prepare_day_tensors(
     y_ctx = scaler.transform(df_ctx["value"].to_numpy(dtype=np.float64)).astype(np.float32)
     x_tgt = df_tgt[feature_cols].to_numpy(dtype=np.float32)
     y_tgt = scaler.transform(df_tgt["value"].to_numpy(dtype=np.float64)).astype(np.float32)
+    y_raw = df_tgt["value"].to_numpy(dtype=np.float32)
     return {
         "x_context": x_ctx,
         "y_context": y_ctx[:, None],
         "x_target": x_tgt,
         "y_target": y_tgt[:, None],
+        "y_raw": y_raw[:, None],
     }

@@ -153,11 +153,22 @@ def load_medoid_times(cfg, var, cluster_method: str):
     return pd.DatetimeIndex(dev_ts).unique()
 
 
+def _tune_targets(panel, seed=22, frac=0.2):
+    """Seeded subset of pool stations used as the tune score targets."""
+    pool = panel.loc[~panel["is_heldout"], "station_name"].drop_duplicates().to_numpy()
+    rng = np.random.default_rng(seed)
+    rng.shuffle(pool)
+    n = max(1, int(round(len(pool) * frac)))
+    return set(pool[:n])
+
+
 def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
                 min_stations, n_splits, primary, rh_t_mode="none", two_step=False, tau_wet=0.5):
-    """Fit on pool x train quarters, score held-out x tune quarters. No station folds."""
+    """Fit on pool x train quarters, score a seeded subset of pool x tune."""
+    targets = _tune_targets(panel)
     train = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
-    hold = panel[(panel["is_heldout"]) & (panel["split"] == "tune")]
+    hold = panel[(~panel["is_heldout"]) & (panel["split"] == "tune")
+                 & (panel["station_name"].isin(targets))]
     if train["station_name"].nunique() < min_stations or hold.empty:
         return None
     X_train, _ = prepare_covariates(
@@ -180,7 +191,8 @@ def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
         return None
     obs_all, pred_all = [], []
     for t, hold_t in hold.groupby("time", sort=False):
-        others = panel[(~panel["is_heldout"]) & (panel["time"] == t)]
+        others = panel[(~panel["is_heldout"]) & (panel["time"] == t)
+                       & (~panel["station_name"].isin(targets))]
         if len(others) < max(min_stations, n_obs):
             continue
         X_hold, _ = prepare_covariates(
@@ -214,7 +226,7 @@ def param_grid(cfg):
     return list(itertools.product(n_obs_list, depths, leaves, feats))
 
 
-def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
+def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, max_times=400):
     rfsi = cfg.get("rfsi", {})
     use_elev = bool(rfsi.get("use_elevation", True))
     use_lc = bool(rfsi.get("use_landcover", True))
@@ -227,7 +239,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
     panel = load_panel(cfg, var)
     from shared.splits.evaluation_sets import apply_evaluation_protocol
     tagged, _, _, _ = apply_evaluation_protocol(panel)
-    panel = tagged[tagged["split"].isin(["train", "tune"])].copy()
+    panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
     rh_t_mode = str(rfsi.get("rh_t_mode", "none"))
     two_step = bool(rfsi.get("two_step", True)) and two_step_var(var)
     tau_wet = float(rfsi.get("tau_wet", 0.5))
@@ -235,6 +247,16 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
     # Optional month cut for dry runs; no regime/medoid subset.
     if months or quick:
         panel = _subset_times(panel, months or "seasonal4")
+    if max_times and panel["time"].nunique() > max_times:
+        rng = np.random.default_rng(int(cfg.get("random_seed", 22)))
+        keep = []
+        for sp in ("train", "tune"):
+            ts = panel.loc[panel["split"] == sp, "time"].drop_duplicates().to_numpy()
+            if len(ts) == 0:
+                continue
+            n = max(1, int(round(max_times * len(ts) / max(panel["time"].nunique(), 1))))
+            keep.extend(rng.choice(ts, size=min(n, len(ts)), replace=False).tolist())
+        panel = panel[panel["time"].isin(keep)].copy()
     print(f"  tune panel: {len(panel):,} rows | "
           f"{panel['station_name'].nunique()} stations | "
           f"{panel['time'].nunique()} times")
@@ -252,8 +274,35 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None):
                  int(rfsi.get("rf_fixed", {}).get("min_samples_leaf", 5)),
                  rfsi.get("rf_fixed", {}).get("max_features", "sqrt"))]
     else:
-        grid = param_grid(cfg)
-    print(f"  search {len(grid)} combos, fit on train, score held-out x tune, "
+        # Coordinate descent: 4 parameters, so not a full product.
+        n_obs_list = [int(x) for x in rfsi.get("n_obs_list", [8, 16, 32])]
+        tun = rfsi.get("rf_tunable", {})
+        depths = tun.get("max_depth", [None])
+        leaves = tun.get("min_samples_leaf", [5])
+        feats = tun.get("max_features", ["sqrt"])
+        locked = {
+            "n_obs": n_obs_list[len(n_obs_list) // 2],
+            "depth": depths[len(depths) // 2],
+            "leaf": leaves[len(leaves) // 2],
+            "feat": feats[len(feats) // 2],
+        }
+        grid = []
+        for n in n_obs_list:
+            grid.append((n, locked["depth"], locked["leaf"], locked["feat"]))
+        for d in depths:
+            grid.append((locked["n_obs"], d, locked["leaf"], locked["feat"]))
+        for lf in leaves:
+            grid.append((locked["n_obs"], locked["depth"], lf, locked["feat"]))
+        for ft in feats:
+            grid.append((locked["n_obs"], locked["depth"], locked["leaf"], ft))
+        # unique, keep order
+        seen, uniq = set(), []
+        for g in grid:
+            if g not in seen:
+                seen.add(g)
+                uniq.append(g)
+        grid = uniq
+    print(f"  search {len(grid)} combos, fit on train, score pool x tune, "
           f"{n_est_search} trees")
     rows = []
     t0 = time.perf_counter()
@@ -339,7 +388,8 @@ def parse_args():
     p.add_argument("--cluster-method", default="gmm")
     p.add_argument("--n-splits", type=int, default=5)
     p.add_argument("--quick", action="store_true")
-    p.add_argument("--months", default=None)
+    p.add_argument("--max-times", type=int, default=400,
+                   help="cap timestamps, sampled within each split")
     add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
@@ -360,7 +410,8 @@ def main():
     for var in wanted:
         print(f"\n{'=' * 60}\n{var}")
         n_splits = 2 if args.quick else args.n_splits
-        run_variable(cfg, var, args.cluster_method, n_splits, quick=args.quick, months=args.months)
+        run_variable(cfg, var, args.cluster_method, n_splits, quick=args.quick,
+                     months=args.months, max_times=args.max_times)
     print("\nSearch finished.")
 
 

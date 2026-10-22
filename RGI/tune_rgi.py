@@ -32,7 +32,7 @@ from paths import get_rgi_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from shared.splits.evaluation_sets import prepare_for_tuning
 from rgi_core import RGI, RGIConfig
-from rgi_data import attach_extras, compute_metrics, extra_cols_for_var, load_config, load_panel
+from rgi_data import attach_extras, compute_metrics, extra_cols_for_var, load_config, load_panel, subset_times
 from llocv_rgi import cfg_to_rgi, station_folds
 
 
@@ -84,8 +84,12 @@ def run_variable(cfg, var, phase: str):
     panel = attach_extras(load_panel(cfg, var), cfg, var)
     panel = prepare_for_tuning(panel)
     if cfg.get("_quick_months"):
-        from Kriging.kriging_data import subset_times
         panel = subset_times(panel, cfg["_quick_months"])
+    if cfg.get("_max_times") and panel["time"].nunique() > cfg["_max_times"]:
+        rng = np.random.default_rng(int(cfg.get("rgi", {}).get("seed", 22)))
+        ts = panel["time"].drop_duplicates().to_numpy()
+        keep = rng.choice(ts, size=cfg["_max_times"], replace=False)
+        panel = panel[panel["time"].isin(keep)].copy()
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
     rgi_cfg = cfg.get("rgi", {})
     search = rgi_cfg.get("search", {})
@@ -106,6 +110,7 @@ def run_variable(cfg, var, phase: str):
             t0 = time.perf_counter()
             rmse = score_combo(panel, var, rcfg, n_folds)
             print(f"  k={k:2d} L={L}  DEV RMSE={rmse:.4f}  ({time.perf_counter()-t0:.0f}s)")
+            cfg.setdefault("_trials", []).append({"k": int(k), "n_layers": int(L), "rmse": rmse})
             if rmse < best[0]:
                 best = (rmse, {"k": int(k), "n_layers": int(L)})
         phase1 = best
@@ -180,6 +185,11 @@ def run_variable(cfg, var, phase: str):
         "n_folds": n_folds,
     }
     _write_tuned(var, cfg["time_resolution"], out)
+    if cfg.get("_trials"):
+        import pandas as pd
+        sp = get_rgi_tuned_params_path(var, cfg["time_resolution"]).with_name(f"{var}_search.csv")
+        pd.DataFrame(cfg["_trials"]).to_csv(sp, index=False)
+        print(f"  wrote {sp}  ({len(cfg['_trials'])} trials)")
     return out
 
 
@@ -189,7 +199,8 @@ def parse_args():
     p.add_argument("--phase", choices=["1", "2", "3", "all"], default="all")
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
-    p.add_argument("--folds", type=int, default=None)
+    p.add_argument("--max-times", type=int, default=400,
+                   help="cap timestamps for a proof run")
     add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
@@ -200,6 +211,8 @@ def main():
     cfg = load_config()
     apply_time_res(cfg, args)
     cfg["_hours"] = args.hours
+    cfg["_max_times"] = args.max_times
+    cfg["_trials"] = []
     wanted = args.variables or cfg.get("rgi", {}).get("variables_to_process") or [
         "temp_mean",
     ]

@@ -220,6 +220,14 @@ class RGI:
         val_df=None,
         log=print,
     ) -> dict:
+        self.log_amount = bool(self.cfg.two_step and two_step_var(var))
+        raw_df = train_df
+        if self.log_amount:
+            train_df = train_df.copy()
+            train_df[var] = np.log1p(np.maximum(train_df[var].to_numpy(dtype=np.float64), 0.0))
+            if val_df is not None and len(val_df):
+                val_df = val_df.copy()
+                val_df[var] = np.log1p(np.maximum(val_df[var].to_numpy(dtype=np.float64), 0.0))
         self.scaler = FeatureScaler()
         self.scaler.extra_keys = tuple(self.cfg.extra_cols)
         self.scaler.fit(train_df, var)
@@ -304,8 +312,8 @@ class RGI:
         if self.cfg.two_step and two_step_var(var):
             ind_cfg = RGIConfig(**{**self.cfg.__dict__, "two_step": False, "var_name": var})
             self.ind = RGI(ind_cfg)
-            ind_df = train_df.copy()
-            ind_df[var] = (np.asarray(train_df[var], dtype=np.float64) > self.cfg.trace).astype(np.float32)
+            ind_df = raw_df.copy()
+            ind_df[var] = (np.asarray(raw_df[var], dtype=np.float64) > self.cfg.trace).astype(np.float32)
             val_ind = None
             if val_df is not None and len(val_df):
                 val_ind = val_df.copy()
@@ -327,6 +335,8 @@ class RGI:
         )
         yhat = pred[len(obs):].detach().cpu().numpy()
         yhat = self.scaler.inverse_value(yhat)
+        if self.log_amount:
+            yhat = np.expm1(yhat)
         yhat = clip_var(var or self.cfg.var_name, yhat)
         if self.ind is not None:
             p_wet = np.clip(self.ind.predict_frame(obs_df, query_df, var), 0.0, 1.0)

@@ -210,9 +210,11 @@ def main():
                 pred = model(x_ctx, y_ctx, x_tgt)
             if ckpt["two_step"]:
                 p_occ = torch.sigmoid(pred["occurrence_logits"]).cpu().numpy().squeeze()
-                amt = scaler.inverse(pred["amount_mu"].cpu().numpy().squeeze())
-                mu_full[r0:r1] = (p_occ * np.maximum(amt, 0.0)).reshape(r1 - r0, nx).astype(np.float32)
-                var_full[r0:r1] = pred["amount_variance"].cpu().numpy().squeeze().reshape(r1 - r0, nx).astype(np.float32)
+                mu_n = pred["amount_mu"].cpu().numpy().squeeze()
+                var_n = pred["amount_variance"].cpu().numpy().squeeze()
+                amt = scaler.inverse_mean(mu_n, var_n)
+                mu_full[r0:r1] = np.where(p_occ >= 0.5, np.maximum(amt, 0.0), 0.0).reshape(r1 - r0, nx).astype(np.float32)
+                var_full[r0:r1] = var_n.reshape(r1 - r0, nx).astype(np.float32)
             else:
                 mu_full[r0:r1] = scaler.inverse(pred["mu"].cpu().numpy().squeeze()).reshape(r1 - r0, nx).astype(np.float32)
                 var_full[r0:r1] = pred["variance"].cpu().numpy().squeeze().reshape(r1 - r0, nx).astype(np.float32)

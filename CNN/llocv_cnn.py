@@ -54,6 +54,7 @@ def eval_parts(model, donors, queries, var, gx, gy, elev, clc, ccfg, slope, sina
     ny, nx = elev.shape
     field, mask = station_to_raster(rows_d, cols_d, val_d, ny, nx)
     residual = bool(model.cfg.residual_idw)
+    log_amt = bool(getattr(model, "log_amount", False))
     if residual:
         base = idw_fz_raster(
             donors["x"].to_numpy(), donors["y"].to_numpy(), donors["elev"].to_numpy(), val_d,
@@ -67,7 +68,12 @@ def eval_parts(model, donors, queries, var, gx, gy, elev, clc, ccfg, slope, sina
     else:
         base = None
         qbase = None
-    inp = np.where(mask > 0, field - base, 0.0).astype(np.float32) if base is not None else field
+    if log_amt:
+        inp = np.log1p(np.maximum(field, 0.0)).astype(np.float32)
+    elif base is not None:
+        inp = np.where(mask > 0, field - base, 0.0).astype(np.float32)
+    else:
+        inp = field.astype(np.float32)
     ts = donors["time"].iloc[0] if "time" in donors.columns else queries["time"].iloc[0]
     tch = cyclic_time(ts, subdaily) if model.cfg.cyclic_time else None
     hat = model.predict_raster(

@@ -108,19 +108,48 @@ def extra_cols_for_var(var: str, cfg: dict) -> tuple[str, ...]:
     return tuple(cols)
 
 
+def subset_times(panel: pd.DataFrame, spec) -> pd.DataFrame:
+    """Local copy so RGI does not import from another method."""
+    if spec is None or spec == "" or spec == "all":
+        return panel
+    SEASONAL4_MONTHS = (2, 5, 8, 11)
+    if isinstance(spec, (list, tuple)):
+        keys = {str(s).strip() for s in spec}
+        if keys == {"seasonal4"}:
+            spec = "seasonal4"
+        else:
+            stamp = pd.to_datetime(panel["time"]).dt.strftime("%Y-%m")
+            return panel.loc[stamp.isin(keys)].copy()
+    spec = str(spec).strip().lower()
+    if spec in ("all", "none"):
+        return panel
+    times = pd.to_datetime(panel["time"])
+    if spec == "seasonal4":
+        return panel.loc[times.dt.month.isin(SEASONAL4_MONTHS)].copy()
+    keys = {s.strip() for s in spec.split(",") if s.strip()}
+    stamp = times.dt.strftime("%Y-%m")
+    return panel.loc[stamp.isin(keys)].copy()
+
+
 def attach_extras(panel: pd.DataFrame, cfg: dict, var: str) -> pd.DataFrame:
     cols = extra_cols_for_var(var, cfg)
     if "temp_mean" in cols and "temp_mean" not in panel.columns:
         t = load_panel(cfg, "temp_mean")[["station_name", "time", "temp_mean"]]
         panel = panel.merge(t, on=["station_name", "time"], how="left")
-    need_pack = any(c in cols for c in ("slope", "northness", "tpi"))
-    if need_pack:
+    need = [c for c in cols if c in ("slope", "northness", "tpi")]
+    if need:
         try:
-            from Kriging.kriging_data import attach_pack_terrain, pack_from_master
-            pack = pack_from_master(cfg, int(cfg.get("rgi", {}).get("n_regions", 6)))
-            panel = attach_pack_terrain(panel, pack)
+            from paths import get_station_terrain_path
+            terrain = pd.read_parquet(get_station_terrain_path())
+            keep = ["station_name"] + [c for c in need if c in terrain.columns]
+            if len(keep) > 1:
+                panel = panel.merge(
+                    terrain[keep].drop_duplicates("station_name"),
+                    on="station_name",
+                    how="left",
+                )
         except Exception as exc:
-            print(f"  RGI pack attach failed: {exc}")
+            print(f"  RGI terrain attach failed: {exc}")
     return panel
 
 

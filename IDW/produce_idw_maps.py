@@ -32,8 +32,14 @@ from paths import get_interpolated_map_path, get_master_grid_path
 from shared.time_res import add_time_res_arg, apply_time_res
 
 
+TRACE = {
+    "precip_sum": {"half_hourly": 0.05, "daily": 0.1, "weekly": 0.7, "monthly": 1.0},
+    "snow_mean": {"half_hourly": 0.5, "daily": 0.5, "weekly": 1.0, "monthly": 1.0},
+}
+
+
 def interpolate_one(args):
-    t, df_t, params, target_coords, target_elev, chunk_size = args
+    t, df_t, params, target_coords, target_elev, chunk_size, var, trace = args
     if len(df_t) < 5:
         return None
     k = min(int(params["k"]), len(df_t))
@@ -46,7 +52,7 @@ def interpolate_one(args):
         target_elev=target_elev,
         tree=tree,
         p=float(params["p"]), Fz=float(params["Fz"]), k=k,
-        chunk_size=chunk_size,
+        chunk_size=chunk_size, var=var, trace=trace,
     )
     return {"time": t, "data": data}
 
@@ -56,6 +62,8 @@ def main():
     p.add_argument("--variables", nargs="+", default=None)
     p.add_argument("--months", default=None)
     p.add_argument("--jobs", type=int, default=None)
+    p.add_argument("--max-times", type=int, default=None,
+                   help="cap timestamps for a proof run")
     add_time_res_arg(p)
     args = p.parse_args()
 
@@ -96,9 +104,13 @@ def main():
                 time_resolution=time_res,
             )
             times = sorted(panel["time"].unique())
+            if args.max_times and len(times) > args.max_times:
+                rng = np.random.default_rng(int(cfg.get("random_seed", 31)))
+                times = sorted(rng.choice(times, size=args.max_times, replace=False))
+            trace = TRACE.get(var, {}).get(time_res, 1.0)
             tasks = [
                 (t, panel[panel["time"] == t], params,
-                 target_coords, target_elev, chunk_size)
+                 target_coords, target_elev, chunk_size, var, trace)
                 for t in times
             ]
             if n_jobs == 1:

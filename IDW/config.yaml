@@ -57,9 +57,10 @@ targets:
 
 param_grid:
   power:
-    p: [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5]
-    Fz: [0.0, 0.2, 0.4, 0.6, 0.8, 1]
-    k_neighbors: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50]
+    # Full factorial: 5 x 5 x 6 = 150. Three parameters, so every interaction is scored.
+    p: [1.0, 1.5, 2.0, 3.0, 4.0]
+    Fz: [0.0, 0.25, 0.5, 0.75, 1.0]
+    k_neighbors: [4, 8, 16, 32, 64, 128]
 
 min_stations_per_field: 10
 random_seed: 31
