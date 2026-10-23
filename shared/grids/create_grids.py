@@ -32,7 +32,7 @@ from grid_core import (
     save_grid,
 )
 
-DEFAULT_CFG = CODE_DIR / "shared" / "source" / "config.yaml"
+DEFAULT_CFG = Path(__file__).resolve().parent / "config.yaml"
 
 
 def parse_args():

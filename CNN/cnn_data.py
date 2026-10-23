@@ -105,7 +105,34 @@ def load_panel(cfg: dict, var: str) -> pd.DataFrame:
     return panel.reset_index(drop=True)
 
 
-def subset_times(panel: pd.DataFrame, spec) -> pd.DataFrame:
+def attach_temperature(panel: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Merge observed temp_mean for RH covariate. Stations without T get the panel mean."""
+    if "temp_mean" in panel.columns:
+        return panel
+    tpanel = load_panel(cfg, "temp_mean")[["station_name", "time", "temp_mean"]]
+    out = panel.merge(tpanel, on=["station_name", "time"], how="left")
+    fill = float(out["temp_mean"].mean()) if out["temp_mean"].notna().any() else 0.0
+    out["temp_mean"] = out["temp_mean"].fillna(fill)
+    return out
+
+
+def attach_station_tpi(panel: pd.DataFrame) -> pd.DataFrame:
+    """Attach TPI from the shared station terrain cache (for wind)."""
+    from paths import get_station_terrain_path
+    path = get_station_terrain_path()
+    if not path.exists() or panel.empty:
+        panel = panel.copy()
+        panel["tpi"] = 0.0
+        return panel
+    t = pd.read_parquet(path)
+    if "tpi" not in t.columns:
+        panel = panel.copy()
+        panel["tpi"] = 0.0
+        return panel
+    keep = t[["station_name", "tpi"]].drop_duplicates("station_name")
+    out = panel.merge(keep, on="station_name", how="left")
+    out["tpi"] = out["tpi"].fillna(0.0)
+    return out
     if spec is None or spec == "" or spec == "all":
         return panel
     times = pd.to_datetime(panel["time"])
@@ -126,7 +153,10 @@ def compute_metrics(obs, pred) -> dict:
     mae = float(np.mean(np.abs(o - p)))
     ss_tot = float(np.sum((o - o.mean()) ** 2))
     nse = float(1 - np.sum((o - p) ** 2) / ss_tot) if ss_tot > 0 else np.nan
-    r = float(np.corrcoef(o, p)[0, 1]) if len(o) > 2 else np.nan
+    if len(o) > 2 and np.std(o) > 1e-8 and np.std(p) > 1e-8:
+        r = float(np.corrcoef(o, p)[0, 1])
+    else:
+        r = np.nan
     alpha = float(np.std(p) / np.std(o)) if np.std(o) > 0 else np.nan
     beta = float(np.mean(p) / np.mean(o)) if np.mean(o) != 0 else np.nan
     kge = float(1 - np.sqrt((r - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2)) \

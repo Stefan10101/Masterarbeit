@@ -242,6 +242,10 @@ class GAMInterpolator:
                  * By[:, ::step][:, None, :, None]
                  * Bz[:, ::step][:, None, None, :])
             parts.append(T.reshape(x.size, -1))
+        elif fid == "s_xy_s_elev":
+            parts.append(Bx)
+            parts.append(By)
+            parts.append(Bz)
         else:
             step = 2
             tens = (Bx[:, ::step][:, :, None] * By[:, ::step][:, None, :]).reshape(x.size, -1)

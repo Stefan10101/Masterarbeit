@@ -50,6 +50,7 @@ rhs <- switch(formula_id,
     kx, ky, ke, kx, ke, ky, ke
   ),
   te_xyelev = sprintf("te(x, yc, elev, k=c(%d,%d,%d))", kx, ky, ke),
+  s_xy_s_elev = sprintf("s(x, k=%d) + s(yc, k=%d) + s(elev, k=%d)", kx, ky, ke),
   stop("unknown formula_id: ", formula_id)
 )
 for (col in c("slope", "sinasp", "cosasp", "tmean")) {

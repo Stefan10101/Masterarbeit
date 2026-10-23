@@ -19,6 +19,7 @@ import sys
 import time
 
 import numpy as np
+import pandas as pd
 import yaml
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -48,7 +49,7 @@ def _tune_split(panel, seed=22, frac=0.2):
     """Seeded subset of pool stations used as the tune score targets."""
     pool = panel.loc[~panel["is_heldout"], "station_name"].drop_duplicates()
     rng = np.random.default_rng(seed)
-    names = pool.to_numpy()
+    names = np.asarray(pool.to_numpy()).copy()
     rng.shuffle(names)
     n = max(1, int(round(len(names) * frac)))
     return set(names[:n])
@@ -61,6 +62,8 @@ def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None) -
     score = panel[(~panel["is_heldout"]) & (panel["split"] == "tune")
                   & (panel["station_name"].isin(targets))]
     if score.empty or train["station_name"].nunique() < kcfg.min_stations:
+        reason = "score empty" if score.empty else f"train stations {train['station_name'].nunique()} < {kcfg.min_stations}"
+        print(f"    early inf ({reason})")
         return np.inf
     model = KrigingInterpolator(kcfg)
     model.pack = pack
@@ -141,14 +144,27 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
         rng = np.random.default_rng(int(cfg.get("kriging", {}).get("seed", 22)))
         keep = []
         for sp in ("train", "tune"):
-            ts = panel.loc[panel["split"] == sp, "time"].drop_duplicates().to_numpy()
+            ts = panel.loc[panel["split"] == sp, "time"].drop_duplicates()
+            if ts.empty:
+                continue
             n = max(1, int(round(args_max * len(ts) / max(panel["time"].nunique(), 1))))
-            keep.extend(rng.choice(ts, size=min(n, len(ts)), replace=False).tolist())
-        panel = panel[panel["time"].isin(keep)].copy()
+            chosen = ts.sample(n=min(n, len(ts)), random_state=rng).tolist()
+            keep.extend(chosen)
+        if keep:
+            panel = panel[panel["time"].isin(pd.to_datetime(keep))].copy()
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
     if str(var).lower().startswith("rh") and (rh_t_mode or cfg.get("kriging", {}).get("rh_t_mode", "none")) in ("predicted", "observed"):
         panel = attach_temperature(panel, cfg)
     panel = attach_pack_terrain(panel, pack)
+    # Diagnostics: why the score may be empty for some resolutions
+    print(f"  {var} panel after prep: rows={len(panel)}  "
+          f"times={panel['time'].nunique() if not panel.empty else 0}  "
+          f"stations={panel['station_name'].nunique() if not panel.empty else 0}")
+    if not panel.empty:
+        vc = panel.groupby("split")["time"].nunique()
+        print(f"    times per split: {vc.to_dict()}")
+        print(f"    held-out fraction: {panel['is_heldout'].mean():.3f}  "
+              f"pool stations: {panel.loc[~panel['is_heldout'], 'station_name'].nunique()}")
     kblock = cfg.get("kriging", {})
     search = kblock.get("search", {})
     n_folds = int(n_folds or kblock.get("n_folds", 5))
@@ -227,7 +243,6 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
     }
     _write_tuned(var, cfg["time_resolution"], out)
     if search_rows:
-        import pandas as pd
         sp = get_kriging_tuned_params_path(var, cfg["time_resolution"]).with_name(
             f"{var}_search.csv")
         pd.DataFrame(search_rows).to_csv(sp, index=False)
@@ -244,6 +259,8 @@ def parse_args():
     p.add_argument("--max-times", type=int, default=400,
                    help="cap tune timestamps, sampled within the tune split")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
+    p.add_argument("--quick", action="store_true",
+                   help="force phase 1, seasonal4 months, 2 folds")
     add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()

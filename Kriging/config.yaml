@@ -49,6 +49,7 @@ kriging:
   snow_terrain: true
   wind_watershed: true
   across_w: 4.0
+  per_timestamp_vgm: true          # fit γ from current donors at predict time; fallback to stored
   n_regions: 6
   compute:
     tune_months: "seasonal4"

@@ -18,7 +18,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_model_path, get_interpolated_map_path, get_master_grid_path
 from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_fz_raster, idw_raster, station_to_raster, two_step_var
-from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace
+from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, attach_temperature, attach_station_tpi
 from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned, train_one
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 
@@ -72,6 +72,10 @@ def main():
             t_var = time.time()
             print(f"{var} load panel…", flush=True)
             panel = load_panel(cfg, var)
+            if str(var).lower().startswith("rh"):
+                panel = attach_temperature(panel, cfg)
+            if str(var).lower().startswith("wind"):
+                panel = attach_station_tpi(panel)
             if args.quick or args.months:
                 from cnn_data import subset_times
                 panel = subset_times(panel, args.months or "seasonal4")
@@ -120,12 +124,25 @@ def main():
                 else:
                     inp = field.astype(np.float32)
                 tch = cyclic_time(ts, subdaily) if model.cfg.cyclic_time else None
+                extras = None
+                if str(var).lower().startswith("wind"):
+                    from paths import get_grid_terrain_path
+                    tpath = get_grid_terrain_path(res)
+                    if tpath.exists():
+                        tg = xr.open_dataset(tpath)
+                        if "tpi" in tg:
+                            extras = [tg["tpi"].values.astype(np.float32)]
+                elif str(var).lower().startswith("rh") and "temp_mean" in sl.columns:
+                    tfield = np.zeros((ny, nx), dtype=np.float32)
+                    tfield[rows, cols] = sl["temp_mean"].to_numpy(dtype=np.float32)
+                    extras = [tfield / 20.0]
                 hat = model.predict_raster(
                     inp, mask, elev, clc,
                     slope=slope, sinasp=sinasp, cosasp=cosasp,
                     time_ch=tch,
                     two_step=model.cfg.two_step and two_step_var(var),
                     base=base,
+                    extras=extras,
                     var=var,
                 )
                 fields.append(hat.astype(np.float32))

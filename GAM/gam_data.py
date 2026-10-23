@@ -131,13 +131,47 @@ def attach_temperature(panel: pd.DataFrame, cfg: dict) -> pd.DataFrame:
 
 
 def attach_pack_terrain(panel: pd.DataFrame, pack=None) -> pd.DataFrame:
-    """Terrain comes from the shared station cache in load_panel. Pack is unused."""
-    return panel
+    """Attach watershed region labels when a pack is provided.
+    Slope/aspect/CLC already come from the station terrain cache in load_panel.
+    """
+    if pack is None or "regions" not in pack or panel.empty:
+        return panel
+    from shared.watersheds import sample_region
+    region = sample_region(
+        pack["regions"], pack["xs"], pack["ys"],
+        panel["x"].to_numpy(), panel["y"].to_numpy(),
+    )
+    out = panel.copy()
+    out["region"] = region.astype(np.int32)
+    return out
 
 
 def pack_from_master(cfg, n_regions: int = 6):
-    """GAM does not use watershed regions for temp/precip. Kept so callers compile."""
-    return None
+    """Build watershed pack for wind (and any other use). Returns None if grid missing."""
+    try:
+        import xarray as xr
+    except ImportError:
+        return None
+    from paths import get_master_grid_path
+    from shared.watersheds import WatershedConfig, build_pack
+
+    _, _, grid_method = data_sources(cfg)
+    res = int(cfg.get("resolutions_to_process", [1000])[0])
+    path = get_master_grid_path(grid_method, res)
+    if not path.exists():
+        return None
+    g = xr.open_dataset(path)
+    if "elev" not in g:
+        return None
+    gblock = cfg.get("gam", {})
+    wcfg = WatershedConfig(
+        n_regions=int(n_regions),
+        accum_pct=float(gblock.get("accum_pct", 96.0)),
+        summit_tpi=float(gblock.get("summit_tpi", 80.0)),
+        coldpool_tpi=float(gblock.get("coldpool_tpi", -60.0)),
+    )
+    dem = g["elev"].values.astype(np.float64)
+    return build_pack(dem, g["x"].values, g["y"].values, wcfg)
 
 
 def subset_times(panel: pd.DataFrame, spec) -> pd.DataFrame:
@@ -190,7 +224,10 @@ def compute_metrics(obs, pred) -> dict:
     mae = float(np.mean(np.abs(o - p)))
     ss_tot = float(np.sum((o - o.mean()) ** 2))
     nse = float(1 - np.sum((o - p) ** 2) / ss_tot) if ss_tot > 0 else np.nan
-    r = float(np.corrcoef(o, p)[0, 1]) if len(o) > 2 else np.nan
+    if len(o) > 2 and np.std(o) > 1e-8 and np.std(p) > 1e-8:
+        r = float(np.corrcoef(o, p)[0, 1])
+    else:
+        r = np.nan
     alpha = float(np.std(p) / np.std(o)) if np.std(o) > 0 else np.nan
     beta = float(np.mean(p) / np.mean(o)) if np.mean(o) != 0 else np.nan
     kge = float(1 - np.sqrt((r - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2)) \

@@ -54,7 +54,7 @@ def _predict_loo(dists, idxs, elev, vals, p, Fz):
     with np.errstate(divide="ignore", invalid="ignore"):
         w_xy = dists ** (-p)
         w_z = np.where(d_z > 0, d_z ** (-p), 0.0)
-    w = ((1.0 - Fz) * w_xy ** 2 + Fz * w_z ** 2) / 0.5
+    w = (1.0 - Fz) * w_xy + Fz * w_z
     nb = vals[idxs]
     valid = np.isfinite(nb)
     w = np.where(valid, w, 0.0)
@@ -80,8 +80,10 @@ def _score_one(field: pd.DataFrame, p: float, Fz: float, k: int,
     if two_step_var(var):
         wet = (vals > trace).astype(float)
         p_wet = np.clip(_predict_loo(dists, idxs, elev, wet, p, Fz), 0.0, 1.0)
-        amt = _predict_loo(dists, idxs, elev, vals, p, Fz)
-        pred = np.where(p_wet >= 0.5, np.maximum(amt, 0.0), 0.0)
+        # Amount only from wet stations
+        amt_vals = np.where(wet > 0, vals, np.nan)
+        amt = _predict_loo(dists, idxs, elev, amt_vals, p, Fz)
+        pred = np.where((p_wet >= 0.5) & np.isfinite(amt), np.maximum(amt, 0.0), 0.0)
         pred = clip_var(var, pred)
     else:
         pred = clip_var(var, _predict_loo(dists, idxs, elev, vals, p, Fz))
@@ -141,7 +143,9 @@ def main():
     primary = cfg.get("primary_metric", "rmse")
     min_stations = int(cfg.get("min_stations_per_field", 10))
     n_jobs = int(args.jobs)
-    variables = args.variables or ["temp_mean", "precip_sum"]
+    variables = args.variables or [
+        "temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean",
+    ]
 
     held_out, _pool = load_holdout()
     held_set = set(held_out)

@@ -33,11 +33,12 @@ def compute_metrics(obs: np.ndarray, pred: np.ndarray) -> Dict[str, float]:
     nse = float(1 - ss_res / ss_tot) if ss_tot > 0 else np.nan
     r2 = nse
 
-    if n > 1:
-        r = np.corrcoef(o, p)[0, 1]
+    if n > 1 and np.std(o) > 1e-8 and np.std(p) > 1e-8:
+        r = float(np.corrcoef(o, p)[0, 1])
         alpha = np.std(p) / np.std(o) if np.std(o) > 0 else np.nan
         beta = np.mean(p) / np.mean(o) if np.mean(o) != 0 else np.nan
-        kge = float(1 - np.sqrt((r - 1)**2 + (alpha - 1)**2 + (beta - 1)**2))
+        kge = float(1 - np.sqrt((r - 1)**2 + (alpha - 1)**2 + (beta - 1)**2)) \
+            if np.isfinite(r) and np.isfinite(alpha) and np.isfinite(beta) else np.nan
         mx, my = float(np.mean(o)), float(np.mean(p))
         sxx = float(np.mean((o - mx) ** 2))
         syy = float(np.mean((p - my) ** 2))

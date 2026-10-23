@@ -29,7 +29,7 @@ from paths import get_cnn_model_path, get_master_grid_path, get_nested_llocv_pat
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_fz_points, idw_fz_raster, idw_raster, sample_at_points, station_to_raster, two_step_var
 from shared.splits.evaluation_sets import apply_evaluation_protocol
-from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, print_split_metrics, subset_times
+from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, print_split_metrics, subset_times, attach_temperature, attach_station_tpi
 from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned, train_one
 
 try:
@@ -76,12 +76,27 @@ def eval_parts(model, donors, queries, var, gx, gy, elev, clc, ccfg, slope, sina
         inp = field.astype(np.float32)
     ts = donors["time"].iloc[0] if "time" in donors.columns else queries["time"].iloc[0]
     tch = cyclic_time(ts, subdaily) if model.cfg.cyclic_time else None
+    extras = None
+    if str(var).lower().startswith("wind"):
+        from paths import get_grid_terrain_path
+        tpath = get_grid_terrain_path(1000)
+        if tpath.exists():
+            import xarray as xr
+            tg = xr.open_dataset(tpath)
+            if "tpi" in tg:
+                extras = [tg["tpi"].values.astype(np.float32)]
+    elif str(var).lower().startswith("rh") and "temp_mean" in donors.columns:
+        tfield = np.zeros((ny, nx), dtype=np.float32)
+        tr, tc = grid_index(donors["x"].to_numpy(), donors["y"].to_numpy(), gx, gy)
+        tfield[tr, tc] = donors["temp_mean"].to_numpy(dtype=np.float32)
+        extras = [tfield / 20.0]
     hat = model.predict_raster(
         inp, mask, elev, clc,
         slope=slope, sinasp=sinasp, cosasp=cosasp,
         time_ch=tch,
         two_step=model.cfg.two_step and two_step_var(var),
         base=base,
+        extras=extras,
         var=var,
     )
     pred = sample_at_points(hat, queries["x"].to_numpy(), queries["y"].to_numpy(), gx, gy)
@@ -154,6 +169,10 @@ def main():
     for var in variables:
         panel = load_panel(cfg, var)
         panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
+        if str(var).lower().startswith("rh"):
+            panel = attach_temperature(panel, cfg)
+        if str(var).lower().startswith("wind"):
+            panel = attach_station_tpi(panel)
         # Restrict scoring to held-out stations on test quarters
         panel = panel[(panel["is_heldout"] & (panel["split"] == "test")) | (~panel["is_heldout"])]
         if args.quick or args.months:

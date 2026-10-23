@@ -134,6 +134,9 @@ def build_field(
     df = df.dropna().drop_duplicates("station_name")
     if len(df) < min_stations:
         return None
+    # A dry or constant day scores 0 for every setting and breaks KGE.
+    if float(np.std(df["value"])) < 1e-6:
+        return None
     return df
 
 
@@ -178,7 +181,10 @@ def compute_metrics(obs, pred) -> dict:
     mae = float(np.mean(np.abs(err)))
     var_o = float(np.var(o))
     nse = float(1.0 - np.mean(err ** 2) / var_o) if var_o > 0 else np.nan
-    r = float(np.corrcoef(o, p)[0, 1]) if n > 2 else np.nan
+    if n > 2 and np.std(o) > 1e-8 and np.std(p) > 1e-8:
+        r = float(np.corrcoef(o, p)[0, 1])
+    else:
+        r = np.nan
     alpha = float(np.std(p) / np.std(o)) if np.std(o) > 0 else np.nan
     beta = float(np.mean(p) / np.mean(o)) if np.mean(o) != 0 else np.nan
     kge = float(1.0 - np.sqrt((r - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2)) \

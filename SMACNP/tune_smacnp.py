@@ -72,10 +72,15 @@ def build_model(cfg: dict, n_features: int, two_step: bool) -> SMACNP:
     )
 
 
-def precompute_days(days, df, feature_cols, scaler, train_stations, cfg):
-    """Build all day tensors once. Avoids pandas slicing inside the epoch loop."""
+def precompute_days(days, df, feature_cols, scaler, train_stations, cfg, on_grid: bool | None = None):
+    """Build all day tensors once. Avoids pandas slicing inside the epoch loop.
+
+    on_grid=None uses the config value. Pass False for the validation set so
+    targets exclude context stations (pure interpolation loss).
+    """
     rng = np.random.default_rng(cfg["smacnp"]["seed"])
-    on_grid = cfg["smacnp"]["on_grid_training"]
+    if on_grid is None:
+        on_grid = bool(cfg["smacnp"]["on_grid_training"])
     ctx_frac = cfg["smacnp"]["context_fraction"]
     grouped = {t: g for t, g in df.groupby("time", sort=False)}
     out = []
@@ -178,6 +183,19 @@ def main():
     held_stations = np.array([s for s in station_names if s in set(held_out)])
     print(f"train stations={len(train_stations)}  held-out={len(held_stations)}")
 
+    # Wet-fraction gate on the training pool (profile: on if wet in (0.2, 0.8); snow always)
+    if two_step:
+        raw = df.loc[df["station_name"].isin(train_stations), "value"].to_numpy()
+        trace = 0.5 if str(var).lower().startswith("snow") else 0.1
+        wet = float(np.mean(raw > trace)) if len(raw) else 0.0
+        if str(var).lower().startswith("snow"):
+            print(f"  two_step on (snow always)  wet={wet:.3f}")
+        elif wet >= 0.80 or wet <= 0.20:
+            two_step = False
+            print(f"  two_step off: wet={wet:.3f} (indicator is constant)")
+        else:
+            print(f"  two_step on: wet={wet:.3f}")
+
     # Scalers on training-pool only
     train_mask = df["station_name"].isin(train_stations)
     y_scaler = PaperScaler(two_step=two_step).fit(df.loc[train_mask, "value"].to_numpy())
@@ -200,7 +218,8 @@ def main():
     print(f"train days={len(train_days)}  val days={len(val_days)}")
     print("Precomputing day tensors...")
     train_tensors = precompute_days(train_days, df, feat_cols, y_scaler, train_stations, cfg)
-    val_tensors = precompute_days(val_days, df, feat_cols, y_scaler, train_stations, cfg)
+    # Validation excludes context stations so early-stopping sees pure interpolation loss
+    val_tensors = precompute_days(val_days, df, feat_cols, y_scaler, train_stations, cfg, on_grid=False)
     print(f"train tensors={len(train_tensors)}  val tensors={len(val_tensors)}")
 
     model = build_model(cfg, len(feat_cols), two_step).to(device)

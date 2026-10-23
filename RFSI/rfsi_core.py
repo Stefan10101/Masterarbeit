@@ -309,13 +309,20 @@ class RFSI:
             Xi = np.hstack([X_nb_i, np.asarray(X_cov_pred)]) if X_cov_pred is not None else X_nb_i
             p = np.clip(self.model_ind.predict(Xi), 0.0, 1.0)
             if self.log_amount:
-                z_log = np.log1p(np.maximum(z_obs, 0.0))
-                X_nb_a = build_neighbor_features(
-                    coords_obs, z_log, coords_pred,
-                    n_obs=self.n_obs, exclude_self=False,
-                )
-                Xa = np.hstack([X_nb_a, np.asarray(X_cov_pred)]) if X_cov_pred is not None else X_nb_a
-                hat = np.expm1(self.model.predict(Xa))
+                wet_m = z_obs > self.trace
+                if int(wet_m.sum()) >= 2:
+                    # Amount neighbours = wet stations only (matches training)
+                    X_nb_a = build_neighbor_features(
+                        coords_obs[wet_m],
+                        np.log1p(np.maximum(z_obs[wet_m], 0.0)),
+                        coords_pred,
+                        n_obs=self.n_obs, exclude_self=False,
+                    )
+                    X_nb_a = np.nan_to_num(X_nb_a, nan=0.0)
+                    Xa = np.hstack([X_nb_a, np.asarray(X_cov_pred)]) if X_cov_pred is not None else X_nb_a
+                    hat = np.expm1(self.model.predict(Xa))
+                else:
+                    hat = np.zeros(len(coords_pred), dtype=np.float64)
             hat = np.where(p >= self.tau_wet, np.maximum(hat, 0.0), 0.0)
         return clip_var(self.var_name, hat)
 
@@ -325,17 +332,58 @@ class RFSI:
         z_obs: np.ndarray,
         X_cov_obs: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """Station predictions with self excluded (frozen pooled model)."""
+        """Station predictions with self excluded. Same two-step as predict_field."""
         if self.model is None:
             raise RuntimeError("Model has not been fitted yet.")
         coords_obs = np.asarray(coords_obs, dtype=np.float64)
         z_obs = np.asarray(z_obs, dtype=np.float64)
-        X_nb = build_neighbor_features(
-            coords_obs, z_obs, coords_obs,
+        # Reuse predict_field, then force self-exclusion by building features ourselves
+        # for the non-two-step path; for two-step we mirror predict_field with exclude_self.
+        if not (self.two_step and self.model_ind is not None):
+            X_nb = build_neighbor_features(
+                coords_obs, z_obs, coords_obs,
+                n_obs=self.n_obs, exclude_self=True,
+            )
+            X = np.hstack([X_nb, np.asarray(X_cov_obs)]) if X_cov_obs is not None else X_nb
+            hat = np.asarray(self.model.predict(X), dtype=np.float64)
+            return clip_var(self.var_name, hat)
+
+        # Indicator (self excluded)
+        z_ind = (z_obs > self.trace).astype(np.float64)
+        X_nb_i = build_neighbor_features(
+            coords_obs, z_ind, coords_obs,
             n_obs=self.n_obs, exclude_self=True,
         )
-        X = np.hstack([X_nb, np.asarray(X_cov_obs)]) if X_cov_obs is not None else X_nb
-        hat = np.asarray(self.model.predict(X), dtype=np.float64)
+        Xi = np.hstack([X_nb_i, np.asarray(X_cov_obs)]) if X_cov_obs is not None else X_nb_i
+        p = np.clip(self.model_ind.predict(Xi), 0.0, 1.0)
+
+        # Amount: wet stations only. Self-exclude only for wet queries
+        # (dry queries have no self in the wet donor set).
+        wet_m = z_obs > self.trace
+        hat = np.zeros(len(coords_obs), dtype=np.float64)
+        if int(wet_m.sum()) >= 2 and self.log_amount:
+            wet_coords = coords_obs[wet_m]
+            wet_log = np.log1p(np.maximum(z_obs[wet_m], 0.0))
+            X_cov_w = None if X_cov_obs is None else np.asarray(X_cov_obs)[wet_m]
+            X_cov_d = None if X_cov_obs is None else np.asarray(X_cov_obs)[~wet_m]
+
+            if wet_m.any():
+                X_nb_w = build_neighbor_features(
+                    wet_coords, wet_log, wet_coords,
+                    n_obs=self.n_obs, exclude_self=True,
+                )
+                X_nb_w = np.nan_to_num(X_nb_w, nan=0.0)
+                Xw = np.hstack([X_nb_w, X_cov_w]) if X_cov_w is not None else X_nb_w
+                hat[wet_m] = np.expm1(self.model.predict(Xw))
+            if (~wet_m).any():
+                X_nb_d = build_neighbor_features(
+                    wet_coords, wet_log, coords_obs[~wet_m],
+                    n_obs=self.n_obs, exclude_self=False,
+                )
+                X_nb_d = np.nan_to_num(X_nb_d, nan=0.0)
+                Xd = np.hstack([X_nb_d, X_cov_d]) if X_cov_d is not None else X_nb_d
+                hat[~wet_m] = np.expm1(self.model.predict(Xd))
+        hat = np.where(p >= self.tau_wet, np.maximum(hat, 0.0), 0.0)
         return clip_var(self.var_name, hat)
 
 

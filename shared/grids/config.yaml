@@ -1,0 +1,13 @@
+# Grid creation config. Used by shared/grids/create_grids.py.
+# Paths (DEM, CLC, stations, output) come from paths.py; this file only
+# holds the geometry and resolution choices.
+
+projected_crs: "EPSG:31287"
+resolutions_to_process: [1000]
+
+domain:
+  buffer_m: 15000
+
+predefined_bboxes:
+  # Alpine Convention perimeter in EPSG:31287
+  full: [-76229, 123066, 637216, 501366]

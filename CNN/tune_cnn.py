@@ -21,7 +21,7 @@ from paths import get_cnn_tuned_params_path, get_master_grid_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from shared.splits.evaluation_sets import prepare_for_tuning
 from cnn_core import grid_terrain, two_step_var
-from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace
+from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, attach_temperature, attach_station_tpi
 from train_cnn import cfg_to_cnn, train_one
 
 try:
@@ -86,6 +86,10 @@ def main():
                            & (~tagged["station_name"].isin(targets))].copy()
         pool_tune["split"] = "pool"
         panel = pd.concat([train, dev, pool_tune], ignore_index=True)
+        if str(var).lower().startswith("rh"):
+            panel = attach_temperature(panel, cfg)
+        if str(var).lower().startswith("wind"):
+            panel = attach_station_tpi(panel)
         print(f"{var} train rows={len(train)} dev rows={len(dev)} "
               f"dev times={dev['time'].nunique()}", flush=True)
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)

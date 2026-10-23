@@ -213,6 +213,9 @@ def build_frames(panel, var, gx, gy, elev, clc, ccfg: CNNConfig, split, subdaily
         if getattr(dtimes.dt, "tz", None) is not None:
             dtimes = dtimes.dt.tz_convert("UTC").dt.tz_localize(None)
         don = donor_src.loc[dtimes == tkey]
+        # For score frames the targets must not be donors
+        if donors is not None:
+            don = don[~don["station_name"].isin(part["station_name"])]
         if don.empty or len(don) < 4:
             print(f"    [{i}/{len(groups)}] {ts} no donors (n={len(don)})", flush=True)
             continue
@@ -220,6 +223,7 @@ def build_frames(panel, var, gx, gy, elev, clc, ccfg: CNNConfig, split, subdaily
         extra = f" donors={n_don}" if n_don != n_st else ""
         dx_, dy_, dz_, dv = don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(), don[var].to_numpy()
         sx, sy, sz = part["x"].to_numpy(), part["y"].to_numpy(), part["elev"].to_numpy()
+        # exclude_self only when the targets are among the donors (train path)
         same = donors is None
         cache = _idw_cache_path(var, time_res, tkey, ccfg.idw_p, ccfg.idw_fz, ccfg.idw_k)
         hit = _load_idw(cache) if ccfg.residual_idw else None
@@ -252,6 +256,11 @@ def build_frames(panel, var, gx, gy, elev, clc, ccfg: CNNConfig, split, subdaily
             "cols": np.asarray(cols, dtype=np.int32),
             "obs": np.asarray(val, dtype=np.float32),
             "pts": np.asarray(base[rows, cols], dtype=np.float32),
+            "sx": sx.astype(np.float32),
+            "sy": sy.astype(np.float32),
+            "sz": sz.astype(np.float32),
+            "sv": val.astype(np.float32),
+            "tmean": part["temp_mean"].to_numpy(dtype=np.float32) if "temp_mean" in part.columns else None,
             "wet": (np.asarray(val) > trace).astype(np.float32),
             "time": ts,
             "time_ch": cyclic_time(ts, subdaily) if ccfg.cyclic_time else None,
@@ -326,28 +335,30 @@ def _to_dev(arrs, device):
 
 
 
-def _attach_static(frames, elev, clc, model, slope, sinasp, cosasp):
+def _attach_static(frames, elev, clc, model, slope, sinasp, cosasp, extra=None):
     """One shared terrain/CLC grid. Time is a constant channel, filled per frame.
 
-    A daily run is ~1500 frames. Storing the 24-channel grid on each one is
-    ~110 GB. The grid does not change with the day.
+    extra: optional static raster (e.g. TPI) appended as the last channel.
     """
     z = np.zeros_like(elev, dtype=np.float32)
     n_time = len(frames[0].get("time_ch") or [])
     shared = model.pack_channels(
         z, z, elev, clc, slope=slope, sinasp=sinasp, cosasp=cosasp,
         time_ch=([0.0] * n_time) or None,
+        extras=[extra] if extra is not None else None,
     )
     model._shared_static = shared
     model._n_time = n_time
+    model._has_extra = extra is not None
 
 
 def _pack_from_static(frames, idx, model, rng, mask_frac):
     """Build one batch from the shared grid and the sparse station values.
 
-    Nothing full-grid is kept on the frame. The batch is the only dense array,
-    and it is discarded after the step.
+    When stations are dropped (train_mask_frac), the residual baseline is
+    recomputed from the kept stations only so the target residual is real.
     """
+    from cnn_core import idw_fz_points
     ny, nx = model._shared_static.shape[-2:]
     chans, tgts, qmasks, wets, bases, fields = [], [], [], [], [], []
     for i in idx:
@@ -361,6 +372,21 @@ def _pack_from_static(frames, idx, model, rng, mask_frac):
             if cand.any() and (~cand).sum() >= 4:
                 drop = cand
         keep = ~drop
+        # Rebuild residual baseline from kept stations when we drop any
+        if not bool(getattr(model, "log_amount", False)) and model.cfg.residual_idw and drop.any() and keep.sum() >= 4:
+            sx = fr.get("sx", np.zeros(0))
+            sy = fr.get("sy", np.zeros(0))
+            sz = fr.get("sz", np.zeros(0))
+            sv = fr.get("sv", np.zeros(0))
+            if len(sx) == len(r):
+                base_pts = idw_fz_points(
+                    sx[keep], sy[keep], sz[keep], sv[keep],
+                    sx[drop], sy[drop], sz[drop],
+                    p=model.cfg.idw_p, Fz=model.cfg.idw_fz, k=model.cfg.idw_k,
+                    exclude_self=False,
+                )
+                pts = pts.copy()
+                pts[drop] = base_pts
         ch = model._shared_static.copy()
         tc = fr.get("time_ch") or []
         for j, tv in enumerate(tc):
@@ -375,6 +401,14 @@ def _pack_from_static(frames, idx, model, rng, mask_frac):
         mask_in[r[keep], c[keep]] = 1.0
         ch[0] = np.where(mask_in > 0, (value - model.y_mean) / model.y_std, 0.0)
         ch[1] = mask_in
+        # Optional RH covariate: rasterize observed tmean from the kept stations
+        if fr.get("tmean") is not None and model._has_extra is False:
+            tm = np.asarray(fr["tmean"], dtype=np.float32)
+            tfield = np.zeros((ny, nx), dtype=np.float32)
+            tfield[r[keep], c[keep]] = tm[keep]
+            # Append or overwrite the last channel if the net expects it
+            if ch.shape[0] > model.in_ch - 1:
+                ch[-1] = tfield / 20.0  # rough scale
         qmask = np.zeros((ny, nx), dtype=np.float32)
         if drop.any():
             qmask[r[drop], c[drop]] = 1.0
@@ -400,68 +434,6 @@ def _pack_from_static(frames, idx, model, rng, mask_frac):
     return tuple(np.stack(a).astype(np.float32) for a in (chans, tgts, qmasks, wets, bases, fields))
 
 
-def pack_batch(frames, idx, elev, clc, model: CNNInterpolator, rng, mask_frac, train: bool,
-               slope=None, sinasp=None, cosasp=None, extras_fn=None):
-    """Hide a fraction of stations, rebuild IDW from the rest, lose on hidden pixels.
-
-    Self-inclusive IDW made station residuals identically 0 and the net learned
-    nothing. Donor-only IDW is the actual interpolation residual.
-    """
-    chans, tgts, qmasks, wets, bases, fields = [], [], [], [], [], []
-    for i in idx:
-        fr = frames[i]
-        r = np.asarray(fr["rows"])
-        c = np.asarray(fr["cols"])
-        obs = np.asarray(fr["obs"], dtype=np.float64)
-        field = np.asarray(fr["field"], dtype=np.float32)
-        ny, nx = field.shape
-        drop = np.zeros(len(r), dtype=bool)
-        if mask_frac > 0 and len(r) >= 5:
-            cand = rng.random(len(r)) < mask_frac
-            if cand.any() and (~cand).sum() >= 4:
-                drop = cand
-        keep = ~drop
-        if keep.sum() < 4:
-            keep = np.ones(len(r), dtype=bool)
-            drop = ~keep
-        # Full-grid IDW is cached on the frame. Rebuilding it per batch is the
-        # CPU stall that leaves the GPU idle.
-        base = fr.get("base")
-        if base is None:
-            base = idw_raster(r[keep], c[keep], obs[keep], ny, nx, k=model.cfg.idw_k, exclude_self=True)
-        value = np.zeros_like(field)
-        mask_in = np.zeros_like(field)
-        value[r[keep], c[keep]] = field[r[keep], c[keep]] - base[r[keep], c[keep]]
-        mask_in[r[keep], c[keep]] = 1.0
-        qmask = np.zeros_like(field)
-        if drop.any():
-            qmask[r[drop], c[drop]] = 1.0
-        else:
-            qmask[r, c] = 1.0
-        extras = extras_fn(fr) if extras_fn is not None else None
-        chans.append(model.pack_channels(
-            value, mask_in, elev, clc,
-            slope=slope, sinasp=sinasp, cosasp=cosasp,
-            time_ch=fr.get("time_ch"), extras=extras,
-        ))
-        tgt = ((field - base) - model.y_mean) / model.y_std
-        tgts.append(tgt.astype(np.float32))
-        qmasks.append(qmask.astype(np.float32))
-        wet = np.zeros_like(fr["field"])
-        wet[r, c] = np.asarray(fr.get("wet", 0.0), dtype=np.float32)
-        wets.append(wet)
-        bases.append(np.asarray(base, dtype=np.float32))
-        fields.append(field)
-    return (
-        np.stack(chans).astype(np.float32),
-        np.stack(tgts).astype(np.float32),
-        np.stack(qmasks).astype(np.float32),
-        np.stack(wets).astype(np.float32),
-        np.stack(bases).astype(np.float32),
-        np.stack(fields).astype(np.float32),
-    )
-
-
 def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp=None, cosasp=None,
               time_res: str | None = None, trace: float = 0.1, jobs: int = 1):
     subdaily = is_subdaily(panel, time_res)
@@ -482,7 +454,12 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
         ccfg.residual_idw = False
         print("  precip path: residual_idw off, target=log1p", flush=True)
     out_ch = 2 if use_two else 1
-    in_ch = n_in_channels(ccfg, subdaily)
+    extra = 0
+    if str(var).lower().startswith("wind"):
+        extra = 1  # TPI
+    elif str(var).lower().startswith("rh"):
+        extra = 1  # tmean
+    in_ch = n_in_channels(ccfg, subdaily, extra_ch=extra)
     model = CNNInterpolator(ccfg, in_ch=in_ch, out_ch=out_ch)
     if slope is None and ccfg.use_terrain:
         slope, sinasp, cosasp = grid_terrain(elev, gx, gy)
@@ -531,7 +508,17 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
     # Daily and finer have enough fields that one mask is fine, and prebuilding
     # it keeps the GPU busy.
     remask = time_res in (None, "monthly", "weekly", "seasonal")
-    _attach_static(train_fr + dev_fr, elev, clc, model, slope, sinasp, cosasp)
+    # Load static TPI for wind
+    tpi_grid = None
+    if str(var).lower().startswith("wind"):
+        from paths import get_grid_terrain_path
+        tpath = get_grid_terrain_path(int(elev.shape[1]) if elev.ndim == 2 else 1000)
+        if tpath.exists():
+            import xarray as xr
+            tg = xr.open_dataset(tpath)
+            if "tpi" in tg:
+                tpi_grid = tg["tpi"].values.astype(np.float32)
+    _attach_static(train_fr + dev_fr, elev, clc, model, slope, sinasp, cosasp, extra=tpi_grid)
     dev_idx = [list(range(i, min(i + b, len(dev_fr)))) for i in range(0, len(dev_fr), b)]
     dev_batches = None  # packed inside the eval loop
     train_batches = None

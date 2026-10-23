@@ -45,6 +45,7 @@ class KrigingConfig:
     snow_terrain: bool = True
     wind_watershed: bool = True
     across_w: float = 4.0
+    per_timestamp_vgm: bool = True          # fit γ from current donors; fallback to stored
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +513,23 @@ class KrigingInterpolator:
             by_reg[int(cid)] = fit_variogram(p, self.cfg.family)
         return default, by_reg
 
+    def _vgm_for_field(self, coords: np.ndarray, resid: np.ndarray, fallback: dict) -> dict:
+        """Fit a variogram on the current donors; fall back if too few pairs."""
+        if not getattr(self.cfg, "per_timestamp_vgm", True):
+            return fallback
+        if len(resid) < 8:
+            return fallback
+        emp = empirical_variogram(coords, resid, self.cfg.n_lags)
+        if emp is None or emp.get("n_pairs", 0) < max(20, self.cfg.min_pairs // 10):
+            return fallback
+        try:
+            vgm = fit_variogram(emp, self.cfg.family)
+            if vgm.get("n_pairs", 0) < 20 or not np.isfinite(vgm.get("range", np.nan)):
+                return fallback
+            return vgm
+        except Exception:
+            return fallback
+
     def predict_frame(self, donors: pd.DataFrame, queries: pd.DataFrame, var: str) -> np.ndarray:
         if len(donors) < 2:
             return np.full(len(queries), np.nan)
@@ -534,7 +552,8 @@ class KrigingInterpolator:
         m_q = self._trend(queries, self.beta, self.col_ok)
         resid = donors[var].to_numpy(dtype=np.float64) - m_d
         d_c = self._metric(donors)
-        ehat = ordinary_krige(d_c, resid, q_c, self.cfg.k, self._pick_vgm(cid, False))
+        vgm = self._vgm_for_field(d_c, resid, self._pick_vgm(cid, False))
+        ehat = ordinary_krige(d_c, resid, q_c, self.cfg.k, vgm)
         return m_q + ehat
 
     def _predict_by_region(self, donors, queries, var) -> np.ndarray:
@@ -560,7 +579,8 @@ class KrigingInterpolator:
         m_i_q = self._trend(queries, self.beta_ind, self.col_ok_ind)
         resid_i = wet_ind - m_i_d
         d_c = self._metric(donors)
-        e_i = ordinary_krige(d_c, resid_i, q_c, self.cfg.k_indicator, self._pick_vgm(cid, True))
+        vgm_i = self._vgm_for_field(d_c, resid_i, self._pick_vgm(cid, True))
+        e_i = ordinary_krige(d_c, resid_i, q_c, self.cfg.k_indicator, vgm_i)
         p_wet = np.clip(m_i_q + e_i, 0.0, 1.0)
 
         wet_mask = donors[var].to_numpy(dtype=np.float64) > self.trace
@@ -569,10 +589,13 @@ class KrigingInterpolator:
             wet = donors.loc[wet_mask]
             m_d = self._trend(wet, self.beta, self.col_ok)
             m_q = self._trend(queries, self.beta, self.col_ok)
-            resid = wet[var].to_numpy(dtype=np.float64) - m_d
             if self.log_amount:
                 resid = np.log1p(np.maximum(wet[var].to_numpy(dtype=np.float64), 0.0)) - m_d
-            ehat = ordinary_krige(self._metric(wet), resid, q_c, self.cfg.k, self._pick_vgm(cid, False))
+            else:
+                resid = wet[var].to_numpy(dtype=np.float64) - m_d
+            wet_c = self._metric(wet)
+            vgm_a = self._vgm_for_field(wet_c, resid, self._pick_vgm(cid, False))
+            ehat = ordinary_krige(wet_c, resid, q_c, self.cfg.k, vgm_a)
             amount = m_q + ehat
             if self.log_amount:
                 amount = np.expm1(amount)

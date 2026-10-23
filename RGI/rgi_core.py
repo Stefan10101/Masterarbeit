@@ -220,7 +220,7 @@ class RGI:
         val_df=None,
         log=print,
     ) -> dict:
-        self.log_amount = bool(self.cfg.two_step and two_step_var(var))
+        self.log_amount = bool(two_step_var(var))
         raw_df = train_df
         if self.log_amount:
             train_df = train_df.copy()
@@ -228,6 +228,22 @@ class RGI:
             if val_df is not None and len(val_df):
                 val_df = val_df.copy()
                 val_df[var] = np.log1p(np.maximum(val_df[var].to_numpy(dtype=np.float64), 0.0))
+        # Wet-fraction gate for the indicator (profile: on if wet in (0.2, 0.8); snow always)
+        use_two = bool(self.cfg.two_step and two_step_var(var))
+        if use_two:
+            raw_vals = np.asarray(raw_df[var], dtype=np.float64)
+            wet = float(np.mean(raw_vals > self.cfg.trace)) if len(raw_vals) else 0.0
+            if str(var).lower().startswith("snow"):
+                # snow always keeps the indicator
+                pass
+            elif wet >= 0.80 or wet <= 0.20:
+                use_two = False
+                if log:
+                    log(f"  two_step off: wet={wet:.3f} (indicator is constant)")
+            else:
+                if log:
+                    log(f"  two_step on: wet={wet:.3f}")
+        self.cfg.two_step = use_two
         self.scaler = FeatureScaler()
         self.scaler.extra_keys = tuple(self.cfg.extra_cols)
         self.scaler.fit(train_df, var)

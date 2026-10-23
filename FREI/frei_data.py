@@ -185,7 +185,10 @@ def compute_metrics(obs, pred) -> dict:
     mae = float(np.mean(np.abs(o - p)))
     ss_tot = float(np.sum((o - o.mean()) ** 2))
     nse = float(1 - np.sum((o - p) ** 2) / ss_tot) if ss_tot > 0 else np.nan
-    r = float(np.corrcoef(o, p)[0, 1]) if n > 2 else np.nan
+    if n > 2 and np.std(o) > 1e-8 and np.std(p) > 1e-8:
+        r = float(np.corrcoef(o, p)[0, 1])
+    else:
+        r = np.nan
     alpha = float(np.std(p) / np.std(o)) if np.std(o) > 0 else np.nan
     beta = float(np.mean(p) / np.mean(o)) if np.mean(o) != 0 else np.nan
     kge = float(1 - np.sqrt((r - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2)) \

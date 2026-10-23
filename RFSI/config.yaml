@@ -24,7 +24,7 @@ rfsi:
   architecture: pooled
   n_obs: 10
   save_model: true
-  variables_to_process: ["temp_mean", "precip_sum"]
+  variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
 
   # 4 parameters, so the search is coordinate descent, not a full product.
   n_obs_list: [4, 8, 16, 32, 64]

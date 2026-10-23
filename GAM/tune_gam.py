@@ -31,6 +31,7 @@ from gam_data import (
     load_gam_config,
     load_panel,
     pack_from_master,
+    precip_trace,
     subset_times,
 )
 from gam_core import two_step_var
@@ -55,7 +56,10 @@ def _eval_cell(form, ns, tau):
     print(f"START {tag}", flush=True)
     t0 = time.time()
     try:
-        gcfg = cfg_to_gam(_CFG, {"formula": form, "n_splines": ns, "tau_wet": tau})
+        tr = precip_trace(_CFG, _CFG["time_resolution"], _VAR)
+        gcfg = cfg_to_gam(_CFG, {
+            "formula": form, "n_splines": ns, "tau_wet": tau, "trace": tr,
+        })
         pred = run_llocv(_PANEL, _VAR, gcfg, _N_FOLDS, {"train"}, {"tune"}, progress=tag)
         met = compute_metrics(pred["observed"], pred["predicted"])
         nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0

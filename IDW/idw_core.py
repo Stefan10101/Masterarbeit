@@ -74,7 +74,7 @@ def modified_idw(
             w_xy = power_weight(d_xy, p)
             w_z = power_weight(d_z, p)
             F_xy = 1.0 - Fz
-            w = (F_xy * w_xy**2 + Fz * w_z**2) / 0.5
+            w = F_xy * w_xy + Fz * w_z
 
             vals = station_values[idx]
             valid = ~np.isnan(vals)
@@ -98,7 +98,7 @@ def modified_idw(
                 w_xy = power_weight(d_xy, p)
                 w_z = power_weight(d_z, p)
                 F_xy = 1.0 - Fz
-                w = (F_xy * w_xy**2 + Fz * w_z**2) / 0.5
+                w = F_xy * w_xy + Fz * w_z
 
                 vals = station_values[idx]
                 valid = ~np.isnan(vals)
@@ -121,11 +121,18 @@ def interpolate_idw(
             wet, station_coords, station_elev, target_coords, target_elev,
             tree, p=p, Fz=Fz, k=k, min_dist=min_dist, chunk_size=chunk_size,
         )
+        # Amount only from wet stations (dry set to NaN so they are ignored)
+        amt_vals = np.where(wet > 0, vals, np.nan)
         amt = modified_idw(
-            vals, station_coords, station_elev, target_coords, target_elev,
+            amt_vals, station_coords, station_elev, target_coords, target_elev,
             tree, p=p, Fz=Fz, k=k, min_dist=min_dist, chunk_size=chunk_size,
         )
-        out = np.where(np.clip(p_wet, 0.0, 1.0) >= tau_wet, np.maximum(amt, 0.0), 0.0)
+        # Hard gate; NaN amount (no wet neighbours) falls back to 0
+        out = np.where(
+            (np.clip(p_wet, 0.0, 1.0) >= tau_wet) & np.isfinite(amt),
+            np.maximum(amt, 0.0),
+            0.0,
+        )
         return clip_var(var, out)
     return clip_var(var, modified_idw(
         vals, station_coords, station_elev, target_coords, target_elev,

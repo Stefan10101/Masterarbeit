@@ -86,14 +86,20 @@ def load_tuned(var, time_res):
 
 
 def _score_one(payload):
-    """One timestamp. Own R process, so it is safe to run several at once."""
+    """One timestamp (or fold-slice). Own R process, so it is safe to run several at once."""
     i, n, ts, don, q, var, gcfg = payload
     model = GAMInterpolator(gcfg)
+    # Optional covariates present on the panel
+    tmean = don["temp_mean"].to_numpy() if "temp_mean" in don.columns else None
+    tmean_q = q["temp_mean"].to_numpy() if "temp_mean" in q.columns else None
+    region = don["region"].to_numpy() if "region" in don.columns else None
+    region_q = q["region"].to_numpy() if "region" in q.columns else None
     hat = model.predict_timestamp(
         don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
         don[var].to_numpy(),
         q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
         var=var,
+        trace=gcfg.trace,
         clc=don["clc_group"].to_numpy() if "clc_group" in don.columns else None,
         clc_q=q["clc_group"].to_numpy() if "clc_group" in q.columns else None,
         slope=don["slope"].to_numpy() if "slope" in don.columns else None,
@@ -102,6 +108,8 @@ def _score_one(payload):
         sinasp_q=q["sinasp"].to_numpy() if "sinasp" in q.columns else None,
         cosasp=don["cosasp"].to_numpy() if "cosasp" in don.columns else None,
         cosasp_q=q["cosasp"].to_numpy() if "cosasp" in q.columns else None,
+        tmean=tmean, tmean_q=tmean_q,
+        region=region, region_q=region_q,
     )
     part = q[["station_name", "time", "split", var]].copy()
     part["observed"] = part[var]
@@ -111,11 +119,12 @@ def _score_one(payload):
 
 def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, progress: str | None = None,
               pack=None, jobs: int = 1):
-    """Protocol-aware. Final scores: held-out x test. Tuning: pool x requested splits."""
+    """Protocol-aware. Final scores: held-out x test. Tuning: pool x requested splits, station-folded."""
     panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
     score_ok = {"tune" if s == "dev" else s for s in score_splits}
     # Only the final test uses the held-out stations. Tune scores the pool.
-    if score_splits == {"all"} or "test" in score_ok:
+    heldout_score = score_splits == {"all"} or "test" in score_ok
+    if heldout_score:
         score_df = panel[(panel["is_heldout"]) & (panel["split"].isin(score_ok))]
     else:
         score_df = panel[(~panel["is_heldout"]) & (panel["split"].isin(score_ok))]
@@ -123,12 +132,28 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, pr
         print(f"  {var} no score rows for {sorted(score_ok)}", flush=True)
         return pd.DataFrame(columns=["station_name", "time", "split", "observed", "predicted"])
 
-    groups = list(score_df.groupby("time", sort=False))
-    print(f"  {var} scoring {len(groups)} timestamps, {len(score_df)} rows, "
+    # Build (timestamp, targets, donors) groups
+    groups = []
+    if heldout_score:
+        for ts, q in score_df.groupby("time", sort=False):
+            don = panel[(~panel["is_heldout"]) & (panel["time"] == ts)]
+            groups.append((ts, q, don))
+    else:
+        # Station folds so pool targets are not also donors
+        names = score_df["station_name"].unique()
+        folds = station_folds(names, max(int(n_folds), 2), seed=gcfg.seed)
+        for fold in folds:
+            fset = set(fold)
+            targets = score_df[score_df["station_name"].isin(fset)]
+            for ts, q in targets.groupby("time", sort=False):
+                don = panel[(~panel["is_heldout"]) & (panel["time"] == ts)
+                            & (~panel["station_name"].isin(fset))]
+                groups.append((ts, q, don))
+
+    print(f"  {var} scoring {len(groups)} groups, {len(score_df)} target rows, "
           f"form={gcfg.formula} ns={gcfg.n_splines} jobs={jobs}", flush=True)
     payloads = []
-    for i, (ts, q) in enumerate(groups, start=1):
-        don = panel[(~panel["is_heldout"]) & (panel["time"] == ts)]
+    for i, (ts, q, don) in enumerate(groups, start=1):
         if don["station_name"].nunique() < gcfg.min_stations:
             print(f"    [{i}/{len(groups)}] {ts} skipped, too few donors", flush=True)
             continue
