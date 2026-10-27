@@ -51,6 +51,7 @@ class FreiConfig:
     rh_t_mode: str = "none"          # none | predicted | observed
     snow_terrain: bool = True
     wind_elev_bg: bool = True
+    enabled_covariates: tuple = ()   # column names from config covariates block
 
 
 def two_step_var(var: str) -> bool:
@@ -324,7 +325,8 @@ class FreiInterpolator:
         return self._field(x[ok], y[ok], z[ok], t_obs[ok], xq, yq, zq, bg="profile")
 
     def predict_timestamp(self, x, y, elev, values, xq, yq, zq, use_profile: bool = True,
-                          var: str = "temp_mean", t_obs=None, t_obs_q=None):
+                          var: str = "temp_mean", t_obs=None, t_obs_q=None,
+                          extra_s=None, extra_q=None):
         x = np.asarray(x, float)
         y = np.asarray(y, float)
         z = np.asarray(elev, float)
@@ -334,41 +336,42 @@ class FreiInterpolator:
         zq = np.asarray(zq, float)
         v = var.lower()
 
+        # Enabled core covariates force a linear background for every variable.
+        use_linear = bool(self.cfg.enabled_covariates) and extra_s
+        if use_linear:
+            bg = "linear"
+        elif v.startswith("wind"):
+            bg = "linear" if self.cfg.wind_elev_bg else "mean"
+        elif use_profile and uses_profile(var):
+            bg = "profile"
+        else:
+            bg = "mean"
+
         if self.cfg.two_step and two_step_var(var):
-            hat, info = self._two_step(x, y, z, t, xq, yq, zq, var)
+            hat, info = self._two_step(x, y, z, t, xq, yq, zq, var,
+                                       extra_s=extra_s, extra_q=extra_q)
             return clip_var(var, hat), info
 
         if v.startswith("rh"):
             hat, info = self._predict_rh(x, y, z, t, xq, yq, zq, t_obs, t_obs_q)
             return clip_var(var, hat), info
 
-        if v.startswith("wind"):
-            bg = "linear" if self.cfg.wind_elev_bg else "mean"
-            hat, info = self._field(x, y, z, t, xq, yq, zq, bg=bg)
-            return clip_var(var, hat), info
-
-        bg = "profile" if (use_profile and uses_profile(var)) else "mean"
-        hat, info = self._field(x, y, z, t, xq, yq, zq, bg=bg)
+        hat, info = self._field(x, y, z, t, xq, yq, zq, bg=bg,
+                                extra_s=extra_s, extra_q=extra_q)
         return clip_var(var, hat), info
 
-    def _two_step(self, x, y, z, t, xq, yq, zq, var):
+    def _two_step(self, x, y, z, t, xq, yq, zq, var, extra_s=None, extra_q=None):
         wet = (t > self.cfg.trace).astype(float)
         p, info = self._field(x, y, z, wet, xq, yq, zq, bg="mean")
         p = np.clip(p, 0.0, 1.0)
         wet_m = t > self.cfg.trace
-        extra_s = extra_q = None
-        bg = "mean"
-        if var.lower().startswith("snow") and self.cfg.snow_terrain and wet_m.sum() >= 5:
-            sl_s, no_s = self._terrain(x[wet_m], y[wet_m])
-            sl_q, no_q = self._terrain(xq, yq)
-            extra_s = [sl_s, no_s]
-            extra_q = [sl_q, no_q]
-            bg = "linear"
+        bg = "linear" if extra_s else "mean"
         if wet_m.sum() >= 5:
             amt_in = np.log1p(np.maximum(t[wet_m], 0.0))
+            es = [c[wet_m] for c in extra_s] if extra_s else None
             amt, info2 = self._field(
                 x[wet_m], y[wet_m], z[wet_m], amt_in, xq, yq, zq,
-                bg=bg, extra_s=extra_s, extra_q=extra_q,
+                bg=bg, extra_s=es, extra_q=extra_q,
             )
             amt = np.maximum(np.expm1(amt), 0.0)
             info = {**info, "amount_across_w": info2.get("across_w"), "amount_bg": bg}

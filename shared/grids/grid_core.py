@@ -103,7 +103,7 @@ def create_grid_from_dem(
             src_crs=src.crs,
             dst_transform=dst_transform,
             dst_crs=projected_crs,
-            resampling=Resampling.bilinear,
+            resampling=Resampling.average,
             dst_nodata=nodata
         )
 
@@ -225,15 +225,36 @@ def add_landcover_to_grid(
             ) from err_gdal
 
     out = ds.copy()
-    out[varname] = (("y", "x"), clc)
-    out[varname].attrs.update({
-        "long_name": "CORINE land cover class",
+    # Store the same level-2 codes the terrain cache uses, so training
+    # features and map covariates match. Raw 3-digit kept under clc_raw.
+    from shared.clc import to_level2
+    raw_clc = np.nan_to_num(clc, nan=0).astype(np.int32)
+    level2 = to_level2(raw_clc).reshape(raw_clc.shape).astype(np.int16)
+    out["clc_raw"] = (("y", "x"), raw_clc.astype(np.int16))
+    out["clc_raw"].attrs.update({
+        "long_name": "CORINE land cover class (raw 3-digit)",
         "source": str(landcover_path),
         "resampling": "nearest",
         "backend": backend,
     })
-    print(f"  added '{varname}' to grid via {backend}  "
-          f"({height} x {width}, unique={int(np.unique(clc).size)})")
+    out["clc_level2"] = (("y", "x"), level2)
+    out["clc_level2"].attrs.update({
+        "long_name": "CORINE land cover level-2 (15 classes)",
+        "source": str(landcover_path),
+        "resampling": "nearest",
+        "backend": backend,
+        "classes": "11,12,13,14,21,22,23,24,31,32,33,41,42,51,52",
+    })
+    # 'clc' is level-2 so existing readers that pick 'clc' get matching codes.
+    out["clc"] = (("y", "x"), level2.astype(np.float32))
+    out["clc"].attrs.update({
+        "long_name": "CORINE land cover level-2 (same as clc_level2)",
+        "source": str(landcover_path),
+        "resampling": "nearest",
+        "backend": backend,
+    })
+    print(f"  added clc_level2 (+clc) to grid via {backend}  "
+          f"({height} x {width}, unique_l2={int(np.unique(level2).size)})")
     return out
 
 
@@ -249,7 +270,10 @@ def add_landcover_to_stations(stations: pd.DataFrame, landcover_path: Path) -> p
     with rasterio.open(landcover_path) as src:
         coords = list(zip(stations["x"], stations["y"]))
         values = list(src.sample(coords))
-        stations["clc_code"] = [val[0] if val[0] is not None else -9999 for val in values]
+        raw_codes = [int(val[0]) if val[0] is not None else -9999 for val in values]
+    stations["clc_code"] = raw_codes
+    from shared.clc import to_level2
+    stations["clc_level2"] = to_level2(raw_codes).astype(np.int16)
 
-    print("  Landcover sampling done.")
+    print("  Landcover sampling done (clc_code raw, clc_level2).")
     return stations

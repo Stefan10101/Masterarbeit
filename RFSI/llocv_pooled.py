@@ -92,13 +92,15 @@ def load_panel(cfg, var):
     df = df[(df["time"] >= start) & (df["time"] <= end)]
 
     stations = pd.read_parquet(get_domain_stations_path("RFSI", "full"))
+    from shared.terrain import attach_enabled_terrain
+    stations = attach_enabled_terrain(stations, cfg)
     if "elev" not in stations.columns:
         if "elev_dem" in stations.columns:
             stations = stations.rename(columns={"elev_dem": "elev"})
         elif "hoehe" in stations.columns:
             stations = stations.rename(columns={"hoehe": "elev"})
     keep = ["station_name", "x", "y"]
-    for extra in ("elev", "clc_code"):
+    for extra in ("elev", "clc_code", "clc_level2", "slope", "northness", "tpi"):
         if extra in stations.columns:
             keep.append(extra)
     stations = stations[keep].drop_duplicates("station_name")
@@ -108,6 +110,8 @@ def load_panel(cfg, var):
     valid = valid.dropna(subset=["x", "y", var])
     if "elev" in valid.columns:
         valid = valid.dropna(subset=["elev"])
+    if "clc_level2" in valid.columns:
+        valid["clc_code"] = valid["clc_level2"].fillna(0).astype(np.int32)
     valid["split"] = label_times(valid["time"]).to_numpy()
     return valid
 

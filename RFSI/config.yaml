@@ -24,7 +24,7 @@ rfsi:
   architecture: pooled
   n_obs: 10
   save_model: true
-  variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
+  variables_to_process: ["temp_mean", "precip_sum"]
 
   # 4 parameters, so the search is coordinate descent, not a full product.
   n_obs_list: [4, 8, 16, 32, 64]
@@ -98,3 +98,15 @@ min_stations_per_field: 10
 random_seed: 31
 verbose: true
 n_jobs: -1
+# Shared core covariates (toggle per method).
+# Station train/LLOCV uses finest; maps use cell-mean from Source/terrain/grid_<res>m.nc.
+covariates:
+  elev: true
+  smooth_elev: true
+  slope: true
+  northness: true
+  tpi: true
+  clc: true
+  dist_to_coast: true
+  signed_dist_to_ridge: true
+

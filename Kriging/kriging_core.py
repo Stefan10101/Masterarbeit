@@ -45,7 +45,8 @@ class KrigingConfig:
     snow_terrain: bool = True
     wind_watershed: bool = True
     across_w: float = 4.0
-    per_timestamp_vgm: bool = True          # fit γ from current donors; fallback to stored
+    per_timestamp_vgm: bool = True
+    enabled_covariates: tuple = ()   # column names from config covariates block
 
 
 # ---------------------------------------------------------------------------
@@ -344,12 +345,19 @@ class KrigingInterpolator:
     extra_stats: dict = field(default_factory=dict)
 
     def extra_keys(self) -> list[str]:
+        # config keys -> cache column names
+        colmap = {
+            "elev": "elev", "smooth_elev": "smooth_elev", "slope": "slope",
+            "northness": "northness", "tpi": "tpi", "clc": "clc_level2",
+            "dist_to_coast": "dist_to_coast", "signed_dist_to_ridge": "signed_dist_to_ridge",
+        }
+        keys = [colmap.get(k, k) for k in (self.cfg.enabled_covariates or [])]
+        # elev is already in the main trend; do not double-count
+        keys = [k for k in keys if k != "elev"]
         v = self.var_name.lower()
-        keys = []
-        if v.startswith("snow") and self.cfg.snow_terrain:
-            keys.extend(["slope", "northness"])
         if v.startswith("rh") and self.cfg.rh_t_mode in ("predicted", "observed"):
-            keys.append("temp_mean")
+            if "temp_mean" not in keys:
+                keys.append("temp_mean")
         return keys
 
     def _extras(self, df: pd.DataFrame, fit: bool = False) -> list:

@@ -132,3 +132,16 @@ targets:
     raw_col: "snow_height"
     stats: ["mean"]
     output_names: ["snow_mean"]
+
+# Shared core covariates (toggle per method).
+# Station train/LLOCV uses finest; maps use cell-mean from Source/terrain/grid_<res>m.nc.
+covariates:
+  elev: true
+  smooth_elev: true
+  slope: true
+  northness: true
+  tpi: true
+  clc: true
+  dist_to_coast: true
+  signed_dist_to_ridge: true
+

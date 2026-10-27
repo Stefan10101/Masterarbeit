@@ -221,12 +221,52 @@ def build_station_features(stations_method: str = "RFSI") -> pd.DataFrame:
     return out
 
 
+def _majority_clc(grid: xr.Dataset, resolution: int) -> np.ndarray:
+    """Majority CLC level-2 class inside each grid cell (GDAL mode)."""
+    from shared.clc import to_level2
+    clc_path = get_landcover_path()
+    ny, nx = int(grid.y.size), int(grid.x.size)
+    out = np.zeros((ny, nx), dtype=np.int16)
+    if not clc_path.exists():
+        return out
+    try:
+        import rasterio
+        from rasterio.warp import reproject, Resampling
+        x = grid.x.values
+        y = grid.y.values
+        dx = float(np.median(np.diff(x))) if nx > 1 else float(resolution)
+        dy = float(np.median(np.diff(y))) if ny > 1 else float(resolution)
+        transform = rasterio.transform.from_origin(
+            float(x[0]) - abs(dx) / 2.0,
+            float(y[0]) + abs(dy) / 2.0,
+            abs(dx), abs(dy),
+        )
+        with rasterio.open(clc_path) as src:
+            dest = np.zeros((ny, nx), dtype=np.float32)
+            reproject(
+                source=rasterio.band(src, 1),
+                destination=dest,
+                src_transform=src.transform,
+                src_crs=src.crs,
+                dst_transform=transform,
+                dst_crs="EPSG:31287",
+                resampling=Resampling.mode,
+                dst_nodata=0,
+            )
+        flat = dest.ravel().astype(np.int32)
+        out = to_level2(flat).reshape(ny, nx).astype(np.int16)
+    except Exception as exc:
+        print(f"majority CLC failed ({exc}); leaving zeros", flush=True)
+    return out
+
+
 def build_grid_features(resolution: int = 1000, grid_method: str = "RFSI") -> xr.Dataset:
     """Build terrain features on the master grid.
 
-    elev comes from the master grid. smooth_elev, tpi, slope and aspect are
-    derived from that elev field (no per-cell DEM windowing). Coast and ridge
-    distances are computed on a subsample and interpolated to every cell.
+    elev comes from the master grid (area mean of the source DEM).
+    smooth_elev, tpi, slope and aspect are derived from that mean elev field.
+    CLC is the majority level-2 class inside each cell.
+    Coast and ridge distances are computed on a subsample and interpolated.
     Output coordinates match the master grid exactly.
     """
     from scipy.ndimage import uniform_filter
@@ -306,22 +346,8 @@ def build_grid_features(resolution: int = 1000, grid_method: str = "RFSI") -> xr
     coast_full = gaussian_filter(np.nan_to_num(coast_full), sigma=3)
     ridge_full = gaussian_filter(np.nan_to_num(ridge_full), sigma=3)
 
-    # CLC on the same subsample
-    clc2 = np.zeros((ny, nx), dtype=np.int16)
-    clc_path = get_landcover_path()
-    if clc_path.exists():
-        import rasterio
-        from rasterio.windows import Window
-        with rasterio.open(clc_path) as src:
-            for iy in ys_idx:
-                for ix in xs_idx:
-                    try:
-                        row, col = src.index(float(grid.x.values[ix]), float(grid.y.values[iy]))
-                        if 0 <= row < src.height and 0 <= col < src.width:
-                            val = src.read(1, window=Window(col, row, 1, 1))[0, 0]
-                            clc2[iy, ix] = clc_to_level2(int(val))
-                    except Exception:
-                        pass
+    # CLC: majority class inside each cell
+    clc2 = _majority_clc(grid, resolution)
 
     ds = xr.Dataset(
         {

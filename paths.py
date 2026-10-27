@@ -86,6 +86,14 @@ def get_grid_terrain_path(resolution: int = 1000) -> Path:
     return get_terrain_dir() / f"grid_{resolution}m.nc"
 
 
+def get_watershed_base_path(resolution: int = 1000) -> Path:
+    """Shared DEM-derived watershed base (D8, TPI, summit, cold-pool, valley unit).
+
+    n_regions merge is still done at runtime; the expensive base fields are cached once.
+    """
+    return get_terrain_dir() / f"watershed_base_{resolution}m.npz"
+
+
 # ============================================================
 # METHOD OUTPUT STRUCTURE
 # ============================================================

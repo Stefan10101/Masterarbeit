@@ -66,13 +66,16 @@ def load_panel(cfg: dict, var: str) -> pd.DataFrame:
     df = df[(df["time"] >= start) & (df["time"] <= end)]
 
     stations = pd.read_parquet(get_domain_stations_path(sta_method, "full"))
+    from shared.terrain import attach_enabled_terrain
+    stations = attach_enabled_terrain(stations, cfg)
     if "elev" not in stations.columns:
         if "elev_dem" in stations.columns:
             stations = stations.rename(columns={"elev_dem": "elev"})
         elif "hoehe" in stations.columns:
             stations = stations.rename(columns={"hoehe": "elev"})
     keep = ["station_name", "x", "y"]
-    for extra in ("elev",):
+    for extra in ("elev", "smooth_elev", "slope", "northness", "sinasp", "cosasp",
+                  "tpi", "clc_level2", "dist_to_coast", "signed_dist_to_ridge"):
         if extra in stations.columns:
             keep.append(extra)
     stations = stations[keep].drop_duplicates("station_name")

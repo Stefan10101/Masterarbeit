@@ -224,8 +224,11 @@ def pack_from_master(cfg, n_regions: int = 6):
         import xarray as xr
     except ImportError:
         return None
-    from paths import get_master_grid_path
-    from shared.watersheds import WatershedConfig, build_pack
+    from paths import get_master_grid_path, get_watershed_base_path
+    from shared.watersheds import (
+        WatershedConfig, d8_flow, flow_accum, label_basins,
+        merge_basins, tpi, flags_from_tpi, valley_unit, region_distance,
+    )
 
     _, _, grid_method = data_sources(cfg)
     res = int(cfg.get("resolutions_to_process", [1000])[0])
@@ -243,7 +246,48 @@ def pack_from_master(cfg, n_regions: int = 6):
         coldpool_tpi=float(k.get("coldpool_tpi", -60.0)),
     )
     dem = g["elev"].values.astype(np.float64)
-    pack = build_pack(dem, g["x"].values, g["y"].values, wcfg)
+    cache = get_watershed_base_path(res)
+    if cache.exists():
+        z = np.load(cache)
+        raw = z["raw"]
+        tpi_map = z["tpi"]
+        summit = z["summit"]
+        cold = z["coldpool"]
+        uy = z["uy"]
+        ux = z["ux"]
+        xs = z["xs"]
+        ys = z["ys"]
+        dx = float(z["dx"])
+    else:
+        xs = g["x"].values.astype(np.float64)
+        ys = g["y"].values.astype(np.float64)
+        dx = abs(float(xs[1] - xs[0])) if len(xs) > 1 else 1000.0
+        direc = d8_flow(dem)
+        acc = flow_accum(direc)
+        raw = label_basins(direc, acc, wcfg.accum_pct, wcfg.min_basin_cells)
+        radius = max(int(wcfg.tpi_radius_m / max(dx, 1.0)), 1)
+        tpi_map = tpi(dem, radius)
+        summit, cold = flags_from_tpi(tpi_map, wcfg.summit_tpi, wcfg.coldpool_tpi)
+        uy, ux = valley_unit(direc)
+        np.savez_compressed(
+            cache, raw=raw, tpi=tpi_map, summit=summit, coldpool=cold,
+            uy=uy, ux=ux, xs=xs, ys=ys, dx=np.array(dx),
+        )
+    regions = merge_basins(raw, dem, xs, ys, int(n_regions))
+    pack = {
+        "regions": regions,
+        "region_dist": region_distance(regions),
+        "tpi": tpi_map,
+        "summit": summit,
+        "coldpool": cold,
+        "uy": uy,
+        "ux": ux,
+        "xs": np.asarray(xs, dtype=np.float64),
+        "ys": np.asarray(ys, dtype=np.float64),
+        "dx": float(dx),
+        "n_regions": int(max(int(regions.max()), 1)),
+        "cfg": wcfg,
+    }
     return ensure_pack_terrain(pack, dem=dem)
 
 
@@ -280,13 +324,15 @@ def load_panel(cfg, var: str) -> pd.DataFrame:
     df = df[(df["time"] >= start) & (df["time"] <= end)]
 
     stations = pd.read_parquet(get_domain_stations_path(sta_method, "full"))
+    from shared.terrain import attach_enabled_terrain
+    stations = attach_enabled_terrain(stations, cfg)
     if "elev" not in stations.columns:
         if "elev_dem" in stations.columns:
             stations = stations.rename(columns={"elev_dem": "elev"})
         elif "hoehe" in stations.columns:
             stations = stations.rename(columns={"hoehe": "elev"})
     keep = ["station_name", "x", "y"]
-    for extra in ("elev", "clc_code"):
+    for extra in ("elev", "clc_code", "clc_level2", "slope", "northness"):
         if extra in stations.columns:
             keep.append(extra)
     stations = stations[keep].drop_duplicates("station_name")
@@ -298,10 +344,13 @@ def load_panel(cfg, var: str) -> pd.DataFrame:
         valid = valid.dropna(subset=["elev"])
     else:
         valid["elev"] = 0.0
-    if "clc_code" not in valid.columns:
-        valid["clc_code"] = 0
-    valid["clc_code"] = valid["clc_code"].fillna(0).astype(np.int32)
-    valid["clc_group"] = clc_group(valid["clc_code"].to_numpy())
+    if "clc_level2" in valid.columns:
+        valid["clc_group"] = valid["clc_level2"].fillna(0).astype(np.int32)
+    else:
+        if "clc_code" not in valid.columns:
+            valid["clc_code"] = 0
+        valid["clc_code"] = valid["clc_code"].fillna(0).astype(np.int32)
+        valid["clc_group"] = clc_group(valid["clc_code"].to_numpy())
     valid["split"] = _label_times(valid["time"]).to_numpy()
     valid["cluster_id"] = attach_regimes(cfg, valid["time"].to_numpy(), var)
     return valid

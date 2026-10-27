@@ -48,6 +48,23 @@ def station_folds(names, n_folds, seed):
     return folds
 
 
+def _covar_arrays(df, keys):
+    """Extract enabled covariate columns (config key -> cache column)."""
+    colmap = {
+        "elev": "elev", "smooth_elev": "smooth_elev", "slope": "slope",
+        "northness": "northness", "tpi": "tpi", "clc": "clc_level2",
+        "dist_to_coast": "dist_to_coast", "signed_dist_to_ridge": "signed_dist_to_ridge",
+    }
+    out = []
+    for k in keys or []:
+        col = colmap.get(k, k)
+        if col == "elev":
+            continue  # already the main elev term
+        if col in df.columns:
+            out.append(df[col].to_numpy(dtype=float))
+    return out or None
+
+
 def cfg_to_frei(cfg, overrides=None) -> FreiConfig:
     f = dict(cfg.get("frei", {}))
     o = overrides or {}
@@ -73,6 +90,9 @@ def cfg_to_frei(cfg, overrides=None) -> FreiConfig:
         rh_t_mode=str(o.get("rh_t_mode", f.get("rh_t_mode", "none"))),
         snow_terrain=bool(f.get("snow_terrain", True)),
         wind_elev_bg=bool(f.get("wind_elev_bg", True)),
+        enabled_covariates=tuple(
+            c for c, on in (cfg.get("covariates") or {}).items() if on
+        ),
     )
 
 
@@ -85,10 +105,8 @@ def load_tuned(var, time_res):
 
 
 def _base_cache_path(res: int) -> Path:
-    from paths import get_method_output_dir
-    d = get_method_output_dir("FREI") / "watershed"
-    d.mkdir(parents=True, exist_ok=True)
-    return d / f"base_{res}m.npz"
+    from paths import get_watershed_base_path
+    return get_watershed_base_path(res)
 
 
 def pack_from_master(cfg, n_regions: int = 6):
@@ -209,6 +227,8 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
             don[var].to_numpy(),
             q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
             var=var,
+            extra_s=_covar_arrays(don, fcfg.enabled_covariates),
+            extra_q=_covar_arrays(q, fcfg.enabled_covariates),
         )
         if hat is None:
             return None

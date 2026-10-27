@@ -90,12 +90,14 @@ def load_panel(cfg: dict, var: str) -> pd.DataFrame:
     df = df[(df["time"] >= start) & (df["time"] <= end)]
 
     stations = pd.read_parquet(get_domain_stations_path("CNN", cfg.get("domain", {}).get("preset", "full")))
+    from shared.terrain import attach_enabled_terrain
+    stations = attach_enabled_terrain(stations, cfg)
     if "elev" not in stations.columns:
         if "elev_dem" in stations.columns:
             stations = stations.rename(columns={"elev_dem": "elev"})
         elif "hoehe" in stations.columns:
             stations = stations.rename(columns={"hoehe": "elev"})
-    stations = stations[["station_name", "x", "y", "elev"]].drop_duplicates("station_name")
+    stations = stations[["station_name", "x", "y"] + [c for c in stations.columns if c not in ("station_name", "x", "y")]].drop_duplicates("station_name")
     panel = (
         df[["station_name", "time", var]].dropna(subset=[var])
         .merge(stations, on="station_name", how="inner")

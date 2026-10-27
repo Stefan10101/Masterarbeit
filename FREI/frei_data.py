@@ -98,6 +98,8 @@ def load_panel(cfg: dict, var: str) -> pd.DataFrame:
     df = df[(df["time"] >= start) & (df["time"] <= end)]
 
     stations = pd.read_parquet(get_domain_stations_path("FREI", cfg.get("domain", {}).get("preset", "full")))
+    from shared.terrain import attach_enabled_terrain
+    stations = attach_enabled_terrain(stations, cfg)
     if "elev" not in stations.columns:
         if "elev_dem" in stations.columns:
             stations = stations.rename(columns={"elev_dem": "elev"})

@@ -77,6 +77,9 @@ def cfg_to_kriging(cfg, overrides: dict | None = None) -> KrigingConfig:
         wind_watershed=bool(k.get("wind_watershed", True)),
         across_w=float(k.get("across_w", 4.0)),
         per_timestamp_vgm=bool(k.get("per_timestamp_vgm", True)),
+        enabled_covariates=tuple(
+            c for c, on in (cfg.get("covariates") or {}).items() if on
+        ),
     )
 
 

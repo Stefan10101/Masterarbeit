@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Slope / aspect helpers for GAM and CNN."""
+"""Slope / aspect helpers and shared terrain-cache attachment."""
 
 from __future__ import annotations
 
@@ -50,3 +50,75 @@ def attach_terrain_to_panel(panel: pd.DataFrame, stations: pd.DataFrame) -> pd.D
             fill = 1.0 if c == "cosasp" else 0.0
             out[c] = out[c].fillna(fill)
     return out
+
+
+CORE_COVARIATES = (
+    "elev",
+    "smooth_elev",
+    "slope",
+    "northness",
+    "tpi",
+    "clc",
+    "dist_to_coast",
+    "signed_dist_to_ridge",
+)
+
+# Map config key -> column name(s) in the cache
+_COVARIATE_COLS = {
+    "elev": ["elev"],
+    "smooth_elev": ["smooth_elev"],
+    "slope": ["slope"],
+    "northness": ["northness", "sinasp", "cosasp"],
+    "tpi": ["tpi"],
+    "clc": ["clc_level2"],
+    "dist_to_coast": ["dist_to_coast"],
+    "signed_dist_to_ridge": ["signed_dist_to_ridge"],
+}
+
+
+def enabled_covariates(cfg: dict) -> list[str]:
+    """Return cache column names enabled by the method's covariates block.
+
+    Missing block or missing key defaults to True (full core set).
+    """
+    block = cfg.get("covariates") or {}
+    cols: list[str] = []
+    for key in CORE_COVARIATES:
+        if block.get(key, True):
+            cols.extend(_COVARIATE_COLS[key])
+    return cols
+
+
+def attach_enabled_terrain(stations: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Merge only the covariates enabled in cfg from the shared station cache."""
+    return attach_shared_terrain(stations, enabled_covariates(cfg))
+
+
+def attach_shared_terrain(
+    stations: pd.DataFrame,
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
+    """Merge preferred static features from Source/terrain/station_features.parquet.
+
+    Cache values overwrite any existing columns of the same name.
+    Falls back silently if the cache is missing or a column is absent.
+    """
+    from paths import get_station_terrain_path
+
+    path = get_station_terrain_path()
+    if not path.exists():
+        return stations
+    cache = pd.read_parquet(path)
+    if "station_name" not in cache.columns:
+        return stations
+    want = columns or [
+        "elev", "smooth_elev", "tpi", "slope", "aspect",
+        "sinasp", "cosasp", "northness",
+        "dist_to_coast", "signed_dist_to_ridge", "clc_level2",
+    ]
+    keep = [c for c in want if c in cache.columns]
+    if not keep:
+        return stations
+    cache = cache[["station_name"] + keep].drop_duplicates("station_name")
+    out = stations.drop(columns=[c for c in keep if c in stations.columns], errors="ignore")
+    return out.merge(cache, on="station_name", how="left")

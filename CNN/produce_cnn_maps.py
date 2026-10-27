@@ -61,11 +61,23 @@ def main():
         gy = grid["y"].values.astype(np.float64)
         elev = grid["elev"].values.astype(np.float64) if "elev" in grid else np.zeros((gy.size, gx.size))
         clc = np.zeros_like(elev)
-        for name in ("clc_code", "clc", "landcover"):
+        for name in ("clc_level2", "clc", "clc_code", "landcover"):
             if name in grid:
                 clc = clc_group(np.nan_to_num(grid[name].values, nan=0).astype(np.int32)).astype(np.float64)
                 break
-        slope, sinasp, cosasp = grid_terrain(elev, gx, gy)
+        # Prefer shared cell-mean terrain; fall back to on-the-fly only if cache missing.
+        from paths import get_grid_terrain_path
+        tpath = get_grid_terrain_path(res)
+        if tpath.exists():
+            tg = xr.open_dataset(tpath)
+            slope = tg["slope"].values.astype(np.float32) if "slope" in tg else np.zeros_like(elev, dtype=np.float32)
+            sinasp = tg["sinasp"].values.astype(np.float32) if "sinasp" in tg else np.zeros_like(elev, dtype=np.float32)
+            cosasp = tg["cosasp"].values.astype(np.float32) if "cosasp" in tg else np.ones_like(elev, dtype=np.float32)
+            if "clc_level2" in tg:
+                clc = tg["clc_level2"].values.astype(np.float64)
+            tg.close()
+        else:
+            slope, sinasp, cosasp = grid_terrain(elev, gx, gy)
         ny, nx = elev.shape
 
         for var in variables:

@@ -61,6 +61,8 @@ def load_stations(domain: str = "full") -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Stations file not found: {path}")
     stations = pd.read_parquet(path)
+    from shared.terrain import attach_shared_terrain
+    stations = attach_shared_terrain(stations, ["elev"])
     if "elev" not in stations.columns:
         if "elev_dem" in stations.columns:
             stations = stations.rename(columns={"elev_dem": "elev"})

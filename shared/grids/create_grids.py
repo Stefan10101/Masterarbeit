@@ -62,14 +62,39 @@ def filter_stations(stations, bbox):
     return stations.loc[m].copy()
 
 
+def _write_table(stations, path):
+    """Write stations without requiring a working pyarrow DLL.
+
+    Windows often has pyarrow installed but the DLL fails to load
+    ('Die angegebene Prozedur wurde nicht gefunden'). Try pyarrow,
+    then fastparquet, then CSV so grid creation can continue.
+    """
+    errors = []
+    for engine in ("pyarrow", "fastparquet"):
+        try:
+            stations.to_parquet(path, index=False, engine=engine)
+            print(f"  parquet via {engine}", flush=True)
+            return path
+        except Exception as exc:
+            errors.append(f"{engine}: {exc}")
+    csv_path = path.with_suffix(".csv")
+    stations.to_csv(csv_path, index=False)
+    print(
+        "  WARNING: parquet write failed (" + "; ".join(errors) + "). "
+        f"Wrote {csv_path} and continuing.",
+        flush=True,
+    )
+    return csv_path
+
+
 def write_stations(stations, domain):
     path = get_domain_stations_path(None, domain)
     ensure_dir(path.parent)
-    stations.to_parquet(path, index=False)
+    written = _write_table(stations, path)
     tree = build_kdtree(stations)
     joblib.dump(tree, path.parent / "station_kdtree.joblib")
-    print(f"stations {domain} n={len(stations)} -> {path}", flush=True)
-    return path
+    print(f"stations {domain} n={len(stations)} -> {written}", flush=True)
+    return written
 
 
 def main():
