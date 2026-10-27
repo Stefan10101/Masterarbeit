@@ -156,6 +156,7 @@ def load_medoid_times(cfg, var, cluster_method: str):
 def _tune_targets(panel, seed=22, frac=0.2):
     """Seeded subset of pool stations used as the tune score targets."""
     pool = panel.loc[~panel["is_heldout"], "station_name"].drop_duplicates().to_numpy()
+    pool = np.array(pool, copy=True)  # shuffle requires a writable array
     rng = np.random.default_rng(seed)
     rng.shuffle(pool)
     n = max(1, int(round(len(pool) * frac)))
@@ -388,6 +389,7 @@ def parse_args():
     p.add_argument("--cluster-method", default="gmm")
     p.add_argument("--n-splits", type=int, default=5)
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
     p.add_argument("--max-times", type=int, default=400,
                    help="cap timestamps, sampled within each split")
     add_hours_arg(p)

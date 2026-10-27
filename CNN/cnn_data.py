@@ -135,13 +135,28 @@ def attach_station_tpi(panel: pd.DataFrame) -> pd.DataFrame:
     out = panel.merge(keep, on="station_name", how="left")
     out["tpi"] = out["tpi"].fillna(0.0)
     return out
+
+
+def subset_times(panel: pd.DataFrame, spec) -> pd.DataFrame:
+    """all | seasonal4 | YYYY-MM,YYYY-MM | list of those."""
     if spec is None or spec == "" or spec == "all":
         return panel
+    if isinstance(spec, (list, tuple)):
+        keys = {str(s).strip() for s in spec}
+        if keys == {"seasonal4"}:
+            spec = "seasonal4"
+        else:
+            stamp = pd.to_datetime(panel["time"]).dt.strftime("%Y-%m")
+            return panel.loc[stamp.isin(keys)].copy()
+    spec = str(spec).strip().lower()
+    if spec in ("all", "none"):
+        return panel
     times = pd.to_datetime(panel["time"])
-    if str(spec).strip().lower() == "seasonal4":
+    if spec == "seasonal4":
         return panel.loc[times.dt.month.isin(SEASONAL4_MONTHS)].copy()
-    keys = {s.strip() for s in str(spec).split(",") if s.strip()}
-    return panel.loc[times.dt.strftime("%Y-%m").isin(keys)].copy()
+    keys = {s.strip() for s in spec.split(",") if s.strip()}
+    stamp = times.dt.strftime("%Y-%m")
+    return panel.loc[stamp.isin(keys)].copy()
 
 
 def compute_metrics(obs, pred) -> dict:

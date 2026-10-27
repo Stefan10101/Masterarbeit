@@ -130,14 +130,28 @@ def _idw_baseline(var, time_res):
 
 
 
-def _idw_cache_path(var, time_res, ts, p, fz, k):
+def _station_fingerprint(names) -> str:
+    """Order-sensitive. A different row order must not reuse a cached pts array."""
+    import hashlib
+    s = "|".join(map(str, names))
+    return hashlib.md5(s.encode()).hexdigest()[:10]
+
+
+def _idw_cache_path(var, time_res, ts, p, fz, k, target_names, exclude_self: bool):
+    """Cache key includes the target station set and exclude_self.
+
+    pts is per-target, so a previous run with a different station count
+    (or a different hold-out) must not be reused. Old _pool.npz files are ignored.
+    """
     from paths import get_method_output_dir
     key = pd.Timestamp(ts)
     if key.tzinfo is not None:
         key = key.tz_convert("UTC").tz_localize(None)
     d = get_method_output_dir("CNN") / "idw_cache" / (time_res or "monthly") / var
     d.mkdir(parents=True, exist_ok=True)
-    return d / f"{key:%Y%m%dT%H%M}_p{p}_fz{fz}_k{k}_pool.npz"
+    flag = "ex" if exclude_self else "in"
+    fp = _station_fingerprint(target_names)
+    return d / f"{key:%Y%m%dT%H%M}_p{p}_fz{fz}_k{k}_{flag}_{fp}.npz"
 
 
 def _load_idw(path):
@@ -173,13 +187,22 @@ def build_frames(panel, var, gx, gy, elev, clc, ccfg: CNNConfig, split, subdaily
         if getattr(dtimes.dt, "tz", None) is not None:
             dtimes = dtimes.dt.tz_convert("UTC").dt.tz_localize(None)
         don = donor_src.loc[dtimes == tkey]
+        # Score frames must not IDW from the targets themselves.
+        if donors is not None:
+            don = don[~don["station_name"].isin(part["station_name"])]
         if don.empty or len(don) < 4 or not ccfg.residual_idw:
             return "skip"
-        cache = _idw_cache_path(var, time_res, tkey, ccfg.idw_p, ccfg.idw_fz, ccfg.idw_k)
-        if cache.exists():
-            return "cached"
-        dx_, dy_, dz_, dv = don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(), don[var].to_numpy()
         same = donors is None
+        cache = _idw_cache_path(var, time_res, tkey, ccfg.idw_p, ccfg.idw_fz, ccfg.idw_k,
+                                part["station_name"].to_numpy(), same)
+        if cache.exists():
+            try:
+                base, pts = _load_idw(cache)
+                if len(pts) == len(part):
+                    return "cached"
+            except Exception:
+                pass
+        dx_, dy_, dz_, dv = don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(), don[var].to_numpy()
         base = idw_fz_raster(dx_, dy_, dz_, dv, gx, gy, elev, p=ccfg.idw_p, Fz=ccfg.idw_fz, k=ccfg.idw_k, exclude_self=same)
         pts = idw_fz_points(dx_, dy_, dz_, dv, part["x"].to_numpy(), part["y"].to_numpy(), part["elev"].to_numpy(),
                             p=ccfg.idw_p, Fz=ccfg.idw_fz, k=ccfg.idw_k, exclude_self=same)
@@ -225,9 +248,10 @@ def build_frames(panel, var, gx, gy, elev, clc, ccfg: CNNConfig, split, subdaily
         sx, sy, sz = part["x"].to_numpy(), part["y"].to_numpy(), part["elev"].to_numpy()
         # exclude_self only when the targets are among the donors (train path)
         same = donors is None
-        cache = _idw_cache_path(var, time_res, tkey, ccfg.idw_p, ccfg.idw_fz, ccfg.idw_k)
+        cache = _idw_cache_path(var, time_res, tkey, ccfg.idw_p, ccfg.idw_fz, ccfg.idw_k,
+                                part["station_name"].to_numpy(), same)
         hit = _load_idw(cache) if ccfg.residual_idw else None
-        if hit is not None:
+        if hit is not None and len(hit[1]) == len(rows):
             base, pts = hit
             base = base.copy()
             base[rows, cols] = pts
@@ -670,6 +694,17 @@ def main():
     for var in variables:
         panel = load_panel(cfg, var)
         panel = prepare_for_tuning(panel)
+        # Station hold-out on the tune (now 'dev') timestamps so donors exist.
+        # Without this every pool station is a target and build_frames drops the frame.
+        if "dev" in panel["split"].values:
+            rng = np.random.default_rng(int(cfg.get("cnn", {}).get("seed", 22)))
+            pool_names = panel.loc[panel["split"] == "dev", "station_name"].drop_duplicates().to_numpy()
+            pool_names = np.array(pool_names, copy=True)
+            rng.shuffle(pool_names)
+            n_tgt = max(1, int(round(len(pool_names) * 0.2)))
+            targets = set(pool_names[:n_tgt])
+            is_dev = panel["split"] == "dev"
+            panel.loc[is_dev & ~panel["station_name"].isin(targets), "split"] = "pool"
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))
         model, dev = train_one(

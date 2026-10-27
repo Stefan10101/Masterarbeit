@@ -89,6 +89,8 @@ def main():
     p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4) - 1))
     p.add_argument("--months", default=None)
     p.add_argument("--folds", type=int, default=None)
+    p.add_argument("--quick", action="store_true",
+                   help="2 folds + seasonal4")
     p.add_argument("--max-times", type=int, default=400,
                    help="cap timestamps, sampled within each split")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])

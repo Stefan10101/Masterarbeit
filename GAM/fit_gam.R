@@ -54,9 +54,14 @@ rhs <- switch(formula_id,
   stop("unknown formula_id: ", formula_id)
 )
 for (col in c("slope", "sinasp", "cosasp", "tmean")) {
-  if (has(col) && nuniq(df[[col]]) >= 6L) {
-    rhs <- paste(rhs, sprintf("+ s(%s, k=%d)", col, k_ok(df[[col]], max(4L, n_splines %/% 2L))))
+  if (!has(col) || nuniq(df[[col]]) < 6L) next
+  # tmean is the RH covariate. If it is (near-)identical to the response,
+  # it is the target itself and must not enter the formula.
+  if (col == "tmean" && "y" %in% names(df)) {
+    ok <- is.finite(df$y) & is.finite(df[[col]])
+    if (sum(ok) > 10L && abs(cor(df$y[ok], df[[col]][ok])) > 0.999) next
   }
+  rhs <- paste(rhs, sprintf("+ s(%s, k=%d)", col, k_ok(df[[col]], max(4L, n_splines %/% 2L))))
 }
 if (has("clc")) {
   df$clc <- factor(df$clc)

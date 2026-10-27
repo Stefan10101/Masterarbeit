@@ -76,6 +76,7 @@ def main():
         tagged, _, _, _ = apply_evaluation_protocol(panel)
         train = tagged[(~tagged["is_heldout"]) & (tagged["split"] == "train")].copy()
         pool = tagged.loc[~tagged["is_heldout"], "station_name"].drop_duplicates().to_numpy()
+        pool = np.array(pool, copy=True)  # shuffle requires a writable array
         rng = np.random.default_rng(int(block.get("seed", 22)))
         rng.shuffle(pool)
         targets = set(pool[:max(1, int(round(len(pool) * 0.2)))])

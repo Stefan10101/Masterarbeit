@@ -135,6 +135,8 @@ def main():
     p.add_argument("--mode", choices=["coord", "grid"], default=None)
     p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
     p.add_argument("--folds", type=int, default=None)
+    p.add_argument("--quick", action="store_true",
+                   help="2 folds + seasonal4 + coord descent")
     p.add_argument("--max-times", type=int, default=400,
                    help="cap timestamps, sampled within each split")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])

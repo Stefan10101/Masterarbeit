@@ -152,6 +152,8 @@ def main():
         cfg["smacnp"]["early_stopping_patience"] = min(
             int(cfg["smacnp"].get("early_stopping_patience", 50)), 4
         )
+        # Lower LR to avoid the NLL divergence seen on weekly temp.
+        cfg["smacnp"]["lr"] = min(float(cfg["smacnp"].get("lr", 4e-4)), 1e-4)
     var = args.variable
     two_step = var in cfg["smacnp"].get("two_step_vars", [])
     set_seed(cfg["smacnp"]["seed"])

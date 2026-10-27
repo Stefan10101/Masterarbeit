@@ -89,11 +89,35 @@ def _score_one(payload):
     """One timestamp (or fold-slice). Own R process, so it is safe to run several at once."""
     i, n, ts, don, q, var, gcfg = payload
     model = GAMInterpolator(gcfg)
-    # Optional covariates present on the panel
-    tmean = don["temp_mean"].to_numpy() if "temp_mean" in don.columns else None
-    tmean_q = q["temp_mean"].to_numpy() if "temp_mean" in q.columns else None
+    # model._force_numpy = True  # disabled while diagnosing mgcv
+    # tmean is an RH covariate only. For temp_mean the column is the response.
+    use_t = str(var).lower().startswith("rh")
+    tmean = don["temp_mean"].to_numpy() if use_t and "temp_mean" in don.columns else None
+    tmean_q = q["temp_mean"].to_numpy() if use_t and "temp_mean" in q.columns else None
     region = don["region"].to_numpy() if "region" in don.columns else None
     region_q = q["region"].to_numpy() if "region" in q.columns else None
+    # Hard exclusion: station names as plain strings so the set match cannot fail
+    # on categorical / object dtype differences.
+    q_names = set(q["station_name"].astype(str))
+    don = don[~don["station_name"].astype(str).isin(q_names)].copy()
+    if set(don["station_name"].astype(str)) & q_names:
+        print(f"    LEAK at {ts}: {len(set(don['station_name'].astype(str)) & q_names)} "
+              f"targets still in donors", flush=True)
+    # Exact covariate match: if any target (x, y, elev) equals a donor, the
+    # GAM is evaluating at a training location.
+    don_key = set(zip(
+        np.round(don["x"].to_numpy(), 3),
+        np.round(don["y"].to_numpy(), 3),
+        np.round(don["elev"].to_numpy(), 1),
+    ))
+    q_key = list(zip(
+        np.round(q["x"].to_numpy(), 3),
+        np.round(q["y"].to_numpy(), 3),
+        np.round(q["elev"].to_numpy(), 1),
+    ))
+    n_exact = sum(1 for k in q_key if k in don_key)
+    if n_exact:
+        print(f"    EXACT covariate match at {ts}: {n_exact}/{len(q_key)}", flush=True)
     hat = model.predict_timestamp(
         don["x"].to_numpy(), don["y"].to_numpy(), don["elev"].to_numpy(),
         don[var].to_numpy(),
@@ -112,8 +136,19 @@ def _score_one(payload):
         region=region, region_q=region_q,
     )
     part = q[["station_name", "time", "split", var]].copy()
-    part["observed"] = part[var]
+    part["observed"] = part[var].to_numpy()
+    hat = np.asarray(hat, dtype=np.float64).reshape(-1)
+    if hat.size != len(part):
+        raise RuntimeError(f"pred length {hat.size} != targets {len(part)}")
     part["predicted"] = hat
+    # Debug: surface identity predictions immediately
+    resid = np.abs(part["predicted"].to_numpy() - part["observed"].to_numpy())
+    if np.nanmax(resid) < 1e-6:
+        print(f"    WARNING identity pred at {ts}: max|resid|={np.nanmax(resid):.2e} "
+              f"donors={len(don)} targets={len(q)} backend={getattr(model, '_backend', '?')}",
+              flush=True)
+        print(f"      first3 obs={part['observed'].to_numpy()[:3]} "
+              f"pred={part['predicted'].to_numpy()[:3]}", flush=True)
     return i, str(ts), len(don), len(q), part.drop(columns=[var])
 
 
@@ -136,7 +171,8 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, pr
     groups = []
     if heldout_score:
         for ts, q in score_df.groupby("time", sort=False):
-            don = panel[(~panel["is_heldout"]) & (panel["time"] == ts)]
+            don = panel[(~panel["is_heldout"]) & (panel["time"] == ts)
+                        & (~panel["station_name"].isin(set(q["station_name"])))]
             groups.append((ts, q, don))
     else:
         # Station folds so pool targets are not also donors

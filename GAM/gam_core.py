@@ -189,7 +189,7 @@ class GAMInterpolator:
         try:
             subprocess.run(
                 [self.cfg.rscript, str(pred_script), str(self._r_model), str(q), str(o)],
-                check=True, capture_output=True, text=True,
+                check=True, capture_output=False, text=True,
                 timeout=float(self.cfg.r_timeout),
             )
             return pd.read_parquet(o)["predicted"].to_numpy(dtype=np.float64)

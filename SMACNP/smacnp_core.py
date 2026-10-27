@@ -275,10 +275,12 @@ class MeanDecoder(nn.Module):
 class VarianceDecoder(nn.Module):
     def __init__(self, v_dim: int, spatial_dim: int, attr_dim: int, hidden_size: int, out_dim: int, dropout: float, num_layers: int = 1):
         super().__init__()
-        self.mlp = _create_mlp(v_dim + spatial_dim + attr_dim, out_dim, hidden_size, num_layers, dropout, final_activation=nn.Softplus())
+        # Predict log-variance; exp is more stable than raw softplus under NLL.
+        self.mlp = _create_mlp(v_dim + spatial_dim + attr_dim, out_dim, hidden_size, num_layers, dropout)
 
     def forward(self, v: torch.Tensor, s: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        return self.mlp(torch.cat([v, s, x], dim=-1))
+        log_var = self.mlp(torch.cat([v, s, x], dim=-1))
+        return torch.exp(log_var.clamp(-8.0, 8.0))
 
 
 class SMACNP(nn.Module):

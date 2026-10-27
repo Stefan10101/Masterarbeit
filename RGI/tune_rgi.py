@@ -198,6 +198,7 @@ def parse_args():
     p.add_argument("--variables", nargs="*", default=None)
     p.add_argument("--phase", choices=["1", "2", "3", "all"], default="all")
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--folds", type=int, default=None)
     p.add_argument("--months", default=None)
     p.add_argument("--max-times", type=int, default=400,
                    help="cap timestamps for a proof run")
