@@ -608,7 +608,11 @@ class KrigingInterpolator:
             if self.log_amount:
                 amount = np.expm1(amount)
         amount = np.maximum(amount, 0.0)
-        out = np.where(p_wet >= float(self.cfg.tau_wet), amount, 0.0)
+        tau = float(self.cfg.tau_wet)
+        # Snow: if the indicator is effectively constant-dry, use the amount field.
+        if str(var).lower().startswith("snow") and float((p_wet >= tau).mean()) < 0.05:
+            return amount
+        out = np.where(p_wet >= tau, amount, 0.0)
         return out
 
     def state_dict(self) -> dict:

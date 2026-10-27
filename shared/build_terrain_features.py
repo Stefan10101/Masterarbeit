@@ -172,7 +172,7 @@ def build_station_features(stations_method: str = "RFSI") -> pd.DataFrame:
     n = len(stations)
 
     smooth = np.full(n, np.nan)
-    elev = stations["elev"].to_numpy(dtype=np.float64) if "elev" in stations.columns else np.full(n, np.nan)
+    elev = stations["elev"].to_numpy(dtype=np.float64, copy=True) if "elev" in stations.columns else np.full(n, np.nan)
     slope = np.full(n, np.nan)
     aspect = np.full(n, np.nan)
     clc2 = np.zeros(n, dtype=np.int16)

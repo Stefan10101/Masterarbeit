@@ -200,7 +200,7 @@ class GAMInterpolator:
             print(f"  mgcv predict failed: {type(exc).__name__} {err}", flush=True)
             return None
 
-    def _fit_numpy(self, x, y, elev, values, clc, slope, sinasp, cosasp):
+    def _fit_numpy(self, x, y, elev, values, clc, slope, sinasp, cosasp, family: str = "gaussian"):
         n_s, k = self.cfg.n_splines, self.cfg.spline_order
         self._knots = {
             "x": _knots(x, n_s, k), "y": _knots(y, n_s, k), "z": _knots(elev, n_s, k),
@@ -216,17 +216,43 @@ class GAMInterpolator:
             self._knots["sa"] = _knots(sa, max(n_s // 2, 4), k)
             self._knots["ca"] = _knots(ca, max(n_s // 2, 4), k)
         X, widths = self._design(x, y, elev, clc, slope, sinasp, cosasp, fit=True)
-        p = np.zeros((X.shape[1], X.shape[1]))
+        pen = np.zeros((X.shape[1], X.shape[1]))
         col = 1
         for w in widths[1:]:
             if w >= 3:
-                p[col:col + w, col:col + w] = _penalty(w)
+                pen[col:col + w, col:col + w] = _penalty(w)
             col += w
-        XtX = X.T @ X + float(self.cfg.lam) * p + 1e-8 * np.eye(X.shape[1])
-        try:
-            self._coef = np.linalg.solve(XtX, X.T @ values)
-        except np.linalg.LinAlgError:
-            self._coef = np.linalg.lstsq(XtX, X.T @ values, rcond=None)[0]
+        lam = float(self.cfg.lam)
+        if family == "binomial":
+            # IRLS logistic with ridge + spline penalty. Keeps probabilities
+            # from collapsing to the global mean on sparse snow/precip.
+            yb = np.clip(np.asarray(values, dtype=np.float64), 0.0, 1.0)
+            n = yb.size
+            # start at the logit of the mean
+            mu0 = float(np.clip(yb.mean(), 1e-3, 1 - 1e-3))
+            eta = np.full(n, np.log(mu0 / (1 - mu0)))
+            coef = np.zeros(X.shape[1])
+            for _ in range(12):
+                mu = 1.0 / (1.0 + np.exp(-np.clip(eta, -20, 20)))
+                w = mu * (1.0 - mu)
+                w = np.maximum(w, 1e-6)
+                z = eta + (yb - mu) / w
+                WX = X * w[:, None]
+                XtWX = X.T @ WX + lam * pen + 1e-6 * np.eye(X.shape[1])
+                try:
+                    coef = np.linalg.solve(XtWX, X.T @ (w * z))
+                except np.linalg.LinAlgError:
+                    coef = np.linalg.lstsq(XtWX, X.T @ (w * z), rcond=None)[0]
+                eta = X @ coef
+            self._coef = coef
+            self._family = "binomial"
+        else:
+            XtX = X.T @ X + lam * pen + 1e-8 * np.eye(X.shape[1])
+            try:
+                self._coef = np.linalg.solve(XtX, X.T @ values)
+            except np.linalg.LinAlgError:
+                self._coef = np.linalg.lstsq(XtX, X.T @ values, rcond=None)[0]
+            self._family = "gaussian"
         self._backend = "numpy"
 
     def _design(self, x, y, elev, clc, slope, sinasp, cosasp, fit: bool):
@@ -287,8 +313,9 @@ class GAMInterpolator:
         df = self._frame(x, y, elev, values, clc, slope, sinasp, cosasp, tmean=tmean)
         if self._fit_r(df, family):
             self._backend = "mgcv"
+            self._family = family
             return self
-        self._fit_numpy(*self._fit_args)
+        self._fit_numpy(*self._fit_args, family=family)
         return self
 
     def predict_raw(self, x, y, elev, clc=None, slope=None, sinasp=None, cosasp=None,
@@ -319,6 +346,8 @@ class GAMInterpolator:
                 fit=False,
             )
             out[sl] = X @ self._coef
+        if getattr(self, "_family", "gaussian") == "binomial":
+            out = 1.0 / (1.0 + np.exp(-np.clip(out, -20, 20)))
         return out
 
     def predict_timestamp(
@@ -407,6 +436,15 @@ class GAMInterpolator:
                 amt = np.maximum(np.expm1(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q, tmean=tmean_q)), 0.0)
             else:
                 amt = np.zeros(np.asarray(xq).size)
-            return np.where(p >= self.cfg.tau_wet, amt, 0.0)
+            gate = p >= self.cfg.tau_wet
+            # Robust fallback: if the occurrence model never clears tau but
+            # wet donors exist, open the gate on the highest-p fraction that
+            # matches the donor wet rate. Prevents constant-zero fields.
+            if not gate.any() and wet_m.sum() >= 5 and p.size > 0:
+                wet_frac = float(wet_m.mean())
+                k = max(1, int(np.ceil(wet_frac * p.size)))
+                thr = np.partition(p, -k)[-k]
+                gate = p >= thr
+            return np.where(gate, amt, 0.0)
         self.fit_gaussian(x, y, elev, values, clc, slope, sinasp, cosasp, family="gaussian", tmean=tmean)
         return self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q, tmean=tmean_q)

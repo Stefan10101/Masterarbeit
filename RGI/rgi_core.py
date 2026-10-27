@@ -219,9 +219,21 @@ class RGI:
         var: str,
         val_df=None,
         log=print,
+        force_log_amount: bool | None = None,
     ) -> dict:
-        self.log_amount = bool(two_step_var(var))
+        # Amount models for precip/snow train in log1p. The indicator instance
+        # must stay on the raw 0/1 scale; otherwise expm1 maps it to ~1 and the
+        # gate never closes.
+        if force_log_amount is not None:
+            self.log_amount = bool(force_log_amount)
+        else:
+            self.log_amount = bool(two_step_var(var))
         raw_df = train_df
+        # Clip bound for the amount inverse. 1.5x wet p99 stops the unbounded
+        # head from emitting values far above anything seen in training.
+        raw_vals = np.asarray(train_df[var], dtype=np.float64)
+        wet_vals = raw_vals[raw_vals > 0.1]
+        self._amt_clip = float(np.quantile(wet_vals, 0.99) * 1.5) if len(wet_vals) else 1e3
         if self.log_amount:
             train_df = train_df.copy()
             train_df[var] = np.log1p(np.maximum(train_df[var].to_numpy(dtype=np.float64), 0.0))
@@ -244,6 +256,8 @@ class RGI:
                 if log:
                     log(f"  two_step on: wet={wet:.3f}")
         self.cfg.two_step = use_two
+        # Keep full frames so the donor distribution at predict time matches
+        # training. Loss is masked to wet queries inside epoch_loss when two-step.
         self.scaler = FeatureScaler()
         self.scaler.extra_keys = tuple(self.cfg.extra_cols)
         self.scaler.fit(train_df, var)
@@ -292,6 +306,14 @@ class RGI:
                         batch["edge_index"], batch["edge_attr"], extra=batch["extra"],
                     )
                     q_t = torch.from_numpy(q.astype(np.int64)).to(self.device)
+                    # When two-step, amount loss only on wet queries (raw > trace).
+                    if use_two and self.log_amount:
+                        raw_q = np.asarray(g[var].to_numpy()[q], dtype=np.float64)
+                        # g[var] is already log1p; recover approximate wet
+                        wet_q = raw_q > np.log1p(self.cfg.trace)
+                        if wet_q.sum() == 0:
+                            continue
+                        q_t = q_t[torch.from_numpy(wet_q).to(self.device)]
                     loss = F.mse_loss(pred[q_t], y[q_t])
                 if train_mode:
                     opt.zero_grad(set_to_none=True)
@@ -334,7 +356,8 @@ class RGI:
             if val_df is not None and len(val_df):
                 val_ind = val_df.copy()
                 val_ind[var] = (np.asarray(val_df[var], dtype=np.float64) > self.cfg.trace).astype(np.float32)
-            self.ind.fit(ind_df, var, val_df=val_ind, log=None)
+            # Indicator stays on the 0/1 scale — never log1p.
+            self.ind.fit(ind_df, var, val_df=val_ind, log=None, force_log_amount=False)
         return {"best_val_mse": best_val, "epochs": history[-1]["epoch"] if history else 0}
 
     @torch.no_grad()
@@ -353,10 +376,23 @@ class RGI:
         yhat = self.scaler.inverse_value(yhat)
         if self.log_amount:
             yhat = np.expm1(yhat)
+            cap = float(getattr(self, "_amt_clip", 1e3))
+            yhat = np.clip(yhat, 0.0, cap)
         yhat = clip_var(var or self.cfg.var_name, yhat)
         if self.ind is not None:
-            p_wet = np.clip(self.ind.predict_frame(obs_df, query_df, var), 0.0, 1.0)
-            yhat = np.where(p_wet >= self.cfg.tau_wet, np.maximum(yhat, 0.0), 0.0)
+            p_wet = np.asarray(self.ind.predict_frame(obs_df, query_df, var), dtype=np.float64)
+            # Indicator head is unbounded; absolute values are poorly calibrated.
+            # Rank-gate to the donor wet fraction so the scale of p does not matter.
+            raw_obs = np.asarray(obs_df[var], dtype=np.float64)
+            wet_frac = float(np.mean(raw_obs > self.cfg.trace)) if raw_obs.size else 0.0
+            if wet_frac <= 0.0 or p_wet.size == 0:
+                gate = np.zeros(p_wet.size, dtype=bool)
+            else:
+                k = max(1, int(np.round(wet_frac * p_wet.size)))
+                k = min(k, p_wet.size)
+                thr = np.partition(p_wet, -k)[-k]
+                gate = p_wet >= thr
+            yhat = np.where(gate, np.maximum(yhat, 0.0), 0.0)
         return yhat
 
     def predict_stations_at_time(self, df_t, var: str, hold_names) -> np.ndarray:
