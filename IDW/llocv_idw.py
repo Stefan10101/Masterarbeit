@@ -11,11 +11,14 @@ Writes the predictions parquet and prints RMSE/MAE/NSE/KGE overall and by quarte
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 import pandas as pd
+from joblib import Parallel, delayed
 from sklearn.neighbors import KDTree
+from tqdm import tqdm
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODE_DIR = SCRIPT_DIR.parent
@@ -68,6 +71,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variables", nargs="+", default=None)
     p.add_argument("--months", default=None)
+    p.add_argument("--jobs", type=int, default=None,
+                   help="parallel test timestamps (default: half the logical cores)")
     add_time_res_arg(p)
     args = p.parse_args()
 
@@ -92,17 +97,23 @@ def main():
 
         params = load_global_params(time_res, var)
         times = sorted(tagged.loc[tagged["quarter"].isin(test_quarters), "time"].unique())
-        print(f"\n----- {var}  {len(times)} test timestamps -----")
+        n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
+        print(f"\n----- {var}  {len(times)} test timestamps  jobs={n_jobs} -----")
+        trace = TRACE.get(var, {}).get(time_res, 1.0)
 
-        parts = []
-        for t in times:
+        def one(t):
             field = tagged[tagged["time"] == t]
             donors = field[~field["station_name"].isin(held_set)]
             targets = field[field["station_name"].isin(held_set)]
-            scored = score_field(donors, targets, params, var=var,
-                                 trace=TRACE.get(var, {}).get(time_res, 1.0))
-            if len(scored):
-                parts.append(scored)
+            return score_field(donors, targets, params, var=var, trace=trace)
+
+        if n_jobs == 1:
+            parts = [one(t) for t in tqdm(times, desc=f"  {var}")]
+        else:
+            parts = Parallel(n_jobs=n_jobs, backend="threading")(
+                delayed(one)(t) for t in tqdm(times, desc=f"  {var}")
+            )
+        parts = [p for p in parts if len(p)]
 
         if not parts:
             print(f"  [WARN] no scored rows for {var}")

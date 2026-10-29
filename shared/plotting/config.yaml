@@ -1,11 +1,10 @@
 plotting:
-  mode: "config"
-  input_nc_folder: ""
-  method: "SMACNP"
+  method: "RFSI"          # change per method: FREI, Kriging, GAM, RFSI, CNN, RGI, SMACNP, IDW
   domain: "full"
+  time_resolution: "weekly"
   resolutions: [1000]
-  time_period: ""
-  variables: null
+  time_period: "20200101-20251231"
+  variables: [temp_mean, precip_sum]
   output_root: null
   dpi: 250
   scatter_dpi: 300
@@ -27,7 +26,7 @@ maps:
   show_topo: true
   show_extra_info: true
   dpi: 250
-  n_jobs: 1
+  n_jobs: -1
 
   time_filter:
     step: 1

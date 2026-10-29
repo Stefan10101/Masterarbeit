@@ -58,7 +58,7 @@ def run_one(var: str):
     two_step = log_amount
     out_ch = 2 if two_step else 1
     cfg = CNNConfig(n_levels=3, base_ch=8, use_terrain=False, cyclic_time=False, device="cpu", two_step=two_step)
-    model = CNNInterpolator(cfg, in_ch=19, out_ch=out_ch)
+    model = CNNInterpolator(cfg, in_ch=20, out_ch=out_ch)
     torch.nn.init.normal_(model.net.out.weight, std=0.01)
     raw = panel["value"].to_numpy(dtype=np.float64)
     if log_amount:

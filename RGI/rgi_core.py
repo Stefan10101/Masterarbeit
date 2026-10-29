@@ -229,32 +229,23 @@ class RGI:
         else:
             self.log_amount = bool(two_step_var(var))
         raw_df = train_df
-        # Clip bound for the amount inverse. 1.5x wet p99 stops the unbounded
-        # head from emitting values far above anything seen in training.
+        # Clip bound for the amount inverse. 1.0x wet p99 stops a runaway head
+        # from sitting at the cap when the gate is open everywhere.
         raw_vals = np.asarray(train_df[var], dtype=np.float64)
         wet_vals = raw_vals[raw_vals > 0.1]
-        self._amt_clip = float(np.quantile(wet_vals, 0.99) * 1.5) if len(wet_vals) else 1e3
+        self._amt_clip = float(np.quantile(wet_vals, 0.99)) if len(wet_vals) else 1e3
         if self.log_amount:
             train_df = train_df.copy()
             train_df[var] = np.log1p(np.maximum(train_df[var].to_numpy(dtype=np.float64), 0.0))
             if val_df is not None and len(val_df):
                 val_df = val_df.copy()
                 val_df[var] = np.log1p(np.maximum(val_df[var].to_numpy(dtype=np.float64), 0.0))
-        # Wet-fraction gate for the indicator (profile: on if wet in (0.2, 0.8); snow always)
+        # Occurrence gate stays on for precip/snow. Weekly precip is ~95% wet;
+        # turning the indicator off leaves an unbounded amount head.
         use_two = bool(self.cfg.two_step and two_step_var(var))
-        if use_two:
-            raw_vals = np.asarray(raw_df[var], dtype=np.float64)
+        if use_two and log:
             wet = float(np.mean(raw_vals > self.cfg.trace)) if len(raw_vals) else 0.0
-            if str(var).lower().startswith("snow"):
-                # snow always keeps the indicator
-                pass
-            elif wet >= 0.80 or wet <= 0.20:
-                use_two = False
-                if log:
-                    log(f"  two_step off: wet={wet:.3f} (indicator is constant)")
-            else:
-                if log:
-                    log(f"  two_step on: wet={wet:.3f}")
+            log(f"  two_step on: wet={wet:.3f}")
         self.cfg.two_step = use_two
         # Keep full frames so the donor distribution at predict time matches
         # training. Loss is masked to wet queries inside epoch_loss when two-step.
@@ -365,6 +356,12 @@ class RGI:
         """obs_df sends, query_df receives. Same columns including dummy var on queries."""
         obs = obs_df.reset_index(drop=True)
         qry = query_df.reset_index(drop=True)
+        # Scaler was fit on log1p(amount). Donors must enter in the same space.
+        if self.log_amount:
+            obs = obs.copy()
+            qry = qry.copy()
+            obs[var] = np.log1p(np.maximum(obs[var].to_numpy(dtype=np.float64), 0.0))
+            qry[var] = np.log1p(np.maximum(qry[var].to_numpy(dtype=np.float64), 0.0))
         frame = pd.concat([obs, qry], ignore_index=True)
         q_idx = np.arange(len(obs), len(frame))
         batch, _y = self._tensors_for_frame(frame, q_idx, var)
@@ -373,11 +370,13 @@ class RGI:
             batch["edge_index"], batch["edge_attr"], extra=batch["extra"],
         )
         yhat = pred[len(obs):].detach().cpu().numpy()
+        # Clamp the raw z-score. A runaway head otherwise overflows expm1.
+        yhat = np.clip(yhat, -6.0, 6.0)
         yhat = self.scaler.inverse_value(yhat)
         if self.log_amount:
-            yhat = np.expm1(yhat)
             cap = float(getattr(self, "_amt_clip", 1e3))
-            yhat = np.clip(yhat, 0.0, cap)
+            yhat = np.clip(yhat, 0.0, np.log1p(cap))
+            yhat = np.expm1(yhat)
         yhat = clip_var(var or self.cfg.var_name, yhat)
         if self.ind is not None:
             p_wet = np.asarray(self.ind.predict_frame(obs_df, query_df, var), dtype=np.float64)

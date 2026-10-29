@@ -33,6 +33,7 @@ cnn:
   base_ch: 32
   residual_idw: true
   idw_k: 8
+  gate_d0_km: 35
   use_terrain: true
   cyclic_time: true
   two_step: true

@@ -10,6 +10,7 @@ Station parquet from this script is a frozen-model check, not nested LLOCV.
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import sys
 import gc
 from datetime import datetime
@@ -17,6 +18,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import yaml
+from joblib import Parallel, delayed
+from tqdm import tqdm
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODE_DIR = SCRIPT_DIR.parent
@@ -69,6 +72,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variables", nargs="*", default=None)
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--jobs", type=int, default=None,
+                   help="parallel timestamps (default: half the logical cores)")
     p.add_argument("--months", default=None)
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -166,14 +171,12 @@ def main():
                 continue
 
             times = sorted(panel["time"].unique())
-            data_3d = np.full((len(times), ny, nx), np.nan, dtype=np.float32)
-            kept = []
-            station_rmse = []
-            from tqdm import tqdm
-            for t in tqdm(times, desc=f"  {var} {res}m"):
+            n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
+
+            def one(t):
                 df_t = panel[panel["time"] == t]
                 if len(df_t) < min_stations:
-                    continue
+                    return None
                 pred_flat = np.full(flat_x.size, np.nan, dtype=np.float32)
                 idx = np.flatnonzero(valid_cell)
                 for s in range(0, len(idx), tile):
@@ -186,17 +189,34 @@ def main():
                         var: np.zeros(len(sl), dtype=np.float32),
                     })
                     pred_flat[sl] = model.predict_frame(df_t, qry, var)
-                i = len(kept)
-                data_3d[i] = pred_flat.reshape(ny, nx)
-                kept.append(t)
-                preds_st = []
-                for name in df_t["station_name"].tolist():
-                    y1 = model.predict_stations_at_time(df_t, var, [name])
-                    preds_st.append(float(y1[0]) if len(y1) else np.nan)
-                preds_st = np.asarray(preds_st, dtype=np.float32)
-                met = compute_metrics(df_t[var].to_numpy(), preds_st)
-                station_rmse.append(met["rmse"])
-                if save_llocv:
+                return t, pred_flat.reshape(ny, nx)
+
+            if n_jobs == 1:
+                results = [one(t) for t in tqdm(times, desc=f"  {var} {res}m")]
+            else:
+                results = Parallel(n_jobs=n_jobs, backend="threading")(
+                    delayed(one)(t) for t in tqdm(times, desc=f"  {var} {res}m")
+                )
+            results = [r for r in results if r is not None]
+            if not results:
+                print(f"  {var}: no fields")
+                grid.close()
+                continue
+            kept, stacks = zip(*results)
+            data_3d = np.stack(stacks).astype(np.float32)
+            # station check only when we actually save it
+            station_rmse = [np.nan] * len(kept)
+            if save_llocv:
+                station_rmse = []
+                for t in kept:
+                    df_t = panel[panel["time"] == t]
+                    preds_st = []
+                    for name in df_t["station_name"].tolist():
+                        y1 = model.predict_stations_at_time(df_t, var, [name])
+                        preds_st.append(float(y1[0]) if len(y1) else np.nan)
+                    preds_st = np.asarray(preds_st, dtype=np.float32)
+                    met = compute_metrics(df_t[var].to_numpy(), preds_st)
+                    station_rmse.append(met["rmse"])
                     for name, obs, pr in zip(df_t["station_name"], df_t[var], preds_st):
                         llocv_records.append({
                             "time": t, "station_name": name, "variable": var,
@@ -205,7 +225,7 @@ def main():
                         })
 
             n_kept = len(kept)
-            data_3d = data_3d[:n_kept]
+            # data_3d already stacked to n_kept
             time_coord = pd.DatetimeIndex(pd.to_datetime(kept, utc=True)).tz_convert(
                 "UTC"
             ).tz_localize(None).to_numpy(dtype="datetime64[ns]")

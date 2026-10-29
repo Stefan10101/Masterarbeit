@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import os
 import sys
 import gc
 from datetime import datetime
@@ -19,6 +20,8 @@ import numpy as np
 import pandas as pd
 import yaml
 import joblib
+from joblib import Parallel, delayed
+from tqdm import tqdm
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODE_DIR = SCRIPT_DIR.parent
@@ -78,6 +81,8 @@ def parse_args():
     p.add_argument("--months", default=None)
     p.add_argument("--split", default=None)
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--jobs", type=int, default=None,
+                   help="parallel timestamps (default: half the logical cores)")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     p.add_argument("--skip-station-check", action="store_true")
     add_hours_arg(p)
@@ -192,14 +197,12 @@ def main():
                 continue
 
             times = sorted(panel["time"].unique())
-            data_3d = np.full((len(times), ny, nx), np.nan, dtype=np.float32)
-            kept = []
-            station_rmse = []
-            from tqdm import tqdm
-            for t in tqdm(times, desc=f"  {var} {res}m"):
+            n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
+
+            def one(t):
                 df_t = panel[panel["time"] == t]
                 if len(df_t) < min_stations:
-                    continue
+                    return None
                 pred_flat = np.full(flat_x.size, np.nan, dtype=np.float32)
                 idx = np.flatnonzero(valid_cell)
                 tile = kcfg.predict_tile
@@ -217,12 +220,27 @@ def main():
                     if t_model is not None:
                         qry["temp_mean"] = t_model.predict_frame(df_t, qry, "temp_mean")
                     pred_flat[sl] = model.predict_frame(df_t, qry, var)
-                i = len(kept)
-                data_3d[i] = pred_flat.reshape(ny, nx)
-                kept.append(t)
-                if skip_station:
-                    station_rmse.append(np.nan)
-                else:
+                return t, pred_flat.reshape(ny, nx)
+
+            if n_jobs == 1:
+                results = [one(t) for t in tqdm(times, desc=f"  {var} {res}m")]
+            else:
+                results = Parallel(n_jobs=n_jobs, backend="threading")(
+                    delayed(one)(t) for t in tqdm(times, desc=f"  {var} {res}m")
+                )
+            results = [r for r in results if r is not None]
+            if not results:
+                print(f"  {var}: no fields")
+                grid.close()
+                continue
+            kept, stacks = zip(*results)
+            data_3d = np.stack(stacks).astype(np.float32)
+            # station check remains sequential (cheap relative to the grid)
+            station_rmse = [np.nan] * len(kept)
+            if not skip_station:
+                station_rmse = []
+                for t in kept:
+                    df_t = panel[panel["time"] == t]
                     preds_st = []
                     names = df_t["station_name"].tolist()
                     for name in names:
@@ -242,7 +260,7 @@ def main():
                             })
 
             n_kept = len(kept)
-            data_3d = data_3d[:n_kept]
+            # data_3d already stacked to n_kept; no slice needed
             time_coord = pd.DatetimeIndex(pd.to_datetime(kept, utc=True)).tz_convert(
                 "UTC"
             ).tz_localize(None).to_numpy(dtype="datetime64[ns]")

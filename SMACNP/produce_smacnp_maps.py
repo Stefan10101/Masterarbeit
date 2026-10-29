@@ -22,6 +22,7 @@ from smacnp_data import (
     load_config,
     load_panel,
     compute_dem_features,
+    attach_clc_onehot,
     PaperScaler,
     FeatureScaler,
 )
@@ -72,8 +73,10 @@ def grid_features(grid: xr.Dataset, feat_cols: list[str], cfg: dict) -> tuple[np
 
     Terrain cache may have a different shape. Features are reindexed onto
     the master grid coordinates (nearest) so the output matches the master grid.
+    CLC one-hot columns (clc_l2_*) are derived from the integer clc_level2 field.
     """
     from paths import get_grid_terrain_path
+    from shared.clc import one_hot_level2
 
     cache_path = get_grid_terrain_path(1000)
     if not cache_path.exists():
@@ -85,12 +88,21 @@ def grid_features(grid: xr.Dataset, feat_cols: list[str], cfg: dict) -> tuple[np
     ny, nx = int(grid.y.size), int(grid.x.size)
     xx, yy = np.meshgrid(grid.x.values, grid.y.values)
 
+    # Precompute CLC one-hot from the integer class field when requested
+    clc_oh = None
+    if any(c.startswith("clc_l2_") for c in feat_cols) and "clc_level2" in aligned:
+        codes = np.nan_to_num(aligned["clc_level2"].values, nan=0).astype(np.int32).ravel()
+        clc_oh = one_hot_level2(codes)  # (N, 16), column i = clc_l2_i
+
     cols = []
     for c in feat_cols:
         if c == "x":
             cols.append(xx.ravel())
         elif c == "y":
             cols.append(yy.ravel())
+        elif c.startswith("clc_l2_") and clc_oh is not None:
+            idx = int(c.rsplit("_", 1)[-1])
+            cols.append(clc_oh[:, idx] if 0 <= idx < clc_oh.shape[1] else np.zeros(ny * nx, dtype=np.float32))
         elif c in aligned and aligned[c].ndim == 2:
             cols.append(np.nan_to_num(aligned[c].values, nan=0.0).ravel())
         else:
@@ -155,6 +167,7 @@ def main():
             df[["station_name", "elev"]].drop_duplicates("station_name"), on="station_name", how="left"
         )
     stations = compute_dem_features(stations, cfg)
+    stations = attach_clc_onehot(stations)
     df = df.drop(columns=[c for c in feat_cols if c in df.columns and c not in ("x", "y")], errors="ignore")
     df = df.merge(
         stations[["station_name"] + [c for c in feat_cols if c not in ("x", "y")]],

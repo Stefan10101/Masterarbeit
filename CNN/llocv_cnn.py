@@ -90,6 +90,7 @@ def eval_parts(model, donors, queries, var, gx, gy, elev, clc, ccfg, slope, sina
         tr, tc = grid_index(donors["x"].to_numpy(), donors["y"].to_numpy(), gx, gy)
         tfield[tr, tc] = donors["temp_mean"].to_numpy(dtype=np.float32)
         extras = [tfield / 20.0]
+    donor_wet = float(np.mean(val_d > 0.1)) if len(val_d) else 0.0
     hat = model.predict_raster(
         inp, mask, elev, clc,
         slope=slope, sinasp=sinasp, cosasp=cosasp,
@@ -98,6 +99,7 @@ def eval_parts(model, donors, queries, var, gx, gy, elev, clc, ccfg, slope, sina
         base=base,
         extras=extras,
         var=var,
+        donor_wet=donor_wet,
     )
     pred = sample_at_points(hat, queries["x"].to_numpy(), queries["y"].to_numpy(), gx, gy)
     if qbase is not None:
@@ -205,17 +207,10 @@ def main():
                     part = part.rename(columns={var: "observed"})
                     rows.append(part)
         else:
-            # Protocol: one net on pool x train, score held-out x test.
-            train = panel[(~panel["is_heldout"]) & (panel["split"] == "train")].copy()
+            # Protocol: score the already-trained net on held-out x test.
             score_df = panel[(panel["is_heldout"]) & (panel["split"].isin(score if score != {"all"} else {"test"}))]
-            dev = score_df.copy()
-            dev["split"] = "dev"
-            fit_panel = pd.concat([train, dev], ignore_index=True)
-            print(f"{var} fit rows={len(train)} score rows={len(score_df)}", flush=True)
-            model, _ = train_one(
-                fit_panel, var, ccfg, elev, clc, gx, gy,
-                slope, sinasp, cosasp, time_res=time_res, trace=trace,
-            )
+            print(f"{var} score rows={len(score_df)}", flush=True)
+            model = load_frozen(ccfg, var, time_res)
             n_ts = score_df["time"].nunique()
             for i, (ts, qq) in enumerate(score_df.groupby("time"), start=1):
                 dd = panel[(~panel["is_heldout"]) & (panel["time"] == ts)]

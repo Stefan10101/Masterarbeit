@@ -14,12 +14,15 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import os
 import sys
 import time
 
 import numpy as np
 import pandas as pd
 import yaml
+from joblib import Parallel, delayed
+from tqdm import tqdm
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODE_DIR = SCRIPT_DIR.parent
@@ -102,7 +105,7 @@ def station_folds(names: list[str], n_folds: int, seed: int) -> list[list[str]]:
 
 
 def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations, trend_override,
-                 months=None, rh_t_mode=None, pack=None):
+                 months=None, rh_t_mode=None, pack=None, jobs: int = 1):
     panel = load_panel(cfg, var)
     # Shared protocol
     panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
@@ -156,18 +159,22 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
                 t_model.fit(train, "temp_mean", cfg["time_resolution"], cfg)
             except Exception:
                 t_model = None
-        for t, hold_t in hold.groupby("time", sort=False):
+        groups = list(hold.groupby("time", sort=False))
+
+        def one(item):
+            t, hold_t = item
             others = panel[(panel["time"] == t) & (~panel["station_name"].isin(hold_set))]
             if len(others) < kcfg.min_stations:
-                continue
+                return None
             ho_t = hold_t
             if t_model is not None:
                 t_hat = t_model.predict_frame(others, hold_t, "temp_mean")
                 ho_t = hold_t.copy()
                 ho_t["temp_mean"] = t_hat
             pred = model.predict_frame(others, ho_t, var)
+            rows = []
             for row, yhat in zip(hold_t.itertuples(index=False), pred):
-                records.append({
+                rows.append({
                     "time": row.time,
                     "split": row.split,
                     "station_name": row.station_name,
@@ -178,6 +185,17 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
                     "fold": fi,
                     "trend": kcfg.trend,
                 })
+            return rows
+
+        if jobs == 1:
+            parts = [one(g) for g in tqdm(groups, desc=f"  {var}", leave=False)]
+        else:
+            parts = Parallel(n_jobs=jobs, backend="threading")(
+                delayed(one)(g) for g in tqdm(groups, desc=f"  {var}", leave=False)
+            )
+        for rows in parts:
+            if rows:
+                records.extend(rows)
         print(f"  fold {fi}/{len(folds)}  hold={len(hold_set)}  rows={len(records)}")
 
     pred_df = pd.DataFrame(records)
@@ -202,6 +220,8 @@ def parse_args():
                    help="override config trend (none = OK control)")
     p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--jobs", type=int, default=None,
+                   help="parallel score timestamps (default: half the logical cores)")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -222,7 +242,8 @@ def main():
         n_folds = args.folds or 2
         months = months or "seasonal4"
     pack = pack_from_master(cfg, int(cfg.get("kriging", {}).get("n_regions", 6)))
-    print(f"  months={months or 'all'}  pack={'yes' if pack else 'no'}")
+    jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
+    print(f"  months={months or 'all'}  pack={'yes' if pack else 'no'}  jobs={jobs}")
     print("=" * 72)
     print("Kriging station LLOCV")
     print(f"  time_resolution={cfg['time_resolution']}")
@@ -235,7 +256,7 @@ def main():
             parse_split_arg(args.fit),
             parse_split_arg(args.score),
             args.mode, n_folds, args.max_stations, args.trend,
-            months=months, rh_t_mode=args.rh_t_mode, pack=pack,
+            months=months, rh_t_mode=args.rh_t_mode, pack=pack, jobs=jobs,
         )
     print("\nKriging LLOCV finished.")
 

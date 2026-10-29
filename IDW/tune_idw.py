@@ -15,6 +15,7 @@ Writes:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -132,8 +133,8 @@ def main():
     p.add_argument("--force", action="store_true")
     p.add_argument("--early-stop", action="store_true", help="stop once the winner is stable")
     p.add_argument("--patience", type=int, default=40, help="timestamps the winner must hold")
-    p.add_argument("--jobs", type=int, default=1,
-                   help="1 = sequential (safe on Windows). >1 uses threads.")
+    p.add_argument("--jobs", type=int, default=None,
+                   help="threads over (p, Fz, k) combos (default: half the logical cores)")
     add_time_res_arg(p)
     args = p.parse_args()
 
@@ -142,7 +143,7 @@ def main():
     param_grid = cfg["param_grid"]["power"]
     primary = cfg.get("primary_metric", "rmse")
     min_stations = int(cfg.get("min_stations_per_field", 10))
-    n_jobs = int(args.jobs)
+    n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
     variables = args.variables or [
         "temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean",
     ]

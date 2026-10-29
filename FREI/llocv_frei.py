@@ -5,11 +5,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import os
 import sys
 
 import numpy as np
 import pandas as pd
 import yaml
+from joblib import Parallel, delayed
+from tqdm import tqdm
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODE_DIR = SCRIPT_DIR.parent
@@ -187,7 +190,7 @@ def pack_from_master(cfg, n_regions: int = 6):
     }
 
 
-def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, pack=None):
+def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, pack=None, jobs: int = 1):
     """
     Protocol-aware LLOCV.
     - Fitting always excludes held-out stations.
@@ -258,13 +261,13 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
                             & (~panel["station_name"].isin(fset))]
                 groups.append((t, q, don))
 
-    for t, q, don in groups:
-        try:
-            part = _score_group(don, q)
-        except Exception as exc:
-            if first_err is None:
-                first_err = exc
-            continue
+    if jobs == 1:
+        results = [_score_group(don, q) for _t, q, don in tqdm(groups, desc=f"  {var}", leave=False)]
+    else:
+        results = Parallel(n_jobs=jobs, backend="threading")(
+            delayed(_score_group)(don, q) for _t, q, don in tqdm(groups, desc=f"  {var}", leave=False)
+        )
+    for part in results:
         if part is not None:
             rows.append(part)
     if not rows:
@@ -282,6 +285,8 @@ def main():
     p.add_argument("--folds", type=int, default=None)
     p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--jobs", type=int, default=None,
+                   help="parallel score groups (default: half the logical cores)")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -309,7 +314,12 @@ def main():
         if months:
             panel = subset_times(panel, months)
         panel, hours = apply_hour_cut(panel, time_res, args.hours)
-        pred = run_llocv(panel, var, fcfg, n_folds, parse_split_arg(args.fit), parse_split_arg(args.score), pack)
+        jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
+        pred = run_llocv(
+            panel, var, fcfg, n_folds,
+            parse_split_arg(args.fit), parse_split_arg(args.score),
+            pack, jobs=jobs,
+        )
         out = get_nested_llocv_path("Frei", var, time_res, domain="full")
         pred.to_parquet(out, index=False)
         print(f"{var} folds={n_folds} months={months or 'all'} hours={hours} rh_t={fcfg.rh_t_mode} -> {out}")

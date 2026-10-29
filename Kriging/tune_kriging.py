@@ -15,12 +15,14 @@ from __future__ import annotations
 from pathlib import Path
 import argparse
 import itertools
+import os
 import sys
 import time
 
 import numpy as np
 import pandas as pd
 import yaml
+from joblib import Parallel, delayed
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODE_DIR = SCRIPT_DIR.parent
@@ -55,7 +57,7 @@ def _tune_split(panel, seed=22, frac=0.2):
     return set(names[:n])
 
 
-def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None) -> float:
+def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None, jobs: int = 1) -> float:
     """Pool stations x tune quarters. Donors are the other pool stations."""
     targets = _tune_split(panel, seed=int(cfg.get("kriging", {}).get("seed", 22)))
     train = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
@@ -68,18 +70,27 @@ def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None) -
     model = KrigingInterpolator(kcfg)
     model.pack = pack
     model.fit(train, var, cfg["time_resolution"], cfg)
-    obs, pred = [], []
-    for t, sc_t in score.groupby("time", sort=False):
+    groups = list(score.groupby("time", sort=False))
+
+    def one(item):
+        t, sc_t = item
         donors = panel[(panel["time"] == t) & (~panel["is_heldout"])
                        & (~panel["station_name"].isin(targets))]
         if len(donors) < kcfg.min_stations:
-            continue
+            return None
         yhat = model.predict_frame(donors, sc_t, var)
-        obs.append(sc_t[var].to_numpy())
-        pred.append(np.asarray(yhat, dtype=float))
-    if not obs:
+        return sc_t[var].to_numpy(), np.asarray(yhat, dtype=float)
+
+    if jobs == 1:
+        parts = [one(g) for g in groups]
+    else:
+        parts = Parallel(n_jobs=jobs, backend="threading")(delayed(one)(g) for g in groups)
+    parts = [p for p in parts if p is not None]
+    if not parts:
         return np.inf
-    met = compute_metrics(np.concatenate(obs), np.concatenate(pred))
+    obs = np.concatenate([p[0] for p in parts])
+    pred = np.concatenate([p[1] for p in parts])
+    met = compute_metrics(obs, pred)
     return float(met["rmse"])
 
 
@@ -112,26 +123,38 @@ def _keys_from(best_over: dict, base: KrigingConfig) -> dict:
     }
 
 
-def _eval_grid(panel, var, cfg, n_folds, locked: dict, varying: list[dict], label: str, pack=None):
-    print(f"\n{var} {label}  {len(varying)} combos")
-    best = (np.inf, dict(locked))
+def _eval_grid(panel, var, cfg, n_folds, locked: dict, varying: list[dict], label: str, pack=None, jobs: int = 1):
+    print(f"\n{var} {label}  {len(varying)} combos  jobs={jobs}")
     rows = []
-    for extra in varying:
+
+    def one(extra):
         over = {**locked, **extra}
         kcfg = cfg_to_kriging(cfg, over)
         t0 = time.perf_counter()
-        rmse = score_combo(panel, var, kcfg, n_folds, cfg, pack=pack)
+        rmse = score_combo(panel, var, kcfg, n_folds, cfg, pack=pack, jobs=1)
         sec = time.perf_counter() - t0
+        return extra, rmse, sec
+
+    if jobs == 1 or len(varying) == 1:
+        results = [one(extra) for extra in varying]
+    else:
+        # Parallel over combos; each combo scores its times sequentially
+        # so the process/thread pool is not nested.
+        results = Parallel(n_jobs=min(jobs, len(varying)), backend="threading")(
+            delayed(one)(extra) for extra in varying
+        )
+    best = (np.inf, dict(locked))
+    for extra, rmse, sec in results:
         pretty = " ".join(f"{k}={v}" for k, v in extra.items())
         print(f"  {pretty}  DEV RMSE={rmse:.4f}  ({sec:.0f}s)")
         rows.append({**extra, "rmse": rmse, "seconds": round(sec, 1), "phase": label})
         if rmse < best[0]:
-            best = (rmse, over)
+            best = (rmse, {**locked, **extra})
     return best, rows
 
 
 def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
-                 rh_t_mode=None, max_times=400):
+                 rh_t_mode=None, max_times=400, jobs: int = 1):
     panel = load_panel(cfg, var)
     # Keep held-out stations: they are the tune targets. Drop test quarters.
     from shared.splits.evaluation_sets import apply_evaluation_protocol
@@ -186,7 +209,7 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
 
     def _take(label, grid):
         nonlocal best
-        best, rows = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label=label)
+        best, rows = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label=label, jobs=jobs)
         search_rows.extend(rows)
         return dict(best[1])
 
@@ -261,6 +284,8 @@ def parse_args():
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     p.add_argument("--quick", action="store_true",
                    help="force phase 1, seasonal4 months, 2 folds")
+    p.add_argument("--jobs", type=int, default=None,
+                   help="parallel combos within a phase (default: half the logical cores)")
     add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
@@ -278,15 +303,16 @@ def main():
     phase = args.phase or ("1" if args.quick else comp.get("tune_phase", "1"))
     months = args.months or ("seasonal4" if args.quick else comp.get("tune_months", "seasonal4"))
     n_folds = args.folds or (2 if args.quick else int(comp.get("tune_folds", 5)))
+    jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
     pack = pack_from_master(cfg, int(cfg.get("kriging", {}).get("n_regions", 6)))
     print("=" * 72)
     print("Kriging DEV search")
-    print(f"  phase={phase}  months={months}  folds={n_folds}  pack={'yes' if pack else 'no'}")
+    print(f"  phase={phase}  months={months}  folds={n_folds}  jobs={jobs}  pack={'yes' if pack else 'no'}")
     print(f"  time_resolution={cfg['time_resolution']}")
     print("=" * 72)
     for var in wanted:
         run_variable(cfg, var, phase, months=months, n_folds=n_folds, pack=pack,
-                     rh_t_mode=args.rh_t_mode, max_times=args.max_times)
+                     rh_t_mode=args.rh_t_mode, max_times=args.max_times, jobs=jobs)
     print("\nKriging tune finished.")
 
 

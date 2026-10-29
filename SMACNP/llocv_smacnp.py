@@ -9,12 +9,15 @@ the original scale, and writes a results parquet.
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import sys
 import argparse
 
 import numpy as np
 import pandas as pd
 import torch
+from joblib import Parallel, delayed
+from tqdm import tqdm
 
 CODE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE_DIR))
@@ -89,6 +92,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--variable", default="temp_mean")
     parser.add_argument("--time-resolution", default=None)
+    parser.add_argument("--jobs", type=int, default=None,
+                        help="parallel test days (default: half the logical cores). "
+                             "GPU forwards serialize on the single device.")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -142,21 +148,21 @@ def main():
     # target = held-out stations present that day
     rows = []
     diag_p, diag_amt, diag_wet = [], [], []
-    days = df["time"].unique()
-    for day in days:
-        if day not in test_days:
-            continue
+    days = [d for d in df["time"].unique() if d in test_days]
+    jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
+    print(f"scoring {len(days)} test days  jobs={jobs}")
+
+    def one(day):
         df_day = df[df["time"] == day].dropna(subset=feat_cols + ["value"])
         df_ctx = df_day[df_day["station_name"].isin(train_stations)]
         df_tgt = df_day[df_day["station_name"].isin(held_stations)]
         if len(df_ctx) < 1 or len(df_tgt) < 1:
-            continue
+            return None
         x_ctx = torch.from_numpy(df_ctx[feat_cols].to_numpy(dtype=np.float32)).unsqueeze(0).to(device)
         y_ctx = torch.from_numpy(
             scaler.transform(df_ctx["value"].to_numpy(dtype=np.float64)).astype(np.float32)
         ).unsqueeze(0).unsqueeze(-1).to(device)
         x_tgt = torch.from_numpy(df_tgt[feat_cols].to_numpy(dtype=np.float32)).unsqueeze(0).to(device)
-
         with torch.no_grad():
             pred = model(x_ctx, y_ctx, x_tgt)
         if ckpt["two_step"]:
@@ -165,14 +171,31 @@ def main():
             var_n = pred["amount_variance"].cpu().numpy().squeeze()
             amt = scaler.inverse_mean(mu_n, var_n)
             y_hat = np.where(p_occ >= 0.5, np.maximum(amt, 0.0), 0.0)
-            diag_p.append(np.atleast_1d(p_occ))
-            diag_amt.append(np.atleast_1d(amt))
-            diag_wet.append(df_tgt["value"].to_numpy(dtype=np.float64) > 1e-6)
+            diag = (np.atleast_1d(p_occ), np.atleast_1d(amt),
+                    df_tgt["value"].to_numpy(dtype=np.float64) > 1e-6)
         else:
             y_hat = scaler.inverse(pred["mu"].cpu().numpy().squeeze())
+            diag = None
         y_true = df_tgt["value"].to_numpy(dtype=np.float64)
-        for name, yt, yp in zip(df_tgt["station_name"], y_true, y_hat):
-            rows.append({"time": day, "station_name": name, "obs": yt, "pred": yp})
+        out = [{"time": day, "station_name": name, "obs": yt, "pred": yp}
+               for name, yt, yp in zip(df_tgt["station_name"], y_true, y_hat)]
+        return out, diag
+
+    if jobs == 1:
+        results = [one(d) for d in tqdm(days, desc="  smacnp")]
+    else:
+        results = Parallel(n_jobs=jobs, backend="threading")(
+            delayed(one)(d) for d in tqdm(days, desc="  smacnp")
+        )
+    for r in results:
+        if r is None:
+            continue
+        out, diag = r
+        rows.extend(out)
+        if diag is not None:
+            diag_p.append(diag[0])
+            diag_amt.append(diag[1])
+            diag_wet.append(diag[2])
 
     res = pd.DataFrame(rows)
     if res.empty:

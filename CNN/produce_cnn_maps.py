@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import sys
 import time
 import traceback
 
 import numpy as np
 import torch
+from joblib import Parallel, delayed
+from tqdm import tqdm
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODE_DIR = SCRIPT_DIR.parent
@@ -33,6 +36,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variable", default=None)
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--jobs", type=int, default=None,
+                   help="parallel CPU prep over timestamps (default: half the logical cores)")
     p.add_argument("--months", default=None)
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -121,14 +126,23 @@ def main():
             fields, used = [], []
             subdaily = is_subdaily(panel, time_res)
             times = list(panel.groupby("time"))
-            for i, (ts, sl) in enumerate(times, start=1):
+            n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
+
+            def prep(item):
+                i, (ts, sl) = item
                 if sl["station_name"].nunique() < min_stations:
-                    continue
+                    return None
                 t0 = time.time()
                 rows, cols = grid_index(sl["x"].to_numpy(), sl["y"].to_numpy(), gx, gy)
                 val = sl[var].to_numpy()
                 field, mask = station_to_raster(rows, cols, val, ny, nx)
-                base = idw_fz_raster(sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(), val, x, y, zz, p=model.cfg.idw_p, Fz=model.cfg.idw_fz, k=model.cfg.idw_k) if model.cfg.residual_idw else None
+                # IDW baseline is always available. Residual methods use it as the
+                # input; the proximity gate blends every variable toward it.
+                base = idw_fz_raster(
+                    sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(), val,
+                    gx, gy, elev,
+                    p=model.cfg.idw_p, Fz=model.cfg.idw_fz, k=model.cfg.idw_k,
+                )
                 if getattr(model, "log_amount", False):
                     inp = np.log1p(np.maximum(field, 0.0)).astype(np.float32)
                 elif base is not None:
@@ -144,23 +158,76 @@ def main():
                         tg = xr.open_dataset(tpath)
                         if "tpi" in tg:
                             extras = [tg["tpi"].values.astype(np.float32)]
+                        tg.close()
                 elif str(var).lower().startswith("rh") and "temp_mean" in sl.columns:
                     tfield = np.zeros((ny, nx), dtype=np.float32)
                     tfield[rows, cols] = sl["temp_mean"].to_numpy(dtype=np.float32)
                     extras = [tfield / 20.0]
-                hat = model.predict_raster(
+                # pack channels on CPU so the GPU step is only the forward
+                packed = model.pack_channels(
                     inp, mask, elev, clc,
                     slope=slope, sinasp=sinasp, cosasp=cosasp,
-                    time_ch=tch,
-                    two_step=model.cfg.two_step and two_step_var(var),
-                    base=base,
-                    extras=extras,
-                    var=var,
+                    time_ch=tch, extras=extras,
                 )
-                fields.append(hat.astype(np.float32))
-                used.append(np.datetime64(ts, "ns"))
-                if i == 1 or i % 6 == 0 or i == len(times):
-                    print(f"{var} {i}/{len(times)} {ts} {time.time() - t0:.1f}s", flush=True)
+                return {
+                    "i": i, "ts": ts, "packed": packed, "base": base,
+                    "mask": mask, "dt_prep": time.time() - t0,
+                }
+
+            if n_jobs == 1:
+                prepped = [prep((i, g)) for i, g in enumerate(times, start=1)]
+            else:
+                prepped = Parallel(n_jobs=n_jobs, backend="threading")(
+                    delayed(prep)((i, g)) for i, g in enumerate(times, start=1)
+                )
+            prepped = [p for p in prepped if p is not None]
+
+            # GPU forwards stay sequential (CUDA not free-threaded)
+            model.net.eval()
+            for p in tqdm(prepped, desc=f"  {var} gpu", leave=False):
+                t0 = time.time()
+                x = torch.from_numpy(p["packed"]).unsqueeze(0).to(model.device)
+                with torch.no_grad():
+                    hat_t = model.net(x).cpu().numpy()[0]
+                # reuse the post-processing from predict_raster
+                two_step = model.cfg.two_step and two_step_var(var)
+                if two_step and hat_t.ndim == 3 and hat_t.shape[0] >= 2:
+                    pr = 1.0 / (1.0 + np.exp(-hat_t[0]))
+                    amt = hat_t[1] * model.y_std + model.y_mean
+                    if model.log_amount:
+                        amt = np.expm1(amt)
+                    elif p["base"] is not None:
+                        amt = amt + p["base"]
+                    amt = np.maximum(amt, 0.0)
+                    cap = float(getattr(model, "_amt_clip", 1e3))
+                    amt = np.minimum(amt, cap)
+                    gate = pr >= model.cfg.tau_wet
+                    hat = np.where(gate, amt, 0.0)
+                else:
+                    raw = hat_t[0] if hat_t.ndim == 3 else hat_t
+                    out = raw * model.y_std + model.y_mean
+                    if model.log_amount:
+                        out = np.expm1(out)
+                        cap = float(getattr(model, "_amt_clip", 1e3))
+                        out = np.minimum(np.maximum(out, 0.0), cap)
+                    elif p["base"] is not None:
+                        out = out + p["base"]
+                    hat = out
+                from cnn_core import clip_var, station_weight
+                # Proximity blend: near stations trust the CNN, far away the IDW.
+                d0 = float(getattr(model.cfg, "gate_d0_km", 35.0))
+                w = station_weight(p["mask"], d0_km=d0)
+                if p["base"] is not None:
+                    hat = w * hat + (1.0 - w) * p["base"]
+                hat = clip_var(var, hat).astype(np.float32)
+                fields.append(hat)
+                used.append(np.datetime64(p["ts"], "ns"))
+                if p["i"] == 1 or p["i"] % 6 == 0 or p["i"] == len(times):
+                    print(
+                        f"{var} {p['i']}/{len(times)} {p['ts']} "
+                        f"prep={p['dt_prep']:.1f}s gpu={time.time() - t0:.1f}s",
+                        flush=True,
+                    )
             if not fields:
                 print(f"{var} no fields", flush=True)
                 continue

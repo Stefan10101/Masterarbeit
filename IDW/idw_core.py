@@ -54,56 +54,48 @@ def modified_idw(
 ) -> np.ndarray:
     """
     Modified IDW with separate horizontal and vertical distance weighting.
-    Supports chunked processing for large grids (100m / 50m).
+    Fully vectorized (no Python loop over targets). Chunked for memory.
     """
     n_targets = len(target_coords)
     if n_targets == 0:
         return np.array([], dtype=np.float32)
 
     interpolated = np.full(n_targets, np.nan, dtype=np.float32)
-
     if chunk_size is None or chunk_size >= n_targets:
-        distances, indices = tree.query(target_coords, k=k)
-        distances = np.maximum(distances, min_dist)
-
-        for i in range(n_targets):
-            idx = indices[i]
-            d_xy = distances[i]
-            d_z = np.abs(station_elev[idx] - target_elev[i])
-
-            w_xy = power_weight(d_xy, p)
-            w_z = power_weight(d_z, p)
-            F_xy = 1.0 - Fz
-            w = F_xy * w_xy + Fz * w_z
-
-            vals = station_values[idx]
-            valid = ~np.isnan(vals)
-            if np.any(valid) and w[valid].sum() > 0:
-                interpolated[i] = np.average(vals[valid], weights=w[valid])
+        chunks = [(0, n_targets)]
     else:
-        for start in range(0, n_targets, chunk_size):
-            end = min(start + chunk_size, n_targets)
-            chunk_coords = target_coords[start:end]
-            chunk_elev = target_elev[start:end]
+        chunks = [(s, min(s + chunk_size, n_targets)) for s in range(0, n_targets, chunk_size)]
 
-            distances, indices = tree.query(chunk_coords, k=k)
-            distances = np.maximum(distances, min_dist)
+    F_xy = 1.0 - Fz
+    for start, end in chunks:
+        coords = target_coords[start:end]
+        elev_t = target_elev[start:end]
+        n_chunk = len(coords)
+        if n_chunk == 0:
+            continue
 
-            for j in range(len(chunk_coords)):
-                i = start + j
-                idx = indices[j]
-                d_xy = distances[j]
-                d_z = np.abs(station_elev[idx] - chunk_elev[j])
+        distances, indices = tree.query(coords, k=k)
+        distances = np.maximum(distances, min_dist)  # (n, k)
 
-                w_xy = power_weight(d_xy, p)
-                w_z = power_weight(d_z, p)
-                F_xy = 1.0 - Fz
-                w = F_xy * w_xy + Fz * w_z
+        # Broadcast elevation difference
+        elev_s = station_elev[indices]  # (n, k)
+        d_z = np.abs(elev_s - elev_t[:, None])
 
-                vals = station_values[idx]
-                valid = ~np.isnan(vals)
-                if np.any(valid) and w[valid].sum() > 0:
-                    interpolated[i] = np.average(vals[valid], weights=w[valid])
+        w_xy = power_weight(distances, p)
+        w_z = power_weight(d_z, p)
+        w = F_xy * w_xy + Fz * w_z
+
+        vals = station_values[indices]  # (n, k)
+        valid = np.isfinite(vals)
+        w = np.where(valid, w, 0.0)
+        vals = np.where(valid, vals, 0.0)
+
+        wsum = w.sum(axis=1)
+        num = (w * vals).sum(axis=1)
+        good = wsum > 0
+        out = np.full(n_chunk, np.nan, dtype=np.float64)
+        out[good] = num[good] / wsum[good]
+        interpolated[start:end] = out.astype(np.float32)
 
     return interpolated
 

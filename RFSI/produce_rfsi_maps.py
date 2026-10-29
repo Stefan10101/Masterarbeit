@@ -82,23 +82,6 @@ def get_time_column(time_resolution: str) -> str:
         }.get(time_resolution, "time")
 
 
-def get_domain_bbox(cfg: dict, domain_name: str) -> tuple:
-    domain_cfg = cfg.get("domain", {})
-    buffer_m = domain_cfg.get("buffer_m", 15000)
-    custom = domain_cfg.get("custom_bbox", [100000, 275000, 395000, 400000])
-    predefined = cfg.get("predefined_bboxes", {})
-    bbox = predefined.get(domain_name, custom)
-    xmin, ymin, xmax, ymax = bbox
-    return xmin - buffer_m, ymin - buffer_m, xmax + buffer_m, ymax + buffer_m
-
-
-def get_domain_mask(grid_ds, bbox: tuple) -> np.ndarray:
-    xmin, ymin, xmax, ymax = bbox
-    x_mask = (grid_ds.x >= xmin) & (grid_ds.x <= xmax)
-    y_mask = (grid_ds.y >= ymin) & (grid_ds.y <= ymax)
-    return (y_mask.values[:, None] & x_mask.values[None, :])
-
-
 def as_naive_utc(values, time_res=None):
     """NetCDF cannot store tz-aware or Python datetime objects."""
     from shared.time_res import to_naive_utc
@@ -186,8 +169,6 @@ def main():
 
     station_data = load_aggregated_data()
     stations = get_all_stations()
-    domain_bbox = get_domain_bbox(cfg, DOMAIN)
-
     use_elev = USE_ELEV
     use_lc = USE_LC and ("clc_code" in stations.columns)
     if USE_LC and not use_lc:
@@ -294,14 +275,21 @@ def main():
         for res in RESOLUTIONS:
             print(f"\n  resolution {res} m")
             grid_ds = xr.open_dataset(get_master_grid_path("RFSI", res))
-            x_sel = (grid_ds.x >= domain_bbox[0]) & (grid_ds.x <= domain_bbox[2])
-            y_sel = (grid_ds.y >= domain_bbox[1]) & (grid_ds.y <= domain_bbox[3])
-            grid_crop = grid_ds.isel(x=x_sel, y=y_sel)
+            # Use the full shared master grid (Alpine DEM extent).
+            # Other methods do not crop; the old domain_bbox crop is removed.
+            grid_crop = grid_ds
             ny = int(grid_crop.sizes["y"])
             nx = int(grid_crop.sizes["x"])
-            print(f"  cropped grid: {ny} x {nx} = {ny * nx:,} cells")
+            print(f"  master grid: {ny} x {nx} = {ny * nx:,} cells")
 
-            domain_mask = get_domain_mask(grid_crop, domain_bbox)
+            # Valid cells from the grid itself (DEM mask). No external bbox.
+            if "mask" in grid_crop:
+                domain_mask = np.asarray(grid_crop["mask"].values, dtype=bool)
+            elif "elev" in grid_crop:
+                elev = np.asarray(grid_crop["elev"].values)
+                domain_mask = np.isfinite(elev) & (np.abs(elev) < 1e6)
+            else:
+                domain_mask = np.ones((ny, nx), dtype=bool)
             domain_mask_flat = domain_mask.ravel()
             gx, gy = np.meshgrid(grid_crop.x.values, grid_crop.y.values)
             grid_points = np.column_stack([gx.ravel(), gy.ravel()])

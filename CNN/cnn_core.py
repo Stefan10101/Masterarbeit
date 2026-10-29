@@ -49,6 +49,7 @@ class CNNConfig:
     use_amp: bool = True
     min_stations: int = 10
     rh_t_mode: str = "none"
+    gate_d0_km: float = 35.0
 
 
 def two_step_var(var: str) -> bool:
@@ -71,11 +72,24 @@ def n_in_channels(cfg: CNNConfig, subdaily: bool, extra_ch: int = 0) -> int:
     if cfg.use_terrain:
         n += 3  # slope, sinasp, cosasp
     n += 16  # CLC level-2 one-hot (0=missing + 15 classes)
+    n += 1   # station-proximity weight
     if cfg.cyclic_time:
         n += 2
         if subdaily:
             n += 2
     return n + int(extra_ch)
+
+
+def station_weight(mask, dx_m: float = 1000.0, dy_m: float = 1000.0, d0_km: float = 35.0) -> np.ndarray:
+    """Soft gate from distance to the nearest station pixel. 1 at stations, ~0 far away."""
+    from scipy.ndimage import distance_transform_edt
+    m = np.asarray(mask) > 0
+    if not m.any():
+        return np.zeros(m.shape, dtype=np.float32)
+    # sampling=(row spacing, col spacing) in metres
+    d_m = distance_transform_edt(~m, sampling=(abs(dy_m), abs(dx_m)))
+    d0 = max(float(d0_km), 1.0) * 1000.0
+    return np.exp(-d_m / d0).astype(np.float32)
 
 
 def pick_device(name: str):
@@ -360,6 +374,7 @@ class CNNInterpolator:
             "y_mean": self.y_mean, "y_std": self.y_std,
             "z_mean": self.z_mean, "z_std": self.z_std,
             "log_amount": bool(self.log_amount),
+            "amt_clip": float(getattr(self, "_amt_clip", 1e3)),
             "in_ch": self.in_ch, "out_ch": self.out_ch,
             "cfg": self.cfg.__dict__,
         }
@@ -387,17 +402,30 @@ class CNNInterpolator:
         self.z_mean = blob["z_mean"]
         self.z_std = blob["z_std"]
         self.log_amount = bool(blob.get("log_amount", False))
+        self._amt_clip = float(blob.get("amt_clip", 1e3))
 
     def pack_channels(self, value, mask, elev, clc, slope=None, sinasp=None, cosasp=None,
-                      time_ch=None, extras=None):
+                      time_ch=None, extras=None, dx_m: float = 1000.0, dy_m: float = 1000.0):
         v = np.where(mask > 0, (value - self.y_mean) / self.y_std, 0.0)
+        elev = np.asarray(elev, dtype=np.float64)
+        bad = ~np.isfinite(elev)
+        if bad.any():
+            elev = elev.copy()
+            elev[bad] = self.z_mean
         z = (elev - self.z_mean) / max(self.z_std, 1.0)
         chans = [v, mask, z]
         if self.cfg.use_terrain:
             ny, nx = value.shape
-            chans.append(np.zeros((ny, nx)) if slope is None else slope / 45.0)
-            chans.append(np.zeros((ny, nx)) if sinasp is None else sinasp)
-            chans.append(np.ones((ny, nx)) if cosasp is None else cosasp)
+            sl = np.zeros((ny, nx), dtype=np.float32) if slope is None else np.asarray(slope, dtype=np.float32)
+            sl = np.where(np.isfinite(sl), sl, 0.0) / 45.0
+            sa = np.zeros((ny, nx), dtype=np.float32) if sinasp is None else np.asarray(sinasp, dtype=np.float32)
+            ca = np.ones((ny, nx), dtype=np.float32) if cosasp is None else np.asarray(cosasp, dtype=np.float32)
+            chans.append(sl)
+            chans.append(np.where(np.isfinite(sa), sa, 0.0))
+            chans.append(np.where(np.isfinite(ca), ca, 0.0))
+        # proximity weight: 1 at stations, decays with distance. Explicit sparsity signal.
+        d0 = float(getattr(self.cfg, "gate_d0_km", 35.0))
+        chans.append(station_weight(mask, dx_m, dy_m, d0))
         # CLC level-2 one-hot (16 channels). Best for a conv net: each class
         # gets its own filter instead of a meaningless ordinal scale.
         from shared.clc import level2_index, N_LEVEL2
@@ -420,7 +448,7 @@ class CNNInterpolator:
 
     def predict_raster(self, value, mask, elev, clc, slope=None, sinasp=None, cosasp=None,
                        time_ch=None, two_step: bool = False, base=None, extras=None,
-                       var: str = "") -> np.ndarray:
+                       var: str = "", donor_wet: float | None = None) -> np.ndarray:
         self.net.eval()
         ch = self.pack_channels(value, mask, elev, clc, slope, sinasp, cosasp, time_ch, extras=extras)
         x = torch.from_numpy(ch).unsqueeze(0).to(self.device)
@@ -434,11 +462,27 @@ class CNNInterpolator:
             elif base is not None:
                 amt = amt + base
             amt = np.maximum(amt, 0.0)
-            return clip_var(var, np.where(p >= self.cfg.tau_wet, amt, 0.0)).astype(np.float32)
+            cap = float(getattr(self, "_amt_clip", 1e3))
+            amt = np.minimum(amt, cap)
+            gate = p >= self.cfg.tau_wet
+            # Rank-gate fallback: if the indicator never clears tau but wet
+            # donors exist, open the highest-p fraction matching the donor rate.
+            if not gate.any() and donor_wet is not None and donor_wet > 0 and p.size:
+                k = max(1, int(np.ceil(donor_wet * p.size)))
+                thr = np.partition(p.ravel(), -k)[-k]
+                gate = p >= thr
+            out = np.where(gate, amt, 0.0)
+            w = station_weight(mask, d0_km=float(getattr(self.cfg, "gate_d0_km", 35.0)))
+            if base is not None:
+                out = w * out + (1.0 - w) * base
+            return clip_var(var, out).astype(np.float32)
         raw = hat[0] if hat.ndim == 3 else hat
         out = raw * self.y_std + self.y_mean
         if self.log_amount:
             out = np.expm1(out)
-        elif base is not None:
-            out = out + base
+            cap = float(getattr(self, "_amt_clip", 1e3))
+            out = np.minimum(np.maximum(out, 0.0), cap)
+        w = station_weight(mask, d0_km=float(getattr(self.cfg, "gate_d0_km", 35.0)))
+        if base is not None:
+            out = w * out + (1.0 - w) * base
         return clip_var(var, out).astype(np.float32)

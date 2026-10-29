@@ -17,6 +17,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import xarray as xr
+import os
+import platform
 from joblib import Parallel, delayed
 from sklearn.neighbors import KDTree
 from tqdm import tqdm
@@ -71,8 +73,15 @@ def main():
     time_res = apply_time_res(cfg, args)
     domain = cfg.get("domain", {}).get("preset", "full")
     resolutions = cfg.get("resolutions_to_process", [1000])
-    # Sequential by default. joblib process workers crash on Windows.
-    n_jobs = int(args.jobs) if args.jobs is not None else 1
+    # Parallel over timestamps. Processes preferred; threading on Windows
+    # (process workers historically crashed there). After vectorization
+    # the inner IDW is NumPy-bound so either backend scales.
+    if args.jobs is not None:
+        n_jobs = int(args.jobs)
+    else:
+        n_jobs = max(1, (os.cpu_count() or 1) // 2)
+    use_process = platform.system() != "Windows" and n_jobs > 1
+    backend = "loky" if use_process else "threading"
     variables = args.variables or ["temp_mean", "precip_sum"]
 
     print("=" * 72)
@@ -116,7 +125,7 @@ def main():
             if n_jobs == 1:
                 results = [interpolate_one(task) for task in tqdm(tasks, desc=f"  {var}", leave=False)]
             else:
-                results = Parallel(n_jobs=n_jobs, backend="threading")(
+                results = Parallel(n_jobs=n_jobs, backend=backend)(
                     delayed(interpolate_one)(task)
                     for task in tqdm(tasks, desc=f"  {var}", leave=False)
                 )

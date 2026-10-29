@@ -21,7 +21,16 @@ from joblib import Parallel, delayed
 import warnings
 warnings.filterwarnings("ignore")
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
+def _find_code_dir() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "paths.py").exists():
+            return parent
+    raise RuntimeError("Could not locate CODE/paths.py")
+
+CODE_DIR = _find_code_dir()
+if str(CODE_DIR) not in sys.path:
+    sys.path.insert(0, str(CODE_DIR))
 
 from paths import (
     get_domain_stations_path,
@@ -100,6 +109,12 @@ def get_input_nc_files():
         matched = [f for f in nc_files if time_period in Path(f).name]
         if matched:
             nc_files = matched
+
+    # Optional: keep only one timescale (weekly, daily, monthly, ...)
+    time_res_filter = PLOTTING_CFG.get("time_resolution")
+    if time_res_filter:
+        key = str(time_res_filter).lower()
+        nc_files = [f for f in nc_files if key in Path(f).name.lower()]
 
     return nc_files
 
@@ -351,8 +366,18 @@ def process_one_timestep(args):
     t_start = pd.to_datetime(t)
     ax.set_title(f"{method}  |  {t_start.strftime('%d.%m.%Y')}", fontsize=11)
     time_label = t_start.strftime("%Y%m%d_%H%M")
+    # Sanitize in case of unexpected characters
+    time_label = "".join(c if c.isalnum() or c in "_-" else "_" for c in time_label)
     out_path = get_map_output_path(method, domain, var_name, res, time_label)
-    fig.savefig(out_path, dpi=MAPS_CFG.get("dpi", 200), bbox_inches="tight", facecolor="white")
+    out_path = Path(out_path).resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"  Saving {out_path}")
+    try:
+        fig.savefig(str(out_path), dpi=MAPS_CFG.get("dpi", 200), bbox_inches="tight", facecolor="white")
+    except OSError as e:
+        print(f"  Failed to save {out_path}: {e}")
+        print(f"  Parent exists: {out_path.parent.exists()}, is_dir: {out_path.parent.is_dir()}")
+        raise
     plt.close(fig)
     ds.close()
     return out_path.name
@@ -394,9 +419,15 @@ def main():
         candidates = [v for v in ds.data_vars if v not in aux and not str(v).endswith("_variance")]
         if candidates:
             raw = candidates[0]
-            # SMACNP stores temp_mean_mean / temp_mean_variance; plot the mean
-            var_name = raw[:-5] if str(raw).endswith("_mean") else raw
             data_var = raw
+            # SMACNP stores <var>_mean + <var>_variance (e.g. precip_sum_mean,
+            # temp_mean_mean). Canonical name is the base variable so colormaps,
+            # labels and station lookup match the other methods.
+            base = raw[:-5] if str(raw).endswith("_mean") else None
+            if base is not None and f"{base}_variance" in ds.data_vars:
+                var_name = base
+            else:
+                var_name = raw
         else:
             var_name = ds.attrs.get("variable", ds.attrs.get("var_name", "prediction"))
             data_var = "prediction" if "prediction" in ds else var_name

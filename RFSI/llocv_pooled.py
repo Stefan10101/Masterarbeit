@@ -17,11 +17,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import os
 import sys
 import time
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
+from tqdm import tqdm
 import yaml
 from tqdm import tqdm
 
@@ -210,10 +213,14 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
 
     # Donors for prediction: pool stations (any time, but typically same timestamp)
     donors = valid[~valid["is_heldout"]]
-    for t, hold_t in score_df.groupby("time", sort=False):
+    groups = list(score_df.groupby("time", sort=False))
+    jobs = int(cfg.get("_jobs", 1))
+
+    def one(item):
+        t, hold_t = item
         others = donors[donors["time"] == t]
         if len(others) < max(min_stations, n_obs):
-            continue
+            return None
         X_hold, _ = prepare_covariates(
             hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
             extras=extras_for_var(hold_t, var, rh_t_mode),
@@ -224,8 +231,9 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
             hold_t[["x", "y"]].to_numpy(),
             X_cov_pred=X_hold,
         )
+        rows = []
         for row, yhat in zip(hold_t.itertuples(index=False), pred):
-            records.append({
+            rows.append({
                 "time": row.time,
                 "split": row.split,
                 "station_name": row.station_name,
@@ -234,6 +242,17 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
                 "predicted": float(yhat),
                 "n_neighbors_avail": int(len(others)),
             })
+        return rows
+
+    if jobs == 1:
+        parts = [one(g) for g in tqdm(groups, desc=f"  {var}", leave=False)]
+    else:
+        parts = Parallel(n_jobs=jobs, backend="threading")(
+            delayed(one)(g) for g in tqdm(groups, desc=f"  {var}", leave=False)
+        )
+    for rows in parts:
+        if rows:
+            records.extend(rows)
 
     elapsed = time.perf_counter() - t0
     pred_df = pd.DataFrame(records)
@@ -281,6 +300,10 @@ def parse_args():
     p.add_argument("--checkpoint-every", type=int, default=25)
     p.add_argument("--folds", type=int, default=0, help=">0 uses station folds instead of leave-one")
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--jobs", type=int, default=None,
+                   help="parallel score timestamps (default 1). "
+                        "The forest already uses all cores via n_jobs=-1; "
+                        "raise this only if predict is not saturating.")
     p.add_argument("--months", default=None)
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -303,6 +326,7 @@ def main():
     cfg = load_config()
     apply_time_res(cfg, args)
     cfg["_hours"] = args.hours
+    cfg["_jobs"] = int(args.jobs) if args.jobs is not None else 1
     wanted = args.variables or cfg.get("rfsi", {}).get("variables_to_process") or [
         "temp_mean", "precip_sum",
     ]

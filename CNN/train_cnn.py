@@ -73,6 +73,7 @@ def cfg_to_cnn(cfg, overrides=None) -> CNNConfig:
         use_amp=bool(c.get("use_amp", True)),
         min_stations=int(cfg.get("min_stations_per_field", 10)),
         rh_t_mode=str(c.get("rh_t_mode", "none")),
+        gate_d0_km=float(c.get("gate_d0_km", 35.0)),
     )
 
 
@@ -465,12 +466,10 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
     if use_two:
         obs = panel.loc[panel["split"] == "train", var].to_numpy()
         wet = float(np.mean(obs > trace)) if len(obs) else 0.0
-        # One class 80% of the time: the indicator cannot move the score.
-        if wet >= 0.80 or wet <= 0.20:
-            use_two = False
-            print(f"  two_step off: wet={wet:.3f} (indicator is constant)", flush=True)
-        else:
-            print(f"  two_step on: wet={wet:.3f}", flush=True)
+        # Precip/snow keep the indicator even when one class dominates.
+        # Weekly precip is ~95% wet; without a gate the amount head cannot
+        # emit zeros and the score collapses.
+        print(f"  two_step on: wet={wet:.3f}", flush=True)
     ccfg.two_step = use_two
     log_amount = two_step_var(var)
     if log_amount:
@@ -506,6 +505,8 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
         print("  precip path: no IDW baseline in the loop; score is raw mm after expm1", flush=True)
     vals = np.concatenate([f["obs"] for f in train_fr]).astype(np.float64)
     if log_amount:
+        wet_vals = vals[vals > trace]
+        model._amt_clip = float(np.quantile(wet_vals, 0.99) * 1.5) if len(wet_vals) else 1e3
         vals = np.log1p(np.maximum(vals, 0.0))
     model.y_mean = float(vals.mean())
     model.y_std = float(vals.std() + 1e-6)
