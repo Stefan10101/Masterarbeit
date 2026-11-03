@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Staged DEV search for Kriging.
+Staged search for Kriging.
 
 More than 3 interacting hyperparameters, so the search stays phased:
   1 k, 2 family, 3 metric (theta, aniso, alpha_z), 4 interactions, 5 refine.
 
-Score: pool stations at tune quarters. A seeded 20% of the pool is the
-tune target; the rest are donors. The official held-out set is never used.
-Fit on pool x train quarters.
+Protocol (per-timestamp): train + tune quarters, score on the fixed
+tune-targets (donors exclude those targets during scoring).
+The official held-out set is never used.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from paths import get_kriging_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from kriging_core import KrigingConfig, KrigingInterpolator
-from shared.splits.evaluation_sets import prepare_for_tuning
+from shared.splits.evaluation_sets import apply_evaluation_protocol, load_tune_targets
 from kriging_data import (
     attach_pack_terrain,
     attach_temperature,
@@ -47,35 +47,29 @@ from kriging_data import (
 from llocv_kriging import cfg_to_kriging, station_folds
 
 
-def _tune_split(panel, seed=22, frac=0.2):
-    """Seeded subset of pool stations used as the tune score targets."""
-    pool = panel.loc[~panel["is_heldout"], "station_name"].drop_duplicates()
-    rng = np.random.default_rng(seed)
-    names = np.asarray(pool.to_numpy()).copy()
-    rng.shuffle(names)
-    n = max(1, int(round(len(names) * frac)))
-    return set(names[:n])
-
-
 def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None, jobs: int = 1) -> float:
-    """Pool stations x tune quarters. Donors are the other pool stations."""
-    targets = _tune_split(panel, seed=int(cfg.get("kriging", {}).get("seed", 22)))
-    train = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
-    score = panel[(~panel["is_heldout"]) & (panel["split"] == "tune")
-                  & (panel["station_name"].isin(targets))]
+    """Train+tune quarters. Score fixed tune-targets; donors exclude them."""
+    if "is_tune_target" not in panel.columns or not panel["is_tune_target"].any():
+        print("    early inf (no tune-targets tagged)")
+        return np.inf
+    score = panel[(~panel["is_heldout"]) & panel["is_tune_target"]
+                  & (panel["split"].isin(["train", "tune"]))]
+    train = panel[(~panel["is_heldout"]) & (~panel["is_tune_target"])
+                  & (panel["split"].isin(["train", "tune"]))]
     if score.empty or train["station_name"].nunique() < kcfg.min_stations:
         reason = "score empty" if score.empty else f"train stations {train['station_name'].nunique()} < {kcfg.min_stations}"
         print(f"    early inf ({reason})")
         return np.inf
     model = KrigingInterpolator(kcfg)
     model.pack = pack
+    # Global variogram from the donor stations on train+tune
     model.fit(train, var, cfg["time_resolution"], cfg)
     groups = list(score.groupby("time", sort=False))
 
     def one(item):
         t, sc_t = item
         donors = panel[(panel["time"] == t) & (~panel["is_heldout"])
-                       & (~panel["station_name"].isin(targets))]
+                       & (~panel["is_tune_target"])]
         if len(donors) < kcfg.min_stations:
             return None
         yhat = model.predict_frame(donors, sc_t, var)
@@ -156,10 +150,9 @@ def _eval_grid(panel, var, cfg, n_folds, locked: dict, varying: list[dict], labe
 def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
                  rh_t_mode=None, max_times=400, jobs: int = 1):
     panel = load_panel(cfg, var)
-    # Keep held-out stations: they are the tune targets. Drop test quarters.
-    from shared.splits.evaluation_sets import apply_evaluation_protocol
-    tagged, _, _, _ = apply_evaluation_protocol(panel)
-    panel = tagged[tagged["split"].isin(["train", "tune"])].copy()
+    # Per-timestamp: train + tune, drop held-out. Fixed tune-targets used for scoring.
+    tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
+    panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
     args_max = max_times
     if months:
         panel = subset_times(panel, months)
@@ -186,8 +179,8 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
     if not panel.empty:
         vc = panel.groupby("split")["time"].nunique()
         print(f"    times per split: {vc.to_dict()}")
-        print(f"    held-out fraction: {panel['is_heldout'].mean():.3f}  "
-              f"pool stations: {panel.loc[~panel['is_heldout'], 'station_name'].nunique()}")
+        print(f"    tune-targets: {panel['is_tune_target'].sum()}  "
+              f"donor stations: {panel.loc[~panel['is_tune_target'], 'station_name'].nunique()}")
     kblock = cfg.get("kriging", {})
     search = kblock.get("search", {})
     n_folds = int(n_folds or kblock.get("n_folds", 5))

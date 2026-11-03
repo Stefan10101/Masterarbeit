@@ -1,0 +1,746 @@
+tune_targets:
+- Altenrhein
+- Assling Compedal Windstation
+- Axams Hoadlsattel
+- Bad Gleichenberg
+- Bad Ischl
+- Bernstein
+- Bludenz
+- Boltigen
+- BorÅ¡t pri Gorenji Vasi
+- Breiter Grieskogel Schneestation
+- Bruck an der Mur
+- Bullet / La Frétaz
+- Chasseral
+- Dawinkopf
+- Deutschnofen
+- Dias
+- EMBRUN
+- Eissee
+- Erfurter Hütte
+- Eselrücken
+- Evolène / Villa
+- Falkaunsalpe
+- Feistritz ob Bleiburg
+- Fischbach
+- Fiss Urgtal Schneestation
+- Fraxern
+- Fresach
+- Frutigen
+- Genève / Cointrin
+- Gornji Grad
+- Graz Straßgang
+- HRASTNIK
+- Hahnenkamm-Ehrenbachhöhe
+- Haiming
+- Hochkar
+- Hohe Wand/Hochkogelhaus
+- Holzgau
+- Ilanz
+- Innsbruck Universität
+- Jauerling
+- Kalwang
+- Kappl Spidur Alpe
+- Kempten Bayern
+- Kirchdorf in Tirol
+- Konstanz Baden-Württemberg
+- Kremsmünster
+- Kreuth Bayern
+- LA FLEGERE
+- LA MEIJE-NIVOSE
+- LE GUA-NIVOSE
+- LE PLENEY
+- LUS L CROIX HTE
+- Landeck
+- Langenlois
+- Les Attelas
+- Les Menuires
+- Loibl Tunnel
+- Lutzmannsburg
+- "Maribor - letaliÅ¡Ä\x8De"
+- Marsens
+- Mattighofen
+- Mattsee
+- Melk
+- Neudorf bei Landsee
+- Neustift/Milders
+- Nyon / Changins
+- PARPAILLON-NIVOSE
+- PIRAN - BOJA
+- Pfelders_Rauhjoch
+- Pfunders_Stutzenalm
+- Piz la Ila - Piz la Ila
+- Poysdorf-Ost
+- Proveis_Samerberg
+- Pörtschach
+- Ratschings_Wasserfaller_Alm
+- Rettenbachferner
+- Retz
+- Ritten_Siffian
+- Rosshütte Windstation
+- Salurn
+- Samedan
+- Schoppernau
+- Serfaus Masner
+- Sillian
+- Sion
+- Sonntagsköpfl
+- Spittal an der Drau
+- St Veit Zischke
+- St.Radegund
+- St._Martin_in_Thurn
+- St._Veit_in_Prags
+- Stabio
+- Sulden
+- TIGNES_SAPC
+- Tamsweg
+- "Tolmin - VolÄ\x8De"
+- Topol pri Medvodah
+- Ulrichen
+- Valbella
+- Völkermarkt-Goldbrunnhof
+- Völs_am_Schlern
+- Weihenstephan-Dürnast Bayern
+- Weißensee-Gatschach
+- Welsberg
+- Wien Jubiläumswarte
+- Wien Stammersdorf
+- Wynau
+- Zelenica
+- Zirmkogel Windstation
+- Zugspitze Bayern
+donors_during_tune:
+- AIGLETON-NIVOSE
+- AIGUILLES ROUGES-NIVOSE
+- ALBERTVILLE
+- ALLANT-NIVOSE
+- ALPE-D'HUEZ
+- ARBENT
+- ARVIEUX
+- ASCROS
+- Aadorf / Tänikon
+- Abtei_Piz_La_Ila
+- Abtei_Piz_Pisciadù
+- Achenkirch
+- Acquarossa / Comprovasco
+- Adelboden
+- Aigen im Ennstal
+- Aigle
+- Alberschwende
+- Alpbach
+- Alpbach Wiedersberger Horn
+- Altdorf
+- Altmünster
+- Altomünster-Maisbrunn Bayern
+- Am Adamsberg (Hauptstation)
+- Amerang-Pfaffing Bayern
+- Amstetten
+- Andau
+- Andeer
+- Andermatt
+- Antholz_Obertal
+- Arosa
+- Arriach
+- Aspach
+- Aspang
+- Attenkam Bayern
+- Auer
+- Augsburg Bayern
+- BALAN_AERO
+- BARCELONNETTE
+- BELLEGARDE
+- BELLEY
+- BONNEVAL-NIVOSE
+- BONNEVILLE
+- BOURG ST MAURICE
+- Babno Polje
+- Bad Bleiberg
+- Bad Gastein
+- Bad Goisern
+- Bad Mitterndorf
+- Bad Radkersburg
+- Bad Ragaz
+- Bad Vöslau
+- Bad Zell
+- Barbian_Kollmann
+- Bartiges Bödele
+- Bergün / Latsch
+- Bern / Zollikofen
+- Biasca
+- Binn
+- Birgitzköpfl
+- Bischofshofen
+- Bischofszell / Sitterdorf
+- Bière
+- Blatten, Lötschental
+- "Bohinjska Ä\x8CeÅ¡njica"
+- Bouveret
+- "Bovec - letaliÅ¡Ä\x8De"
+- Bozen
+- Branzoll
+- Bregenz
+- Breginj
+- Breiter Grieskogel Windstation
+- Brenner
+- Bruckneudorf
+- Bruneck
+- Brunn am Gebirge
+- Brunnenkogel
+- Buchberg
+- Buchs / Aarau
+- Buffalora
+- Bukovski Vrh
+- Bunköpfl
+- Burgbach Brechgrad
+- Bärnkopf
+- CESSY
+- CHAMBERY-AIX
+- CHAMONIX
+- CHAMROUSSE
+- COL AGNEL-NIVOSE
+- COL DE PORTE-NIVOSE
+- COL-DES-SAISIES
+- COUBLEVIE
+- Campill_Kreuzkofeljoch
+- Celje Medlog
+- CerkniÅ¡ko jezero
+- Chieming Bayern
+- Chur
+- Château-d'Oex
+- Col des Mosses
+- Connyalm Windstation
+- Corvara
+- Courtelary
+- Crap Masegn
+- Cressier
+- DAUPHIN
+- DIGNE LES BAINS
+- Dachstein-Schladminger Gletscher
+- Dalfazkamm
+- Davos
+- Dawinalpe
+- Dellach
+- Deutschlandsberg
+- Deutschnofen_Obereggen
+- Disentis
+- Dornbirn
+- Döllach
+- EVIAN SA
+- Ebersberg-Halbing Bayern
+- Ebnat-Kappel
+- Eggishorn
+- Ehrwald
+- Einsiedeln
+- Eisenstadt Nordost
+- Elferspitze - Cima Undici
+- Elferspitze Windstation
+- Elm
+- Evionnaz
+- FLAINE_SAPC
+- Fadner Alm - Malga Fadner
+- Falkenberg,Kr.Rottal-Inn Bayern
+- Feldbach
+- Feldkirch
+- Feldkirchen
+- Ferlach
+- Festkogel
+- Feuerkogel
+- Fiss Schneestation
+- Fiss Windstation
+- Flattnitz
+- Flühli, LU
+- Franz-Senn-Hütte Horntaler Spitzl
+- Franz-Senn-Hütte Kl Horntal
+- Franzensfeste_Grasstein
+- Friesach
+- Frohnleiten
+- Fürstenfeld
+- GALIBIER-NIVOSE
+- GRANDE PAREI-NIVOSE
+- GRENOBLE-CEA-RADOME
+- Gallreideschrofen
+- Gallspach
+- Galtür
+- Galzig
+- Gamoarbach
+- Gampberg Schneestation
+- Gampberg Windstation
+- Ganotzkogel
+- Gargazon
+- Garmisch-Partenkirchen Bayern
+- Gars am Kamp
+- Gehrenspitze
+- Gersau
+- Giggijoch
+- Giswil
+- Gmünd
+- Godnje
+- Golling
+- Gornergrat
+- Graz Lendplatz
+- Graz Thalerhof Flughafen
+- Graz Universität
+- Graz Universität/Heinrichstraße
+- Grenchen
+- Grieskopf
+- Griesneralm LWD
+- Grimsel Hospiz
+- Grono
+- Groß-Enzersdorf
+- Großarltal
+- Grubigstein Schneestation
+- Grächen
+- Gröbming
+- Grünboden - Prati di Plan
+- Gsies_Pfinnalm
+- Gsies_Regelspitze
+- Gumpoldskirchen
+- Gutenstein Mariahilfberg
+- Gänserndorf Stadt
+- Göschenen
+- Gösgen
+- Güssing
+- Güttingen
+- Hafelekar
+- Hahnenkamm Windstation
+- Hall bei Admont
+- Hartberg
+- Hintertux
+- Hirschenkogel
+- Hochebenkofel - Cima Piatta Alta
+- Hochfilzen
+- Hochgasser Schneestation
+- Hochgasser Windstation
+- Hochhörndl
+- Hohe Munde Windstation
+- Hohenpeißenberg Bayern
+- Horn Wasserwerk
+- Hornstein
+- "HoÄ\x8Dko Pohorje"
+- Hörnli
+- Idrija
+- Ilirska Bistrica - Koseze
+- Imst
+- Innsbruck Flughafen
+- Interlaken
+- Irdning-Gumpenstein
+- Ischgl-Idalpe
+- Jaufenkamm
+- Jaufenkamm - Cresta del Giovo
+- Jenbach
+- Jenesien
+- Jeronim
+- Jeruzalem
+- Jöchelspitze Windstation
+- Kalkwand
+- Kals
+- Kals Adlersruhe (Erzherzog-Johann-Hütte)
+- Kaltern_Oberplanitzing
+- KamniÅ¡ka Bistrica
+- Kanin
+- Kanzelhöhe
+- Kapfenberg Flugfeld
+- Kappl Kapplerkopf
+- Kappl Sinsenergampen
+- Katschberg
+- Kernhof-St. Aegyd am Neuwalde
+- Kiefersfelden-Gach Bayern
+- Kitzbühel Hornköpfl
+- Klagenfurt/HTL1-Lastenstraße
+- Kleiner Beil
+- Kleinzicken
+- Kloangruebes
+- Kohlgrub, Bad (Rosshof) Bayern
+- Kolomansberg
+- Koper Kapitanija
+- Koper Luka
+- Koppigen
+- Korensko sedlo
+- Kornat
+- "KoÄ\x8Devje"
+- Kranj
+- Krems
+- Kreuzspitze
+- Krimml
+- Krn
+- Kroisegg
+- Krumbach
+- Kubed
+- Kufstein
+- Köflach
+- Kölnbreinsperre
+- Kötschach-Mauthen
+- LA FAURIE
+- LA MOTTE DU CAIRE
+- LA MURE- RADOME
+- LA MURE-ARGENS
+- LA PESSE
+- LARAGNE MONTEGLIN
+- LE CHEVRIL-NIVOSE
+- LE GRAND-BORNAND
+- LE TOUR
+- LES ECRINS-NIVOSE
+- LES ROCHILLES-NIVOSE
+- LEVENS
+- La Brévine
+- La Chaux-de-Fonds
+- Laa an der Thaya Kläranlage
+- Laas_Eyrs
+- Lachen / Galgenen
+- Ladurns
+- Lampsenspitze Schneestation
+- Lampsenspitze Windstation
+- Langen am Arlberg
+- Langenlebarn
+- Langnau i.E.
+- Langtaufers_Grub
+- Lattejoch
+- Le Moléson
+- Leibnitz-Wagna
+- Lengspitze - Picco Lungo
+- Leoben
+- Les Charbonnières
+- Les Diablerets
+- Les Marécottes
+- "LetaliÅ¡Ä\x8De JoÅ¾eta PuÄ\x8Dnika Ljubljana"
+- Leutkirch-Herlazhofen Baden-Württemberg
+- Lienz
+- Lilienfeld-Tarschberg
+- Linz Stadt
+- Lisca
+- Litija
+- Ljubljana BeÅ¾igrad
+- "Ljubljana ViÄ\x8D"
+- Locarno / Monti
+- Lofer Ort
+- Loferer Alm
+- Logarska Dolina
+- Logatec
+- Lugano
+- Lunz am See
+- Luzern
+- Lägern
+- Lämmerbichlalm
+- MILLEFONTS-NIVOSE
+- MONT ARBOIS
+- MONT CENIS
+- MONTMELIAN
+- Madleinkopf
+- Magadino / Cadenazzo
+- Maisach-Galgen Bayern
+- Malkovec
+- Mallnitz
+- Marchkofel
+- Mariapfarr
+- Mariazell/St.Sebastian Flugfeld
+- Maribor Vrbanski plato
+- Mathod
+- Matro
+- Mattersburg
+- Mayrhofen
+- Medrig-Zeinis
+- Medrigkopf
+- Meiringen
+- Melag_Pratznerberg
+- Meran
+- Merbalm - Malga Merbe
+- Meribel Mottaret
+- MeÅ¾ica
+- Micheldorf
+- Millstatt
+- Mistelbach
+- Mittelberg
+- Mittenwald-Buckelwiesen Bayern
+- Mittersill
+- Mondsee
+- Montagnier, Bagnes
+- Monte Generoso
+- Mooslandl
+- Mosen
+- Mosesgipfel Schneestation
+- Mottec
+- Murska Sobota
+- Muttekopfhütte
+- Mühldorf Bayern
+- Mühleberg
+- Mühlwald
+- München-Flughafen Bayern
+- München-Stadt Bayern
+- Mürzzuschlag
+- Nachtweide
+- Naluns / Schlivera
+- Nanos
+- Napf
+- Nassereith Wannig
+- Nassereither Alm
+- Naturns
+- Nauders Ganderbild
+- Neuburg/Kammel-Langenhaslach Bayern
+- Neuchâtel
+- Neumarkt
+- Neusiedl am See
+- Nockwand Wind
+- Nova Gorica
+- Nova vas (Bloke)
+- Novo mesto
+- ORCIERES-NIVOSE
+- OTLICA - EKOLOSKA
+- Obergurgl
+- Oberriet / Kriessern
+- Oberstdorf Bayern
+- Obertauern
+- Obervellach
+- Obervintl
+- Oberwölz
+- Oron
+- Osilnica
+- Oy-Mittelberg-Petersthal Bayern
+- PEIRA CAVA
+- Palinkopf
+- Passo del Bernina
+- Patscherkofel
+- "PavliÄ\x8Devo sedlo"
+- Payerne
+- Pens_Tramintal
+- Pfelders
+- Pfitsch_St._Jakob
+- Pflersch
+- Pfullendorf Baden-Württemberg
+- Pfunders
+- Pfäffikon, ZH
+- Piding Bayern
+- Pilatus
+- Piotta
+- Pischgraben
+- Pitztaler Gletscher
+- Piz Corvatsch
+- Piz Martegnas
+- Plaffeien
+- Planina pod Golico
+- Planskopf
+- Platt_in_Passeier
+- Plojen
+- Plose
+- "PodÄ\x8Detrtek"
+- "PortoroÅ¾ - letaliÅ¡Ä\x8De"
+- Poschiavo / Robbia
+- Postojna
+- Pottschach
+- Prags_Rossalm
+- Predel
+- Predigberg Schneestation
+- Preitenegg
+- Prettau
+- Präbichl
+- Ptuj
+- Puchberg am Schneeberg
+- Puitegg
+- Pully
+- RESTEFOND-NIVOSE
+- RISTOLAS
+- Radegunda
+- Radein
+- Radstadt-Tandalier
+- Ramsau am Dachstein
+- Ranshofen Braunau
+- Rastkogel Windstation
+- "RateÄ\x8De"
+- Ratitovec
+- Raucheggen Schneestation
+- Rauris
+- Rauthhütte
+- Ravne na KoroÅ¡kem
+- Rax Seilbahnbergstation
+- Rechnitz
+- Reichenau am Mühlkreis
+- Reichersberg
+- Rein_in_Taufers
+- Reit im Winkl-Groißenbach Bayern
+- Rendl Riffel 1
+- Reutte
+- Ridnaun
+- Ried im Innkreis
+- Rifflsee Muttenkopf
+- Rifflsee Talstation Grubenkopf
+- Rinn
+- Rittnerhorn - Corno del Renon
+- Robièi
+- RogaÅ¡ka Slatina
+- Rogla
+- Rosenheim Bayern
+- Rossbänke - Pian dei Cavalli
+- Rosskar
+- Rotadl
+- Rottenmann
+- Rotwandwiesen - Prati di Croda Rossa
+- Rudno polje (Pokljuka)
+- Rünenberg
+- S. Bernardino
+- SISTERON
+- ST AUBAN
+- ST CREPIN
+- ST HILAIRE-NIVOSE
+- ST JEAN-ST-NICOLAS
+- STE MARIE CUINES
+- SUTRIEU
+- Salen-Reutenen
+- Salzboden
+- Salzburg Flughafen
+- Salzburg Freisaal
+- Samerberg - Alpe di Brez
+- Sand_i.T._Mühlen
+- Sarnthein
+- Saupanzen
+- Schaufeljoch
+- Schiers
+- Schlanders
+- Schmirn
+- Schmittenhöhe
+- Schneefernerhaus Bayern
+- Schröcken
+- Schwarze Schneid
+- Schwechat Flughafen
+- Schöckbichl
+- Schöckl
+- Schönau am Königssee Bayern
+- Schöneben - Belpiano
+- Schöngrabern
+- Schüpfheim
+- Scuol
+- Seegrube
+- Segl-Maria
+- Seibersdorf
+- Seirlöcher Kogel
+- Semmering
+- Sennjoch
+- Sevno (Å martno pri Litiji)
+- Sexten
+- Siegsdorf-Höll Bayern
+- Sigmarszell-Zeisertsweiler Bayern
+- Signalgipfel_Wilder_Freiger
+- Silberspitze Schneemessung
+- Silberspitze Windstation
+- Simbach/Inn Bayern
+- Slavnik
+- Slovenske Konjice
+- Sonnbergalm
+- Sonnblick
+- Sotinski breg
+- Speicherteich Axamer Lizum
+- Speicherteich Panorama
+- St Veit Speikboden
+- St. Veit im Pongau
+- St.Andrä im Lavanttal
+- St.Anton am Arlberg
+- St.Jakob im Defereggental
+- St.Johann im Pongau
+- St.Leonhard im Pitztal
+- St.Pölten Landhaus
+- St.Veit an der Glan
+- St._Magdalena_in_Gsies
+- St._Martin_in_Passeier
+- St._Valentin_a.d._Haide
+- St._Walburg
+- Sta. Maria, Val Müstair
+- Steinach am Brenner
+- Sterzing
+- Stockerau
+- Stolzalpe
+- Sulden_Madritsch
+- Sulzberg
+- Sveti Trije Kralji (Pohorje)
+- "SviÅ¡Ä\x8Daki"
+- Säntis
+- Söll
+- TALLARD
+- THONON-INRAE
+- TRBOVLJE
+- Tannheim
+- Tatre
+- Taufers_i.M.
+- Terenten
+- Thun
+- Thurntaler Windstation
+- Timmelsalm
+- Titlis
+- Toblach
+- Trafoi_Zaufenkofel
+- Trebnje
+- Treibach-Althofen
+- Tristecken Griesneralm Windstation
+- Trojane - Limovce
+- Tscheyegg
+- Tuxerjoch Schneestation
+- USINENS SA
+- Ulmerhütte
+- Ulten_Weißbrunn
+- Ulten_Weißbrunnspitz
+- Umhausen
+- UrÅ¡lja gora
+- VAL D'ISERE JOS
+- VALENSOLE
+- VILLARD-DE-LANS
+- Vaduz
+- Valluga
+- Valmorel
+- Vedrijan
+- Velenje
+- "Velike LaÅ¡Ä\x8De"
+- Vevey / Corseaux
+- Vicosoprano
+- Villach Stadt
+- Villacher Alpe
+- Villars-Tiercelin
+- Villnöss
+- Visp
+- Vogel
+- Vorderegg
+- Vrhnika
+- "VrÅ¡iÄ\x8D"
+- Vöcklabruck
+- Wachtberg bei Steyr
+- Waidhofen an der Ybbs
+- Waizenkirchen
+- Wandspitze Windstation
+- Warth
+- Weingarten, Kr. Ravensburg Baden-Württemberg
+- Weissfluhjoch
+- Weisssee LWD
+- Wels-Schleißheim
+- Welschnofen
+- Westliches Gamshorn
+- Weyer
+- Wielenbach (Demollstr.) Bayern
+- Wien Donaufeld
+- Wien Hohe Warte
+- Wien Innere Stadt
+- Wien Mariabrunn
+- Wien Unterlaa
+- Wiener Neustadt Flugplatz
+- Wieselburg
+- Windischgarsten
+- Wolfsegg
+- Wolkenstein
+- Wolkersdorf
+- Wädenswil
+- Würenlingen / PSI
+- ZAGORJE
+- Zadlog
+- Zell am See
+- Zermatt
+- Zgornja Kapla
+- Zwerndorf
+- Zwölferkogel
+- Zürich / Affoltern
+- Zürich / Kloten
+- Äußere Rendlalpe
+- Å ebreljski vrh
+- "Å kocjan (DivaÄ\x8Da)"
+n_tune_targets: 110
+n_donors_during_tune: 626
+variable: relative_humidity
+fraction: 0.15
+seed: 43
+n_elev_bins: 4
+spatial_step_deg: 0.75
+note: Fixed 15 % of the pool; held out only during hyperparameter scoring

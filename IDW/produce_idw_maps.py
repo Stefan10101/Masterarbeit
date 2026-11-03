@@ -31,7 +31,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from idw_core import get_valid_targets, interpolate_idw
 from idw_data import load_config, load_global_params, load_panel
 from paths import get_interpolated_map_path, get_master_grid_path
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res
 
 
 TRACE = {
@@ -67,6 +67,7 @@ def main():
     p.add_argument("--max-times", type=int, default=None,
                    help="cap timestamps for a proof run")
     add_time_res_arg(p)
+    add_hours_arg(p)
     args = p.parse_args()
 
     cfg = load_config()
@@ -100,7 +101,7 @@ def main():
         print(f"\n{res} m  valid cells={len(target_coords):,}")
 
         for var in variables:
-            panel = load_panel(cfg, var)
+            panel = load_panel(cfg, var, hours=getattr(args, 'hours', None))
             if args.months and args.months != "all":
                 from idw_data import subset_times
                 panel = subset_times(panel, args.months)

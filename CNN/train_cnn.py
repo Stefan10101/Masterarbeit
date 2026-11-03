@@ -66,8 +66,9 @@ def cfg_to_cnn(cfg, overrides=None) -> CNNConfig:
         lr=float(c.get("lr", 1e-3)),
         weight_decay=float(c.get("weight_decay", 1e-4)),
         batch_times=int(c.get("batch_times", 4)),
-        tile_size=int(c.get("tile_size", 64)),
-        tiles_per_batch=int(c.get("tiles_per_batch", 64)),
+        tile_size=int(c.get("tile_size", 128)),
+        tiles_per_batch=int(c.get("tiles_per_batch", 8)),
+        accum_steps=int(c.get("accum_steps", 4)),
         seed=int(c.get("seed", 22)),
         device=str(c.get("device", "auto")),
         use_amp=bool(c.get("use_amp", True)),
@@ -459,6 +460,56 @@ def _pack_from_static(frames, idx, model, rng, mask_frac):
     return tuple(np.stack(a).astype(np.float32) for a in (chans, tgts, qmasks, wets, bases, fields))
 
 
+def _crop_centered(arr, r, c, tile, H, W):
+    """Zero-padded tile centered on (r, c). Works for (C,H,W) or (H,W)."""
+    half = tile // 2
+    r0, c0 = int(r) - half, int(c) - half
+    rs, cs = max(r0, 0), max(c0, 0)
+    re, ce = min(r0 + tile, H), min(c0 + tile, W)
+    or0, oc0 = rs - r0, cs - c0
+    if arr.ndim == 3:
+        out = np.zeros((arr.shape[0], tile, tile), dtype=np.float32)
+        out[:, or0:or0 + (re - rs), oc0:oc0 + (ce - cs)] = arr[:, rs:re, cs:ce]
+    else:
+        out = np.zeros((tile, tile), dtype=np.float32)
+        out[or0:or0 + (re - rs), oc0:oc0 + (ce - cs)] = arr[rs:re, cs:ce]
+    return out
+
+
+def _extract_tiles(chans, tgts, qmasks, wets, bases, fields, tile, rng, n_tiles, require_query=True):
+    """Crop tiles from already-correct full-grid tensors.
+
+    Sampling prefers query pixels so the loss is never empty.
+    Returns the same 6-tuple layout as _pack_from_static, or None.
+    """
+    B, _, H, W = chans.shape
+    out = [[] for _ in range(6)]
+    srcs = (chans, tgts, qmasks, wets, bases, fields)
+    attempts = 0
+    max_attempts = max(n_tiles * 10, 20)
+    while len(out[0]) < n_tiles and attempts < max_attempts:
+        attempts += 1
+        bi = int(rng.integers(0, B))
+        q = qmasks[bi] > 0
+        if require_query and not q.any():
+            continue
+        if q.any():
+            ys, xs = np.where(q)
+            si = int(rng.integers(0, len(ys)))
+            r, c = int(ys[si]), int(xs[si])
+        else:
+            r = int(rng.integers(0, H))
+            c = int(rng.integers(0, W))
+        crops = [_crop_centered(a[bi], r, c, tile, H, W) for a in srcs]
+        if require_query and not (crops[2] > 0).any():
+            continue
+        for bucket, crop in zip(out, crops):
+            bucket.append(crop)
+    if not out[0]:
+        return None
+    return tuple(np.stack(a).astype(np.float32) for a in out)
+
+
 def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp=None, cosasp=None,
               time_res: str | None = None, trace: float = 0.1, jobs: int = 1):
     subdaily = is_subdaily(panel, time_res)
@@ -526,13 +577,12 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
     best_state, best_loss, wait = None, np.inf, 0
     two = out_ch == 2
     n = len(train_fr)
-    b = max(1, int(ccfg.batch_times))
-    order = rng.permutation(n)
-    batches = [order[i:i + b] for i in range(0, n, b)]
-    # Monthly has ~48 images, so the mask must change or the net memorizes them.
-    # Daily and finer have enough fields that one mask is fine, and prebuilding
-    # it keeps the GPU busy.
-    remask = time_res in (None, "monthly", "weekly", "seasonal")
+    tile = int(getattr(ccfg, "tile_size", 128) or 128)
+    tiles_per = max(1, int(getattr(ccfg, "tiles_per_batch", 8) or 8))
+    accum = max(1, int(getattr(ccfg, "accum_steps", 4) or 4))
+    # Tile path: build one field on CPU, crop query-centered tiles, accumulate.
+    # Avoids full-grid backward (cuDNN) and epoch-wide materialization (UI freeze).
+    print(f"  tile path  tile={tile}  tiles/batch={tiles_per}  accum={accum}", flush=True)
     # Load static TPI for wind
     tpi_grid = None
     if str(var).lower().startswith("wind"):
@@ -544,75 +594,79 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
             if "tpi" in tg:
                 tpi_grid = tg["tpi"].values.astype(np.float32)
     _attach_static(train_fr + dev_fr, elev, clc, model, slope, sinasp, cosasp, extra=tpi_grid)
-    dev_idx = [list(range(i, min(i + b, len(dev_fr)))) for i in range(0, len(dev_fr), b)]
-    dev_batches = None  # packed inside the eval loop
-    train_batches = None
-    fut = None
-    pool = None
-    if remask:
-        print(f"  full grid  batch={b}  static once, new mask each epoch", flush=True)
-        from concurrent.futures import ThreadPoolExecutor
-        pool = ThreadPoolExecutor(max_workers=1)
 
-        def _epoch_batches(seed):
-            rr = np.random.default_rng(seed)
-            return [_pack_from_static(train_fr, idx, model, rr, ccfg.train_mask_frac) for idx in batches]
+    def _loss_from(hat, y, m, wet):
+        if two:
+            logit, amt = hat[:, 0], hat[:, 1]
+            bce = torch.nn.functional.binary_cross_entropy_with_logits(logit, wet, reduction="none")
+            mse = (amt - y) ** 2
+            amt_m = m * wet
+            loss_bce = (bce * m).sum() / m.sum().clamp_min(1.0)
+            loss_mse = (mse * amt_m).sum() / amt_m.sum().clamp_min(1.0)
+            return loss_bce + loss_mse, int(m.sum())
+        pred = hat[:, 0] if hat.dim() == 4 else hat
+        return ((pred - y) ** 2 * m).sum() / m.sum().clamp_min(1.0), int(m.sum())
 
-        fut = pool.submit(_epoch_batches, int(rng.integers(1e9)))
-    else:
-        print(f"  full grid  batch={b}  pack one batch at a time ({len(batches)} / epoch)", flush=True)
+    def _amp_ctx():
+        if not use_amp:
+            return _nullcontext()
+        try:
+            return torch.amp.autocast("cuda", enabled=True)
+        except TypeError:
+            return torch.cuda.amp.autocast(enabled=True)
+
     for epoch in range(ccfg.epochs):
         t_ep = time.perf_counter()
-        if remask:
-            train_batches = fut.result()
-            fut = pool.submit(_epoch_batches, int(rng.integers(1e9)))
-            epoch_batches = train_batches
-        else:
-            epoch_batches = (_pack_from_static(train_fr, idx, model, rng, ccfg.train_mask_frac) for idx in batches)
+        order = rng.permutation(n)
         model.net.train()
         total = 0.0
         seen = 0
-        n_b = len(batches)
-        for bi, arrs in enumerate(epoch_batches, start=1):
-            x, y, m, wet, base_t, field_t = _to_dev(arrs, model.device)
-            opt.zero_grad(set_to_none=True)
-            if use_amp:
-                try:
-                    ctx = torch.amp.autocast("cuda", enabled=True)
-                except TypeError:
-                    ctx = torch.cuda.amp.autocast(enabled=True)
-            else:
-                ctx = _nullcontext()
-            with ctx:
+        opt.zero_grad(set_to_none=True)
+        micro = 0
+        for bi, fi in enumerate(order, start=1):
+            arrs = _pack_from_static(train_fr, [int(fi)], model, rng, ccfg.train_mask_frac)
+            tiles = _extract_tiles(*arrs, tile, rng, tiles_per, require_query=True)
+            if tiles is None:
+                continue
+            x, y, m, wet, base_t, field_t = _to_dev(tiles, model.device)
+            with _amp_ctx():
                 hat = model.net(x)
-                if two:
-                    logit, amt = hat[:, 0], hat[:, 1]
-                    bce = torch.nn.functional.binary_cross_entropy_with_logits(logit, wet, reduction="none")
-                    mse = (amt - y) ** 2
-                    amt_m = m * wet
-                    loss_bce = (bce * m).sum() / m.sum().clamp_min(1.0)
-                    loss_mse = (mse * amt_m).sum() / amt_m.sum().clamp_min(1.0)
-                    loss = loss_bce + loss_mse
-                else:
-                    pred = hat[:, 0] if hat.dim() == 4 else hat
-                    loss = ((pred - y) ** 2 * m).sum() / m.sum().clamp_min(1.0)
+                loss, n_q = _loss_from(hat, y, m, wet)
+            # Scale so accum steps keep the same effective step size.
+            scaled = loss / float(accum)
             if scaler is not None:
-                scaler.scale(loss).backward()
+                scaler.scale(scaled).backward()
+            else:
+                scaled.backward()
+            total += float(loss.detach()) * n_q
+            seen += n_q
+            micro += 1
+            if micro % accum == 0:
+                if scaler is not None:
+                    scaler.step(opt)
+                    scaler.update()
+                else:
+                    opt.step()
+                opt.zero_grad(set_to_none=True)
+            if bi == 1 or bi % 50 == 0 or bi == n:
+                print(f"    epoch {epoch:03d}  field {bi}/{n}  "
+                      f"train_mse={total / max(seen, 1):.4f}", flush=True)
+        if micro % accum != 0:
+            if scaler is not None:
                 scaler.step(opt)
                 scaler.update()
             else:
-                loss.backward()
                 opt.step()
-            total += float(loss.detach()) * int(m.sum())
-            seen += int(m.sum())
-            if bi == 1 or bi % 50 == 0 or bi == n_b:
-                print(f"    epoch {epoch:03d}  batch {bi}/{n_b}  "
-                      f"train_mse={total / max(seen, 1):.4f}", flush=True)
+            opt.zero_grad(set_to_none=True)
         model.net.eval()
         dloss, dseen = 0.0, 0
         with torch.no_grad():
-            for arrs in (_pack_from_static(dev_fr, idx, model, rng, 0.0) for idx in dev_idx):
-                x, y, m, wet, base_t, field_t = _to_dev(arrs, model.device)
+            for fi in range(len(dev_fr)):
+                arrs = _pack_from_static(dev_fr, [fi], model, rng, 0.0)
+                tiles = _extract_tiles(*arrs, tile, rng, tiles_per, require_query=True)
+                if tiles is None:
+                    continue
+                x, y, m, wet, base_t, field_t = _to_dev(tiles, model.device)
                 hat = model.net(x)
                 if two:
                     pw = torch.sigmoid(hat[:, 0])
@@ -622,7 +676,6 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
                     elif ccfg.residual_idw:
                         amt = amt + base_t
                     recon = amt
-                    gate = float(((pw + 1e-4 >= ccfg.tau_wet) * m).sum() / m.sum().clamp_min(1))
                 else:
                     pred = hat[:, 0] if hat.dim() == 4 else hat
                     recon = pred * model.y_std + model.y_mean
@@ -630,14 +683,9 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
                         recon = torch.expm1(recon)
                     elif ccfg.residual_idw:
                         recon = recon + base_t
-                    gate = 1.0
                 dloss += float((((recon - field_t) ** 2) * m).sum())
                 dseen += int(m.sum())
-                if epoch == 0 and dseen == int(m.sum()):
-                    bmean = float((base_t * m).sum() / m.sum().clamp_min(1))
-                    print(f"    dev check  gate_open={gate:.2f}  base_at_stations={bmean:.2f}  "
-                          f"y_mean={model.y_mean:.2f}", flush=True)
-        if not dev_fr:
+        if not dev_fr or dseen == 0:
             dev = total / max(seen, 1)
         else:
             dev = dloss / max(dseen, 1)
@@ -655,8 +703,6 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
             wait += 1
             if wait >= ccfg.patience:
                 break
-    if pool is not None:
-        pool.shutdown(wait=False)
     if best_state is not None:
         model.net.load_state_dict(best_state)
     return model, best_loss
@@ -694,7 +740,7 @@ def main():
     variables = [args.variable] if args.variable else cfg["cnn"].get("variables_to_process", ["temp_mean"])
     for var in variables:
         panel = load_panel(cfg, var)
-        panel = prepare_for_tuning(panel)
+        panel = prepare_for_tuning(panel, variable=var)
         # Station hold-out on the tune (now 'dev') timestamps so donors exist.
         # Without this every pool station is a target and build_frames drops the frame.
         if "dev" in panel["split"].values:

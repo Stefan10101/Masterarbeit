@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-DEV search for RGI hyperparameters.
+RGI hyperparameter search.
 
 Phase 1: k × n_layers with alpha=0.2 and a scaled alpha_z.
 Phase 2: alpha × alpha_z at the winning k, n_layers.
 Phase 3: expand alpha and alpha_z past the phase-2 corner, then
-         re-search k at the new (alpha, alpha_z). Depth stays at
-         the phase-1 winner (deeper did not help).
+         re-search k at the new (alpha, alpha_z).
 
-Score: 5-fold station CV, fit on TRAIN times, RMSE on held-out stations
-at DEV times.
+Protocol (pooled): fit on full pool × train quarters;
+score fixed tune-targets on tune quarters (donors exclude them only at prediction).
 """
 
 from __future__ import annotations
@@ -30,34 +29,34 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_rgi_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
-from shared.splits.evaluation_sets import prepare_for_tuning
+from shared.splits.evaluation_sets import apply_evaluation_protocol
 from rgi_core import RGI, RGIConfig
 from rgi_data import attach_extras, compute_metrics, extra_cols_for_var, load_config, load_panel, subset_times
 from llocv_rgi import cfg_to_rgi, station_folds
 
 
 def score_combo(panel, var, rcfg: RGIConfig, n_folds: int) -> float:
-    train = panel[panel["split"] == "train"]
-    dev = panel[panel["split"] == "dev"]
-    names = sorted(dev["station_name"].unique())
-    folds = station_folds(names, n_folds, rcfg.seed)
+    """Fit on full pool × train; score fixed tune-targets on tune quarters.
+    Donors exclude tune-targets only at prediction time."""
+    if "is_tune_target" not in panel.columns or not panel["is_tune_target"].any():
+        return np.inf
+    train = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
+    hold = panel[(~panel["is_heldout"]) & panel["is_tune_target"]
+                 & (panel["split"] == "tune")]
+    if hold.empty or train["station_name"].nunique() < rcfg.min_stations:
+        return np.inf
+    model = RGI(rcfg)
+    model.fit(train, var, val_df=None, log=None)
     obs, pred = [], []
-    for hold_names in folds:
-        hold_set = set(hold_names)
-        tr = train[~train["station_name"].isin(hold_set)]
-        ho = dev[dev["station_name"].isin(hold_set)]
-        if ho.empty or tr["station_name"].nunique() < rcfg.min_stations:
+    for t, ho_t in hold.groupby("time", sort=False):
+        # Temporary donors: exclude the tune-targets
+        others = panel[(panel["time"] == t) & (~panel["is_heldout"])
+                       & (~panel["is_tune_target"])]
+        if len(others) < rcfg.min_stations:
             continue
-        model = RGI(rcfg)
-        model.fit(tr, var, val_df=None, log=None)
-        # Neighbours are contemporaneous other stations (DEV year ≠ TRAIN year).
-        for t, ho_t in ho.groupby("time", sort=False):
-            others = panel[(panel["time"] == t) & (~panel["station_name"].isin(hold_set))]
-            if len(others) < rcfg.min_stations:
-                continue
-            yhat = model.predict_frame(others, ho_t, var)
-            obs.append(ho_t[var].to_numpy())
-            pred.append(yhat)
+        yhat = model.predict_frame(others, ho_t, var)
+        obs.append(ho_t[var].to_numpy())
+        pred.append(yhat)
     if not obs:
         return np.inf
     met = compute_metrics(np.concatenate(obs), np.concatenate(pred))
@@ -82,7 +81,9 @@ def _write_tuned(var, time_res, payload: dict) -> Path:
 
 def run_variable(cfg, var, phase: str):
     panel = attach_extras(load_panel(cfg, var), cfg, var)
-    panel = prepare_for_tuning(panel)
+    tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
+    # Full pool on train+tune; held-out dropped. Fixed tune-targets used for scoring.
+    panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
     if cfg.get("_quick_months"):
         panel = subset_times(panel, cfg["_quick_months"])
     if cfg.get("_max_times") and panel["time"].nunique() > cfg["_max_times"]:
@@ -219,8 +220,9 @@ def main():
     ]
     from rgi_core import describe_device, resolve_device
     print("=" * 72)
-    print("RGI DEV search")
+    print("RGI hyperparameter search")
     print(f"  phase={args.phase}  time_resolution={cfg['time_resolution']}")
+    print(f"  protocol: fit train × pool, score fixed tune-targets × tune")
     print(f"  device {describe_device(resolve_device(cfg.get('rgi', {}).get('device', 'auto')))}")
     print("=" * 72)
     if args.quick:

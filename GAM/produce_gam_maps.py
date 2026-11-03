@@ -114,7 +114,7 @@ def main():
             panel = load_panel(cfg, var)
             # Tag with shared quarter splits so subset_splits can select train/tune/test.
             # Produce keeps all stations (including held-out) as donors; only time is filtered.
-            panel, _, _, _ = apply_evaluation_protocol(panel)
+            panel, _, _, _ = apply_evaluation_protocol(panel, variable=var)
             tuned = load_tuned(var, time_res)
             tuned["trace"] = precip_trace(cfg, time_res, var)
             if args.rh_t_mode:

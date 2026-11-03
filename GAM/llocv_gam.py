@@ -154,8 +154,9 @@ def _score_one(payload):
 
 def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, progress: str | None = None,
               pack=None, jobs: int = 1):
-    """Protocol-aware. Final scores: held-out x test. Tuning: pool x requested splits, station-folded."""
-    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
+    """Protocol-aware. Final scores: held-out x test (full-pool donors).
+    Tuning: fixed tune-targets on the requested splits (donors exclude them)."""
+    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel, variable=var)
     score_ok = {"tune" if s == "dev" else s for s in score_splits}
     # Only the final test uses the held-out stations. Tune scores the pool.
     heldout_score = score_splits == {"all"} or "test" in score_ok
@@ -175,16 +176,24 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, pr
                         & (~panel["station_name"].isin(set(q["station_name"])))]
             groups.append((ts, q, don))
     else:
-        # Station folds so pool targets are not also donors
-        names = score_df["station_name"].unique()
-        folds = station_folds(names, max(int(n_folds), 2), seed=gcfg.seed)
-        for fold in folds:
-            fset = set(fold)
-            targets = score_df[score_df["station_name"].isin(fset)]
+        # Hyperparameter stage: score the fixed tune-targets.
+        if "is_tune_target" in panel.columns and panel["is_tune_target"].any():
+            targets = score_df[score_df["is_tune_target"]]
             for ts, q in targets.groupby("time", sort=False):
-                don = panel[(~panel["is_heldout"]) & (panel["time"] == ts)
-                            & (~panel["station_name"].isin(fset))]
+                don = panel[(~panel["is_heldout"]) & (~panel["is_tune_target"])
+                            & (panel["time"] == ts)]
                 groups.append((ts, q, don))
+        else:
+            # Legacy station-fold fallback
+            names = score_df["station_name"].unique()
+            folds = station_folds(names, max(int(n_folds), 2), seed=gcfg.seed)
+            for fold in folds:
+                fset = set(fold)
+                targets = score_df[score_df["station_name"].isin(fset)]
+                for ts, q in targets.groupby("time", sort=False):
+                    don = panel[(~panel["is_heldout"]) & (panel["time"] == ts)
+                                & (~panel["station_name"].isin(fset))]
+                    groups.append((ts, q, don))
 
     print(f"  {var} scoring {len(groups)} groups, {len(score_df)} target rows, "
           f"form={gcfg.formula} ns={gcfg.n_splines} jobs={jobs}", flush=True)

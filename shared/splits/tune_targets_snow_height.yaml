@@ -1,0 +1,705 @@
+tune_targets:
+- AIGUILLES ROUGES-NIVOSE
+- Abtei_Piz_La_Ila
+- Achberg-Doberatsweiler Baden-Württemberg
+- Achenkirch
+- Ammerwald
+- Ampfing Bayern
+- Aulendorf-Blönried Baden-Württemberg
+- Aying (Brauerei) Bayern
+- Babenhausen Bayern
+- Bad Eisenkappel
+- Bockhorn/Oberbayern -Grünbach Bayern
+- Brandberger Kolmhaus
+- Brandenberg
+- Brenner
+- Brentenjoch
+- Brünnsteinhaus Bayern
+- Buchloe Bayern
+- Bullet / La Frétaz
+- CHATEL
+- CONTAMINE-SUR- ARVE
+- CONTAMINES MJ
+- Dachstein-Schladminger Gletscher
+- Dietersburg Bayern
+- Dorfen (Kläranlage) Bayern
+- Egling/Isar-Attenham Bayern
+- Eurasburg/Obb.-Beuerberg Bayern
+- Falkenberg,Kr.Rottal-Inn Bayern
+- Franz-Senn-Hütte Kl Horntal
+- Freilassing Bayern
+- GILLY SUR ISERE
+- GRAND BORNAND
+- GRANDE PAREI-NIVOSE
+- GUILLAUMES-OBS
+- Garmisch-Partenkirchen Bayern
+- Gossenkölle
+- Grainau-Eibsee Bayern
+- Kappl Sinsenergampen
+- Karlsbader Hütte
+- Kernhof-St. Aegyd am Neuwalde
+- Kirchdorf in Tirol
+- Kitzbüheler Horn Schneestation
+- Klagenfurt Flughafen
+- Krumbach
+- Kötschach-Mauthen
+- L Alpe d Huez 2350
+- LA CLUSAZ
+- LA MEIJE-NIVOSE
+- LA MOTTE SERVOLEX NOIRAY
+- LE GUA-NIVOSE
+- LE TOUR BALME
+- LUS L CROIX HTE
+- La Berarde
+- Langenneufnach-Unterrothan Bayern
+- Leibnitz-Wagna
+- Les Arcs
+- Les Saisies
+- MALJASSET_NIVO
+- MOUTIERS
+- Merbalm - Malga Merbe
+- Meribel Mottaret
+- Mittelberg
+- Murnau Bayern
+- München-Flughafen Bayern
+- Oberpframmern Bayern
+- Oberstdorf-Birgsau Bayern
+- Obervellach
+- Opfenbach Bayern
+- Osterzell Bayern
+- Oy-Mittelberg-Petersthal Bayern
+- PELLAFOL-CHANEAUX
+- Plaffeien
+- Plojen
+- Porzehütte
+- Proveis_Samerberg
+- Puitegg
+- REALLON _NIVO
+- Ramsau-Schwarzeck/Schmuck Bayern
+- Reit im Winkl (Kaiserweg) Bayern
+- SERRE CHE-CHANTEMERLE_NIVO
+- ST AUBAN
+- ST FIRMIN
+- ST-MARTIN-DE-VESUBIE-OBS
+- Schönenbach
+- Serfaus Masner
+- Siegsdorf-Höll Bayern
+- Sonntagsköpfl
+- Sonthofen (Flussmeisterstelle) Bayern
+- St.Anton am Arlberg
+- St.Michael im Lungau
+- Steingaden-Lauterbach Bayern
+- Timmelsalm
+- Tuxerjoch Schneestation
+- USINENS SA
+- VAL THORENS_SAPC
+- VAUJANY-NIVO
+- Valloire
+- Villard cote 2000
+- Wangen/Allgäu-Schwaderberg Baden-Württemberg
+- Weihenstephan-Dürnast Bayern
+- Wurmannsquick-Egelsberg Bayern
+- Zeilarn-Gumpersdorf Bayern
+- Zürich / Fluntern
+- Zürich / Kloten
+- Zürs
+donors_during_tune:
+- ABRIES_NIVO
+- AGNIERES-EN-DEVOLUY
+- AIGLETON-NIVOSE
+- ALBERTVILLE
+- ALBIEZ
+- ALLOS_SAPC
+- ALPE-D'HUEZ
+- ARBENT
+- ARCHAMPS
+- ARVIEUX LA CHALP
+- AURON_NIVO
+- AVRIEUX
+- AYZE
+- Aadorf / Tänikon
+- Abtenau
+- Ackernalm
+- Adelboden
+- Aigle
+- Aitrang Bayern
+- Alberschwende
+- Alpbach Wiedersberger Horn
+- Alplhütte
+- Altdorf
+- Altenrhein
+- Altmünster
+- Altshausen Baden-Württemberg
+- Altusried-Krugzell Bayern
+- Altusried-Muthmannshofen Bayern
+- Am Adamsberg (Hauptstation)
+- Amerang-Pfaffing Bayern
+- Andechs-Erling Bayern
+- Andelsbuch-Niedere
+- Anger-Stoißberg Bayern
+- Anras
+- Areches
+- Arriach
+- Aschau-Innerkoy Bayern
+- Aschau-Stein Bayern
+- Attenkam Bayern
+- Augsburg Bayern
+- Avoriaz
+- Aßling Bayern
+- BARCELONNETTE
+- BARREME
+- BEAUFORT-SUR-DORON
+- BESSANS-CLIM
+- BEUIL-OBS
+- BLOYE
+- BONNEVAL-NIVOSE
+- BONNEVILLE
+- BOURG ST MAURICE
+- BOZEL
+- Bad Bleiberg
+- Bad Ischl
+- Bad Radkersburg
+- Bad Vöslau
+- Balderschwang Bayern
+- Bartiges Bödele
+- Bayersoien, Bad Bayern
+- Benediktbeuern Bayern
+- Berchtesgaden Bayern
+- Berliner Hütte
+- Bernbeuren-Prachtsried Bayern
+- Bernex
+- Berwang
+- Bessans
+- Biberbach-Markt Bayern
+- Bischofshofen
+- Bischofswiesen-Loipl Bayern
+- Blatten, Lötschental
+- Bobingen Bayern
+- Boden
+- Bonneval sur Arc
+- Boos Bayern
+- Brannenburg-Degerndorf Bayern
+- Breitenbrunn-Fürbuch Bayern
+- Breiter Grieskogel Schneestation
+- Bruck an der Mur
+- Buchenberg-Kreuzthal Bayern
+- Burgau Bayern
+- Burgbach Mauchele
+- Burgkirchen/Alz-Höresham Bayern
+- CEILLAC_NIVO
+- CESSY
+- CHAMONIX
+- CHAMONIX-OBS
+- CHAMROUSSE
+- CHAPELLE-EN-VALGAUDEMAR
+- CHATEL NIVO
+- CLUSAZ (LA)
+- COL AGNEL-NIVOSE
+- COL DE PORTE-NIVOSE
+- COL-DES-SAISIES
+- COMBLOUX
+- COUBLEVIE
+- Cham
+- Chamrousse Niverolles
+- Chasseral
+- Chieming Bayern
+- Château-d'Oex
+- Col des Mosses
+- Conny Alm
+- Courchevel
+- DIVONNE ZA
+- Damüls-Herte
+- Dasing Bayern
+- Davos
+- Dawinalpe
+- Deisenhofen, Kreis München Bayern
+- Dellach
+- Deutschlandsberg
+- Dias
+- Diedamskopf_automatisch
+- Dietenheim Baden-Württemberg
+- Dießen/Ammersee-Dettenschwang Bayern
+- Disentis
+- Dornbirn
+- Dresdner Hütte
+- Döllach
+- EMBRUN
+- EVIAN
+- EVIAN SA
+- Eberfing Bayern
+- Ebersberg-Halbing Bayern
+- Ebnat-Kappel
+- Eggenthal-Grub Bayern
+- Egling/Paar-Heinrichshofen Bayern
+- Eisenstadt Nordost
+- Eissee
+- Elferspitze Schneestation
+- Endorf, Bad-Jolling Bayern
+- Engelberg
+- Eppishausen-Haselbach Bayern
+- Erdweg Bayern
+- Erfurter Hütte
+- Eselrücken
+- Ettal-Graswang Bayern
+- Ettal-Linderhof Bayern
+- Eurasburg-Freienried Bayern
+- Fadner Alm - Malga Fadner
+- Fahrenzhausen Bayern
+- Feistritz ob Bleiburg
+- Feldkirchen-Westerham-Lenzmühle Bayern
+- Fieberbrunn-Reckmoos
+- Finning (Windachspeicher) Bayern
+- Fiss Schneestation
+- Flaine
+- Flattnitz
+- Flintsbach/Inn-Asten Bayern
+- Forchach
+- Forstinning Bayern
+- Frauenneuharting Bayern
+- Fraxern
+- Freistadt
+- Fresach
+- Freschenhaus
+- Fribourg / Grangeneuve
+- Friedrichshafen-Unterraderach Baden-Württemberg
+- Friesach
+- Fürstenfeld
+- GAILLARD
+- GAP BAYARD_NIVO
+- GETS (LES)
+- GIRON
+- GLANDAGE_SAPC
+- GROISY_SAPC
+- Gallreideschrofen
+- Galzig
+- Gampberg Schneestation
+- Gangkofen (Kläranlage) Bayern
+- Gargellen-Schafberg
+- Gaschurn
+- Gaudeamushütte
+- Genève / Cointrin
+- Geretsried (Feuerwehrschule) Bayern
+- Giggijoch
+- Gilching Bayern
+- Ginzling
+- Gleisdorf
+- Goldried Kessel
+- Gottmadingen Baden-Württemberg
+- Grassau Bayern
+- Graun_Schöneben
+- Graz Straßgang
+- Grenchen
+- Gresse en Vercors
+- Gries
+- Gries im Sellrain
+- Griesneralm LWD
+- Grimsel Hospiz
+- Grünboden - Prati di Plan
+- Gsies_Pfinnalm
+- Görisried Bayern
+- Gösgen
+- Gütsch, Andermatt
+- HAUTELUCE
+- Haag, Kreis Mühldorf Bayern
+- Hahnenkamm-Reutte
+- Hahnenkamm-Sonnenrast
+- Haimhausen-Ottershausen Bayern
+- Halblech-Trauchgau Bayern
+- Hall bei Admont
+- Heiligenberg/Tübingen Baden-Württemberg
+- Hermagor
+- Hindelang, Bad-Gailenberg Bayern
+- Hintere Fundusalm
+- Hintertux
+- Hochgasser Schneestation
+- Hochhörndl
+- Hohe Munde Gipfel
+- Hohenpeißenberg Bayern
+- Hollenbach/Bayern-Schönbach Bayern
+- Holzgau
+- Holzkirchen Bayern
+- Hörnli
+- Immenstadt Bayern
+- Immenstadt-Reute Bayern
+- Innsbruck-Seegrube
+- Inzell Bayern
+- Inzinger Alm-Kaserboden
+- Isen-Westach Bayern
+- JARRIER
+- JAUSIERS-ST ANNE
+- Jachenau-Obernach Bayern
+- Jachenau-Tannern Bayern
+- Jamtalhütte Schneestation
+- Jenbach
+- Jettenbach Bayern
+- Johannestal
+- Jöchlspitze
+- Kaisers
+- Kals
+- Kanzelhöhe
+- Kappl Spidur Alpe
+- Karerpass
+- Kaufbeuren-Oberbeuren Bayern
+- Kempten Bayern
+- Kiefersfelden-Gach Bayern
+- Kirchberg in Tirol
+- Kißlegg Baden-Württemberg
+- Kißlegg, Kr. Ravensburg Baden-Württemberg
+- Kleiner Beil
+- Kloangruebes
+- Konstanz Baden-Württemberg
+- Koppigen
+- Krailling Bayern
+- Kreuth Bayern
+- Kreuth-Glashütte Bayern
+- Kronburg Bayern
+- Krün Bayern
+- Kufstein
+- Köflach
+- Kölnbreinsperre
+- Kössen
+- L Alpe d Huez (SATA)
+- L Alpe du Grand Serre
+- LA FLEGERE
+- LA FOUX D ALLOS_NIVO
+- LA GIETTAZ
+- LA GRAVE 3200 M
+- LA LECHERE_SAPC
+- LA MURE-ARGENS
+- LA PESSE
+- LA PLAGNE_SAPC
+- LE BOUCHET_SAPC
+- LE CHEVRIL-NIVOSE
+- LE MAS
+- LE PLENEY
+- LE TOUR
+- LE TOUR NIVO
+- LES CARROZ KEDEUSAZ
+- LES CONTAMINES MONTJOIE
+- LES ECRINS-NIVOSE
+- LES ORRES
+- LES ROCHILLES-NIVOSE
+- LESCHERAINES
+- La Chaux-de-Fonds
+- La Dôle
+- La Norma
+- La Plagne
+- Ladis-Neuegg
+- Ladurns
+- Lampsenspitze Schneestation
+- Landeck
+- Landeggalm
+- Langen am Arlberg
+- Langenbach Bayern
+- Lans en Vercors
+- Laterns-Gapfohl
+- Laufen/Obb.-Lebenau Bayern
+- Le Collet d Allevard
+- Le Corbier
+- Le Grand Bornand
+- Le Moléson
+- Leckfeldalm
+- Lenggries (Sylvenstein) Bayern
+- Lenggries Bayern
+- Lenggries-Vorderriss Bayern
+- Les 2 ALpes Jandri
+- Les 2 Alpes (Toura NE)
+- Les Aillons (Margeriaz)
+- Les Charbonnières
+- Les Menuires
+- Leutasch-Kirchplatzl
+- Leutkirch-Herlazhofen Baden-Württemberg
+- Lienz
+- Linz Hörsching Flughafen
+- Loassattel
+- Locarno / Monti
+- Lofer Ort
+- Lognan
+- Loibl Tunnel
+- Lottstetten-Nack Baden-Württemberg
+- Lämmerbichlalm
+- MEAILLES_SAPC
+- MIJOUX
+- MILLEFONTS-NIVOSE
+- MONTCLAR_SAPC
+- MONTGENEVRE_NIVO
+- MONTMELIAN
+- MOTTE-MOLINES
+- MOULINET
+- Madritsch - Madriccio
+- Magadino / Cadenazzo
+- Mallnitz
+- Maria Waldrast
+- Mariazell/St.Sebastian Flugfeld
+- Marienbergalm
+- Marklkofen (Betriebsstelle Vilstalsee) Bayern
+- Marktoberdorf-Sulzschneid Bayern
+- Marktschellenberg Bayern
+- Mattighofen
+- Mayrhofen
+- Medrig-Zeinis
+- Melag_Pratznerberg
+- Mering (Bauhof) Bayern
+- Miesbach (Kläranlage) Bayern
+- Mindelheim Bayern
+- Mittenwald-Buckelwiesen Bayern
+- Mittenwald/Isartal Bayern
+- Mittersill
+- Mondsee
+- Moorenweis-Grunertshofen Bayern
+- Mooslandl
+- Muttekopfhütte
+- Mühldorf Bayern
+- Mühleberg
+- München-Kirchtrudering Bayern
+- München-Stadt Bayern
+- NOVALAISE
+- NOVEL
+- Nachtweide
+- Nandlstadt Bayern
+- Napf
+- Nassereither Alm
+- Nauders
+- Nauders Ganderbild
+- Navis-Kerschbaumsiedlung
+- Nenzinger Himmel
+- Nesselwang Bayern
+- Neumarkt
+- Neumarkt-Sankt Veit Bayern
+- Neustift/Milders
+- Norderberg Alm
+- Nyon / Changins
+- ORCIERES-NIVOSE
+- Oberammergau Bayern
+- Oberbergkirchen-Schörging Bayern
+- Obere Firstalm/Schlierseer Berge Bayern
+- Obergurgl
+- Oberhaching-Laufzorn Bayern
+- Oberhaus Alm
+- Oberreute Bayern
+- Oberschleißheim Bayern
+- Oberstaufen-Thalkirchdorf Bayern
+- Oberstdorf Bayern
+- Oberstdorf-Rohrmoos Bayern
+- Obersöchering-Reinthal Bayern
+- Obertilliach
+- Obing-Ilzham Bayern
+- Ochsenhausen Baden-Württemberg
+- Oetz
+- Olmet
+- Orelle
+- Oron
+- Owingen Baden-Württemberg
+- Oy-Mittelberg/Grüntensee Bayern
+- PARPAILLON-NIVOSE
+- PEIRA CAVA
+- PEISEY NANCROIX
+- PELVOUX
+- PELVOUX ST ANTOINE_NIVO
+- PEONE
+- PERS JUSSY
+- PLAN AIGUILLE TMB
+- PRALOGNAN LA VANOISE
+- PUY-ST-VINCENT
+- Palling-Lampertsham Bayern
+- Payerne
+- Pens_Tramintal
+- Pfarrkirchen Bayern
+- Pfullendorf Baden-Württemberg
+- Piding Bayern
+- Piotta
+- Piz la Ila - Piz la Ila
+- Pleiskirchen Bayern
+- Pocking Bayern
+- Poschiavo / Robbia
+- Prags_Rossalm
+- Pralognan
+- Predigberg Schneestation
+- Preitenegg
+- RESTEFOND-NIVOSE
+- RISOUL_NIVO
+- RISTOLAS
+- Radolfzell Baden-Württemberg
+- Radstadt-Tandalier
+- Raintalquelle
+- Ramsau am Dachstein
+- Ratschings_Wasserfaller_Alm
+- Raubling-Pfraundorf Bayern
+- Raucheggen Schneestation
+- Rauthhütte
+- Reichersberg
+- Reit im Winkl-Groißenbach Bayern
+- Rettenbachferner
+- Rettenberg-Kranzegg Bayern
+- Reutte
+- Ried im Innkreis
+- Rifflsee Talstation Grubenkopf
+- Rossbänke - Pian dei Cavalli
+- Rosskar
+- Rot an der Rot-Buch Baden-Württemberg
+- Rotthalmünster Bayern
+- Rotwandwiesen - Prati di Croda Rossa
+- Ruhpolding (Kläranlage) Bayern
+- Ruhpolding-Seehaus Bayern
+- Rünenberg
+- SALLANCHES
+- SEDERON
+- SERRE CHE-LE MONETIER_NIVO
+- SERVOZ
+- ST CHRISTOPHE EN OISANS_SAPC
+- ST FRANCOIS LONG
+- ST JEAN-ST-NICOLAS
+- ST SIGISMOND
+- ST VERAN RM
+- ST-ALBAN DES HURTIERES
+- ST-BAUDILLE
+- ST-CHRISTOPHE LA-GROTTE
+- ST-JEAN DE MAURIENNE
+- ST-MARTIN DE BELLEVILLE
+- ST-MARTIN DE LA PORTE
+- ST-MICHEL DE MAURIENNE LE THYL
+- ST-PIERRE DE SOUCY
+- ST-PIERRE-D'ENTREMONT
+- ST-SORLIN D'ARVES
+- STE FOY STATION
+- STE MARIE CUINES
+- SUPER DEVOLUY_NIVO2
+- SUTRIEU
+- Saalbach
+- Salzburg Flughafen
+- Samedan
+- Samerberg-Geisenkam Bayern
+- Saulgau, Bad-Bolstern Baden-Württemberg
+- Saulgau,Bad Baden-Württemberg
+- Schlehdorf Bayern
+- Schlicker Alm
+- Schnals_Finail
+- Schnals_Teufelsegg
+- Schoppernau
+- Schussenried, Bad-Olzreute Baden-Württemberg
+- Schwabmünchen Bayern
+- Schwangau-Horn (LfW) Bayern
+- Schwechat Flughafen
+- Schwendi-Kleinschafhausen Baden-Württemberg
+- Schöckl
+- Schönau am Königssee Bayern
+- Schöneben - Belpiano
+- Schüpfheim
+- Scuol
+- Seckau
+- See im Paznaun
+- Seefeld
+- Seegrube
+- Seiser_Alm_Zallinger
+- Seythenex
+- Sibratsgfäll-Rindberg
+- Siegsdorf-Maria Eck Bayern
+- Sigmarszell-Zeisertsweiler Bayern
+- Silberspitze Schneemessung
+- Simbach/Inn Bayern
+- Sonnbergalm
+- Sonnblick
+- Sontheim Bayern
+- Speicherteich Axamer Lizum
+- Speicherteich Panorama
+- Spiss
+- Spittal an der Drau
+- St Christophe
+- St Pierre de Chartreuse
+- St Veit Zischke
+- St.Jakob im Defereggental
+- St.Pölten Landhaus
+- St.Veit an der Glan
+- Stabio
+- Starnberg Bayern
+- Steinberg am Rofan
+- Steinkirchen-Hofstarring Bayern
+- Stolzalpe
+- Sulden_Madritsch
+- Sulzberg
+- Sölden
+- Söll
+- TALLARD
+- TENCIN
+- TERMIGNON-CLIM
+- TIGNES_SAPC
+- TREVIGNIN
+- TURRIERS
+- Tacherting-Spreit Bayern
+- Tannheim
+- Teisendorf Bayern
+- Teisendorf-Babing Bayern
+- Teisendorf-Neukirchen (Wildberg) Bayern
+- Telfes im Stubai
+- Tittmoning Bayern
+- Traunreut-Frühling Bayern
+- Trostberg Bayern
+- Tschagguns
+- Tüßling Bayern
+- Ulrichen
+- Umhausen
+- Unterföhring Bayern
+- Unterjoch Bayern
+- Unterreit-Wagenstatt Bayern
+- Untrasried-Maneberg Bayern
+- Uttenweiler-Ahlen Baden-Württemberg
+- Utting-Achselschwang Bayern
+- VACHERESSE
+- VACHERESSE AUXI
+- VAL D'ISERE JOS
+- VALBERG_NIVO
+- VALENSOLE
+- VALLORCINE_PLAN-DROIT
+- VAUJANY_DOUBLE
+- VAULX
+- VILLAR D'ARENE
+- VILLAR LOUBIERE
+- VILLAR ST PANCRACE
+- VILLARD-DE-LANS
+- Val Cenis (La Berche)
+- Val Frejus
+- Val d Isere Joseray
+- Valdafur
+- Valmorel
+- Vevey / Corseaux
+- Vilgertshofen-Pflugdorf Bayern
+- Villach Stadt
+- Villars-Tiercelin
+- Vilsbiburg Bayern
+- Vilsheim-Münchsdorf Bayern
+- Vorderegg
+- Völkermarkt-Goldbrunnhof
+- Waakirchen-Demmelberg Bayern
+- Waging am See Bayern
+- Walchsee-Kaiserwinkl
+- Waldsee, Bad-Dinnenried Baden-Württemberg
+- Wandspitze Schneestation
+- Warth
+- Wattener Lizum
+- Weiler-Simmerberg Bayern
+- Weingarten, Kr. Ravensburg Baden-Württemberg
+- Weisssee LWD
+- Wertach-Bichel Bayern
+- Wessobrunn-Puitl Bayern
+- Westendorf, Kreis Ostallgäu Bayern
+- Wien Donaufeld
+- Wien Hohe Warte
+- Wilde Krimml
+- Windischgarsten
+- Wolfegg (Neckenfurt) Baden-Württemberg
+- Wädenswil
+- Wörishofen, Bad-Kirchdorf Bayern
+- Zermatt
+- Zettersfeld
+- Zugspitze Bayern
+- Zürs-Hexenboden
+- Zürs-Madloch
+- Äußere Rendlalpe
+n_tune_targets: 104
+n_donors_during_tune: 591
+variable: snow_height
+fraction: 0.15
+seed: 43
+n_elev_bins: 4
+spatial_step_deg: 0.75
+note: Fixed 15 % of the pool; held out only during hyperparameter scoring

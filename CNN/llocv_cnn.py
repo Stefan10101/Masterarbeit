@@ -170,7 +170,7 @@ def main():
 
     for var in variables:
         panel = load_panel(cfg, var)
-        panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
+        panel, held_out, pool, qsplits = apply_evaluation_protocol(panel, variable=var)
         if str(var).lower().startswith("rh"):
             panel = attach_temperature(panel, cfg)
         if str(var).lower().startswith("wind"):

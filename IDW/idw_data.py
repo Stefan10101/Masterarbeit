@@ -75,10 +75,11 @@ def load_stations(domain: str = "full") -> pd.DataFrame:
     return stations[["station_name", "x", "y", "elev"]].drop_duplicates("station_name")
 
 
-def load_panel(cfg: dict, var: str) -> pd.DataFrame:
+def load_panel(cfg: dict, var: str, hours=None) -> pd.DataFrame:
     """Station panel for one variable, restricted to config start/end.
 
     Columns: station_name, time, value, x, y, elev.
+    hours: passed to apply_hour_cut (None = default 00/06/12/18 on half_hourly, 'all' = every timestamp).
     """
     from paths import get_aggregated_data_path
     from shared.time_res import apply_hour_cut
@@ -109,7 +110,7 @@ def load_panel(cfg: dict, var: str) -> pd.DataFrame:
         .dropna(subset=["x", "y", "elev", var])
         .rename(columns={var: "value"})
     )
-    panel, _ = apply_hour_cut(panel, time_res)
+    panel, _ = apply_hour_cut(panel, time_res, hours)
     return panel.reset_index(drop=True)
 
 

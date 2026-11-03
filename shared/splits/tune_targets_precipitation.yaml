@@ -1,0 +1,874 @@
+tune_targets:
+- ALBERTVILLE
+- AYZE
+- Abtenau
+- Achenkirch-Mühleggerköpfl
+- Aigle
+- "AjdovÅ¡Ä\x8Dina - Dolenje"
+- Andau
+- Anras
+- Arosa
+- BERTHEMONT-LES-BAINS_SAPC
+- BOZEL
+- Bad Goisern
+- Berliner Hütte
+- Bernbeuren-Prachtsried Bayern
+- Bludenz
+- "Bovec - letaliÅ¡Ä\x8De"
+- Bregenz
+- Brentenjoch
+- Bruckneudorf
+- Brunn am Gebirge
+- Buchs / Aarau
+- Bukovski Vrh
+- CERCIER
+- CHATEL
+- COL-DES-SAISIES
+- Chur
+- DAUPHIN
+- DIGNE LES BAINS
+- Damüls-Uga
+- Dießen/Ammersee-Dettenschwang Bayern
+- EMBRUN
+- Einsiedeln
+- FECLAZ_SAPC
+- Feistritz ob Bleiburg
+- Franzensfeste_Grasstein
+- Gangkofen (Kläranlage) Bayern
+- Gapfohl
+- Gaudeamushütte
+- Gilching Bayern
+- Giswil
+- Graz Straßgang
+- Gries
+- Gschnitz
+- Güssing
+- Güttingen
+- Hard (Rotachstrasse)
+- Hintertux
+- Hohe Wand/Hochkogelhaus
+- Holzgau
+- Hopfgarten i.Def.
+- Horn Wasserwerk
+- Imst-Obermarkter Alm
+- Jamtalhütte
+- Jauerling
+- Jenesien
+- Jochberg
+- Johannestal
+- Kalser Tauernhaus
+- Kiefersfelden-Gach Bayern
+- Klösterle
+- "KoÄ\x8Devje"
+- Kranj
+- Krumbach
+- Kubed
+- Körbersee
+- LE SAIX
+- LUS L CROIX HTE
+- Le Moléson
+- Lenggries-Vorderriss Bayern
+- Lisca
+- Loassattel
+- MEAILLES_SAPC
+- Mariazell/St.Sebastian Flugfeld
+- Marienberg
+- Micheldorf
+- Mindelheim Bayern
+- Mittenwald-Buckelwiesen Bayern
+- Mottec
+- NOVALAISE
+- Neuchâtel
+- Oberhaching-Laufzorn Bayern
+- Oberriet / Kriessern
+- Obertauern
+- Pflersch
+- Plaffeien
+- Platt_in_Passeier
+- Pleiskirchen Bayern
+- Pottschach
+- Präbichl
+- Prägraten
+- RISTOLAS
+- Rauris
+- Reichenau an der Rax
+- Reutte
+- Rot an der Rot-Buch Baden-Württemberg
+- Rünenberg
+- SALLANCHES
+- SAMOENS
+- SOSPEL
+- ST AUBAN
+- Samedan
+- Scharnitz
+- Schönenbach
+- See im Paznaun
+- Sexten
+- Simbach/Inn Bayern
+- Sion
+- St.Anton am Arlberg
+- Stabio
+- Stockerau
+- Sölden
+- Söll
+- Tamsweg
+- Teisendorf-Neukirchen (Wildberg) Bayern
+- Trebnje
+- Ulrichen
+- Umhausen
+- Unterach am Attersee
+- Untergschwend/Österreich Tirol
+- VAL THORENS_SAPC
+- VALJOUFFREY_SAPC
+- Vaduz
+- "VrÅ¡iÄ\x8D"
+- Waizenkirchen
+- Walmendinger Horn
+- Weyer
+- Wädenswil
+- Wörgl
+- Zgornja Kapla
+- Zusmarshausen Bayern
+donors_during_tune:
+- AGNIERES-EN-DEVOLUY
+- ALLOS_SAPC
+- ALPE-D'HUEZ
+- ARBENT
+- ARVIEUX
+- ASCROS
+- AUTRANS
+- AVRIEUX
+- Aadorf / Tänikon
+- Achenkirch
+- Achenkirch/Österreich Tirol
+- Ackernalm
+- Acquarossa / Comprovasco
+- Adelboden
+- Aflenz
+- Alpeilquelle
+- Altenrhein
+- Altmünster
+- Altshausen Baden-Württemberg
+- Altusried-Muthmannshofen Bayern
+- Am Nachtsöllberg
+- Amerang-Pfaffing Bayern
+- Ammerwald
+- Ampfing Bayern
+- Amstetten
+- Andeer
+- Andelsbuch-Niedere
+- Andermatt
+- Antholz_Obertal
+- Arriach
+- Aschau-Stein Bayern
+- Aspach
+- Attenkam Bayern
+- Auer
+- Augsburg Bayern
+- Aulendorf-Blönried Baden-Württemberg
+- Axams
+- Aßling Bayern
+- BARREME
+- BAYONS
+- BEAUFORT-SUR-DORON
+- BELLEGARDE
+- BELLEY
+- BESSANS-CLIM
+- BEUIL-OBS
+- BLOYE
+- BONNEVILLE
+- BOURG ST MAURICE
+- BOURGET EN HUILE_SAPC
+- Baad
+- Babno Polje
+- Bad Aussee
+- Bad Eisenkappel
+- Bad Gleichenberg
+- Bad Ischl
+- Bad Mitterndorf
+- Bad Radkersburg
+- Bad Ragaz
+- Bad Vöslau
+- Bad Zell
+- Balderschwang Bayern
+- Bergün / Latsch
+- Bern / Zollikofen
+- Berndorf
+- Bernstein
+- Beznau
+- Biasca
+- Biberach an der Riß-Bergerhausen Baden-Württemberg
+- Binn
+- Bischofszell / Sitterdorf
+- Bivio
+- Bière
+- Boden
+- "Bohinjska Ä\x8CeÅ¡njica"
+- BorÅ¡t pri Gorenji Vasi
+- Bozen
+- Brandenberg
+- Brannenburg-Degerndorf Bayern
+- Branzoll
+- Bregenz (ARA)
+- Bregenz (Altreuteweg)
+- Breitenbrunn-Fürbuch Bayern
+- Brienz
+- Brixen_-_Vahrn
+- Bruck an der Mur
+- Bruneck
+- Buchloe Bayern
+- Buffalora
+- Bullet / La Frétaz
+- Bärnkopf
+- Bödele
+- Bürs (Pumpwerk)
+- CHALLES LES EAUX
+- CHAMBERY-AIX
+- CHAMONIX
+- CHAMROUSSE
+- CHAPELLE SAINT-MAURICE_SAPC
+- CHICHILIANNE_SAPC
+- COMBLOUX
+- CONTAMINE-SUR- ARVE
+- COUBLEVIE
+- CRAN-GEVRIER
+- Celje Medlog
+- "Cerklje - letaliÅ¡Ä\x8De"
+- CerkniÅ¡ko jezero
+- Cevio
+- Cham
+- Chasseral
+- Chaumont
+- Chieming Bayern
+- Chiemsee-Herrenchiemsee Bayern
+- Château-d'Oex
+- Cimetta
+- Col des Mosses
+- Conny Alm
+- Corvara
+- Courtelary
+- Cressier
+- DIVONNE ZA
+- DOUVAINE SA
+- Dachstein-Schladminger Gletscher
+- Dasing Bayern
+- Davos
+- Deggenhausertal-Azenweiler Baden-Württemberg
+- Dellach
+- Deutschlandsberg
+- Deutschnofen
+- Diedamskopf_automatisch
+- Diedorf/Schwaben-Biburg Bayern
+- Dietenheim Baden-Württemberg
+- Disentis
+- Dorfen (Kläranlage) Bayern
+- Dresdner Hütte
+- Döllach
+- Eberfing Bayern
+- Ebersberg-Halbing Bayern
+- Ebnat-Kappel
+- Ebnit
+- Eggenfelden Bayern
+- Egolzwil
+- Eisenstadt Nordost
+- Elm
+- Elmen-Martinau
+- Essener-Rostocker-Hütte
+- Eurasburg/Obb.-Beuerberg Bayern
+- Evionnaz
+- Evolène / Villa
+- FAVERGES
+- FLAINE_SAPC
+- Fahrenzhausen Bayern
+- Falkenberg,Kr.Rottal-Inn Bayern
+- Faschina
+- Feilnbach,Bad Bayern
+- Felbertauerntunnel-Süd
+- Feldbach
+- Feldkirch
+- Feldkirchen
+- Feldkirchen-Westerham-Lenzmühle Bayern
+- Ferlach
+- Feuerkogel
+- Fieberbrunn-Reckmoos
+- Finning (Windachspeicher) Bayern
+- Finsing Bayern
+- Fischbach
+- Fiss
+- Flattnitz
+- Flirsch
+- Forchach
+- Formarinalpe
+- Frastanz_Hofen
+- Fraxern
+- Freistadt
+- Fresach
+- Freschenhaus
+- Friedrichshafen-Unterraderach Baden-Württemberg
+- Friesach
+- Frutigen
+- Fussach
+- Fürstenfeld
+- GAILLARD
+- GAP
+- GIEZ
+- GLANDAGE_SAPC
+- GRENOBLE - LVD
+- GRENOBLE-CEA-RADOME
+- GRESSE
+- GROISY_SAPC
+- GUILLAUMES-OBS
+- Gaissau
+- Galtür
+- Galzig
+- Gargazon
+- Gargellen-Schafberg
+- Garmisch-Partenkirchen (Kanker) Bayern
+- Garmisch-Partenkirchen Bayern
+- Garmisch-Partenkirchen-Griesen Bayern
+- Gars am Kamp
+- Gaschurn
+- "GaÄ\x8Dnik"
+- Genève / Cointrin
+- Geretsried (Feuerwehrschule) Bayern
+- Gersau
+- Ginzling
+- Gisingen_NLV
+- Glarus
+- Gleisdorf
+- Golling
+- Gottmadingen Baden-Württemberg
+- Grassau Bayern
+- Graz Lendplatz Feuerwehrturm
+- Graz Universität
+- Grenchen
+- Gries im Sellrain
+- Grimsel Hospiz
+- Grono
+- Groß-Enzersdorf
+- Großarltal
+- Grächen
+- Gschlössboden
+- Gutenstein Mariahilfberg
+- Göschenen
+- Gösgen
+- HRASTNIK
+- Hahnenkamm-Reutte
+- Hahnenkamm-Sonnenrast
+- Haimhausen-Ottershausen Bayern
+- Haiming
+- Hall bei Admont
+- Hall in Tirol
+- Hartberg
+- Hermagor
+- Hintere Fundusalm
+- Hinterhornbach/Österreich Tirol
+- Hintermartell
+- Hinterriß
+- Hirschenkogel
+- Hittisau
+- Hochberg
+- Hochfilzen
+- Hochjoch
+- Hohenpeißenberg Bayern
+- Holzkirchen Bayern
+- Hopfgarten i.Brt.
+- Hornstein
+- "HoÄ\x8Dko Pohorje"
+- Hörbranz
+- Hörnli
+- ISOLA 2000
+- Ilanz
+- Ilirska Bistrica - Koseze
+- Immenstadt-Reute Bayern
+- Imst
+- Innerlaterns
+- Innsbruck Flughafen
+- Innsbruck Universität
+- Innsbruck-Seegrube
+- Interlaken
+- Inzell Bayern
+- Inzing
+- Inzinger Alm-Kaserboden
+- Irdning-Gumpenstein
+- Irschenberg-Kasthub Bayern
+- Ischgl-Idalpe
+- Isen-Westach Bayern
+- JARSY_SAPC
+- JAUSIERS-ST ANNE
+- Jachenau-Obernach Bayern
+- Jachenau-Tannern Bayern
+- Jachenau/Tölzer Land Bayern
+- Jeruzalem
+- Jerzens-Ritzenried
+- Jungholz
+- "JurÅ¡Ä\x8De"
+- Jöchlspitze
+- Kals-Figol
+- Kaltern_Oberplanitzing
+- Kalwang
+- Kanin
+- Kanzelhöhe
+- Kapfenberg Flugfeld
+- Kappl-Oberbichl
+- Karerpass
+- Karlsbader Hütte
+- Kartitsch
+- Katschberg
+- Kaufbeuren-Oberbeuren Bayern
+- Kelchsau
+- Kirchberg in Tirol
+- Kitzbühel
+- Klagenfurt Flughafen
+- Klagenfurt/HTL1-Lastenstraße
+- Klausen-Leopoldsdorf
+- Kleinzicken
+- Kloangruebes
+- KneÅ¡ke Ravne
+- Kohlgrub, Bad (Rosshof) Bayern
+- Kolm-Saigurn
+- Kolomansberg
+- Koper
+- Koppigen
+- Korensko sedlo
+- Kornat
+- "KoroÅ¡Ä\x8De"
+- Kraftisried Bayern
+- Kremsmünster
+- Kreuth Bayern
+- Kreuth-Glashütte Bayern
+- Krimml
+- Krn
+- Kroisegg
+- Krün Bayern
+- Kum
+- Köflach
+- Kössen
+- Kötschach-Mauthen
+- LA FAURIE
+- LA LECHERE_SAPC
+- LA MOTTE DU CAIRE
+- LA MURE- RADOME
+- LA MURE-ARGENS
+- LA NORMA_SAPC
+- LA PESSE
+- LA PLAGNE_SAPC
+- LANTOSQUE_SAPC
+- LARAGNE MONTEGLIN
+- LAVALDENS
+- LE BOUCHET_SAPC
+- LE CASTELLET
+- LE GRAND-BORNAND
+- LE TOUR
+- LESCHERAINES
+- LEVENS
+- La Chaux-de-Fonds
+- La Dôle
+- Laa an der Thaya Kläranlage
+- Lachen / Galgenen
+- Landeck
+- Landeggalm
+- Lanersbach
+- Langen am Arlberg
+- Langenlebarn
+- Langenlois
+- Langnau i.E.
+- Langtaleregghütte
+- Langtaufers_Grub
+- Laufen/Obb.-Lebenau Bayern
+- Lauterach_NLV
+- Laßnitzhöhe
+- Leckfeldalm
+- Leibnitz-Wagna
+- Leiser Berge
+- Lenggries (Sylvenstein) Bayern
+- Leoben
+- Les Charbonnières
+- Les Marécottes
+- Leutasch-Kirchplatzl
+- Leutkirch-Herlazhofen Baden-Württemberg
+- Lienz
+- Lilienfeld-Tarschberg
+- Linz Hörsching Flughafen
+- Linz Stadt
+- Litija
+- Ljubljana BeÅ¾igrad
+- "Ljubljana KleÄ\x8De"
+- Locarno / Monti
+- Lofer Ort
+- Loferer Alm
+- Logarska Dolina
+- Loibl Tunnel
+- Ludesch_Gartenweg
+- Lustenau
+- Lutzmannsburg
+- Luzern
+- MEYTHET
+- MIJOUX
+- MONT CENIS
+- MONT DU CHAT
+- MONTCLAR_SAPC
+- MONTGELLAFREY
+- MOULINET
+- Magadino / Cadenazzo
+- Maisach-Galgen Bayern
+- Mallnitz
+- Maria Waldrast
+- Mariapfarr
+- "Maribor - letaliÅ¡Ä\x8De"
+- Maribor Vrbanski plato
+- Marienbergalm
+- "MarinÄ\x8Da vas"
+- Marktoberdorf-Sulzschneid Bayern
+- Marktschellenberg Bayern
+- Marsens
+- Martin-Busch-Hütte
+- Mathod
+- Matrei am Brenner
+- Matrei in Osttirol
+- Mattighofen
+- Mattsee
+- Mayrhofen
+- Mehring, Kr. Altötting-Niederholz Bayern
+- Meiringen
+- Melk
+- Memmingen Bayern
+- Meran
+- Mering (Bauhof) Bayern
+- Meschach
+- Miesbach (Kläranlage) Bayern
+- Millstatt
+- Mistelbach
+- Mittelberg
+- Mittenwald/Isartal Bayern
+- Mittersill
+- Mondsee
+- Montana
+- Monte Generoso
+- Mooslandl
+- Murau
+- Murska Sobota
+- Mönichkirchen
+- Mühldorf Bayern
+- Mühleberg
+- Mühlwald
+- München-Flughafen Bayern
+- München-Stadt Bayern
+- Mürzzuschlag
+- NOVEL
+- Namlos
+- Nandlstadt Bayern
+- Nanos
+- Napf
+- Nassereith
+- Naturns
+- Nauders
+- Navis-Kerschbaumsiedlung
+- Nenzinger Himmel
+- Neuburg/Kammel-Langenhaslach Bayern
+- Neudorf bei Landsee
+- Neumarkt
+- Neumarkt-Sankt Veit Bayern
+- Neusiedl am See
+- Neustift/Milders
+- Niederndorferberg
+- Nikolsdorf
+- Nova Gorica
+- Nova vas (Bloke)
+- Nyon / Changins
+- OPPEDETTE-SPC
+- ORNON
+- OTLICA - EKOLOSKA
+- Oberammergau Bayern
+- Obergurgl
+- Oberhaus Alm
+- Oberndorf an der Melk
+- Oberreute Bayern
+- Oberschleißheim Bayern
+- Oberstaufen-Thalkirchdorf Bayern
+- Oberstdorf Bayern
+- Oberstdorf-Rohrmoos Bayern
+- Obertilliach
+- Obervellach
+- Obervintl
+- Oberwölz
+- Oetz
+- Oron
+- Osilnica
+- Ottobeuren Bayern
+- Oy-Mittelberg-Petersthal Bayern
+- Oy-Mittelberg/Grüntensee Bayern
+- PEIRA CAVA
+- PEONE
+- PERS JUSSY
+- PIPAY_SAPC
+- PUGET THENIERS_SAPC
+- Pabneukirchen
+- Passo del Bernina
+- Patscherkofel
+- "PavliÄ\x8Devo sedlo"
+- Payerne
+- Pfarrkirchen Bayern
+- Pfelders
+- Pfitsch_St._Jakob
+- Pfunders
+- Pfänder
+- Piding Bayern
+- Pilatus
+- Piotta
+- Pitschedboden
+- Pitztaler Gletscher
+- Piz Corvatsch
+- Piz Martegnas
+- Planina pod Golico
+- Pocking Bayern
+- "PodÄ\x8Detrtek"
+- "PortoroÅ¾ - letaliÅ¡Ä\x8De"
+- Poschiavo / Robbia
+- Postojna
+- Poysdorf-Ost
+- Predel
+- Preitenegg
+- Prettau
+- Prutz
+- Ptuj
+- Puchberg am Schneeberg
+- Pully
+- Pörtschach
+- REPOSOIR (LE)
+- ROISSARD
+- Radein
+- Radstadt-Tandalier
+- Raintalquelle
+- Ramsau am Dachstein
+- Ramsau-Schwarzeck/Schmuck Bayern
+- Ranshofen Braunau
+- Ravne na KoroÅ¡kem
+- Rax Seilbahnbergstation
+- Rechnitz
+- Reichenau am Mühlkreis
+- Reichersberg
+- Rein_in_Taufers
+- Retz
+- Ridnaun
+- Ried im Innkreis
+- Ritten_Siffian
+- Robièi
+- RogaÅ¡ka Slatina
+- Rohrspitz
+- Rosenheim Bayern
+- Rottenmann
+- Rudno polje (Pokljuka)
+- Ruhpolding (Kläranlage) Bayern
+- S. Bernardino
+- SAINT-HILAIRE_SAPC
+- SALIGNAC-SPC
+- SERVOZ
+- SISTERON
+- ST AUPRE_SAPC
+- ST CHRISTOPHE EN OISANS_SAPC
+- ST CREPIN
+- ST ETIENNE DE TINEE_SAPC
+- ST JEAN D'ARVES_SAPC
+- ST JEAN-ST-NICOLAS
+- ST JURS
+- ST MARTIN D'ENTRAUNES_SAPC
+- ST MICHEL MAUR_SAPC
+- ST SIGISMOND
+- ST-ALBAN DES HURTIERES
+- ST-BAUDILLE
+- ST-CHRISTOPHE LA-GROTTE
+- ST-MARTIN DE LA PORTE
+- ST-MICHEL DE MAURIENNE LE THYL
+- ST-PIERRE-D'ENTREMONT
+- ST-SORLIN D'ARVES
+- STE MARIE CUINES
+- SUTRIEU
+- Saalbach
+- Salen-Reutenen
+- Salurn
+- Salzburg Flughafen
+- Salzburg Freisaal
+- Samerberg-Geisenkam Bayern
+- Sand_i.T._Mühlen
+- Sarnthein
+- Sattel, SZ
+- Saulgau,Bad Baden-Württemberg
+- Schlanders
+- Schlehdorf Bayern
+- Schmirn
+- Schmittenhöhe
+- Schnals_Vernagt
+- Schneefernerhaus Bayern
+- Schröcken
+- Schwangau-Horn (LfW) Bayern
+- Schwechat Flughafen
+- Schäftlarn-Kloster Schäftlarn Bayern
+- Schöckl
+- Schönau am Königssee Bayern
+- Schöngrabern
+- Schüpfheim
+- Scuol
+- Seckau
+- Seefeld
+- Seeg (Kläranlage) Bayern
+- Segl-Maria
+- Seibersdorf
+- Seiser_Alm_Zallinger
+- Semmering
+- Sibratsgfäll-Rindberg
+- Siegsdorf-Höll Bayern
+- Sigmarszell-Zeisertsweiler Bayern
+- Silbertal
+- Simplon-Dorf
+- Slavnik
+- Slovenske Konjice
+- Sonnblick
+- Sonntag-Stein (Lift)
+- Sonthofen (Flussmeisterstelle) Bayern
+- Sotinski breg
+- Spiss
+- St. Gallen
+- St.Andrä im Lavanttal
+- St.Jakob im Defereggental
+- St.Johann im Pongau
+- St.Johann im Walde
+- St.Johann in Tirol-Almdorf
+- St.Leonhard im Pitztal
+- St.Martin i.G.
+- St.Michael im Lungau
+- St.Pölten Landhaus
+- St.Veit an der Glan
+- St.Wolfgang
+- St._Magdalena_in_Gsies
+- St._Martin_in_Passeier
+- St._Valentin_a.d._Haide
+- St._Veit_in_Prags
+- Stams
+- Steinach am Brenner
+- Steinberg am Rofan
+- Steingaden-Lauterbach Bayern
+- Steinkirchen-Hofstarring Bayern
+- Sterzing
+- Sulzberg
+- Sveti Trije Kralji (Pohorje)
+- "SviÅ¡Ä\x8Daki"
+- TALLARD
+- TENCIN
+- TERMIGNON-CLIM
+- THEYS
+- THONON-INRAE
+- Tacherting-Spreit Bayern
+- Talkaser Alm
+- Tannheim
+- Tannheim-Kienzen
+- Tatre
+- Taufers_i.M.
+- Teisendorf Bayern
+- Teisendorf-Babing Bayern
+- Telfes im Stubai
+- Telfs-Zimmerbergklamm
+- Terenten
+- Thaurer Alm
+- Thun
+- Timmelsjoch
+- Toblach
+- "Tolmin - VolÄ\x8De"
+- Topol pri Medvodah
+- Traunreut-Stein Bayern
+- Treibach-Althofen
+- Trojane - Limovce
+- Trostberg Bayern
+- Tschagguns
+- Tüßling Bayern
+- USINENS SA
+- Ulten_Weißbrunn
+- Unterjoch Bayern
+- UrÅ¡lja gora
+- Utting-Achselschwang Bayern
+- VAL D'ISERE JOS
+- VALENSOLE
+- VALLORCINE
+- VEYNES
+- VILLAR D'ARENE
+- VILLAR ST PANCRACE
+- VILLARD-DE-LANS
+- Valbella
+- Vals
+- Vedrijan
+- "Velike LaÅ¡Ä\x8De"
+- Vent
+- Vevey / Corseaux
+- Vicosoprano
+- Vilgertshofen-Pflugdorf Bayern
+- Villach Stadt
+- Villacher Alpe
+- Villars-Tiercelin
+- Villnöss
+- Vils
+- Vilsbiburg Bayern
+- Vilsheim-Münchsdorf Bayern
+- Virgen
+- Visp
+- Vogt Baden-Württemberg
+- Vrhnika
+- Vöcklabruck
+- Völkermarkt-Goldbrunnhof
+- Waakirchen-Demmelberg Bayern
+- Wachtberg bei Steyr
+- Waging am See Bayern
+- Waidhofen an der Ybbs
+- Waidring
+- Walchsee-Kaiserwinkl
+- Wallische Hütte
+- Warth
+- Wattener Lizum
+- Weihenstephan-Dürnast Bayern
+- Weiler-Simmerberg Bayern
+- Weingarten, Kr. Ravensburg Baden-Württemberg
+- Weitensfeld
+- Weißensee-Gatschach
+- Wels-Schleißheim
+- Welsberg
+- Welschnofen
+- Wielenbach (Demollstr.) Bayern
+- Wien Donaufeld
+- Wien Hohe Warte
+- Wien Innere Stadt
+- Wien Jubiläumswarte
+- Wien Stammersdorf
+- Wien Unterlaa
+- Wiener Neustadt Flugplatz
+- Wieselburg
+- Wilde Krimml
+- Windischgarsten
+- Wolkenstein
+- Wolkersdorf
+- Wurmannsquick-Egelsberg Bayern
+- Wynau
+- Wörterberg
+- Zavodnje
+- Zelenica
+- Zell am See
+- Zermatt
+- Zettersfeld
+- Zgornja Radovna
+- Zürich / Affoltern
+- Zürich / Fluntern
+- Zürich / Kloten
+- Zürs
+- Zürs-Hexenboden
+- Zürs-Madloch
+- Å ebreljski vrh
+- "Å kocjan (DivaÄ\x8Da)"
+- Å marje pri JelÅ¡ah
+- Å martno pri Slovenj Gradcu
+- Å½iri
+n_tune_targets: 130
+n_donors_during_tune: 734
+variable: precipitation
+fraction: 0.15
+seed: 43
+n_elev_bins: 4
+spatial_step_deg: 0.75
+note: Fixed 15 % of the pool; held out only during hyperparameter scoring

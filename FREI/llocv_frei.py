@@ -198,7 +198,7 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
     - Otherwise (tuning): score pool stations on the requested splits,
       with a station fold so targets are not also donors.
     """
-    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
+    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel, variable=var)
     # Protocol uses 'tune'; older callers still say 'dev'.
     def _canon(names):
         return {"tune" if n == "dev" else n for n in names}
@@ -247,19 +247,29 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
         groups = [(t, q, panel[(~panel["is_heldout"]) & (panel["time"] == t)])
                   for t, q in targets.groupby("time", sort=False)]
     else:
-        # Pool stations on the tune quarters. Score one station fold at a time
-        # so the targets are not also the donors (that gave RMSE = 0) and the
-        # donors are not empty (that gave n = 0).
-        names = score_df["station_name"].unique()
-        folds = station_folds(names, max(int(n_folds), 2), seed=22)
-        groups = []
-        for fold in folds:
-            fset = set(fold)
-            targets = score_df[score_df["station_name"].isin(fset)]
+        # Hyperparameter stage: score the fixed tune-targets (if tagged).
+        # Fall back to station folds only if the column is absent.
+        if "is_tune_target" in panel.columns and panel["is_tune_target"].any():
+            targets = score_df[score_df["is_tune_target"]]
+            groups = []
             for t, q in targets.groupby("time", sort=False):
-                don = panel[(~panel["is_heldout"]) & (panel["time"] == t)
-                            & (~panel["station_name"].isin(fset))]
-                groups.append((t, q, don))
+                don = panel[(~panel["is_heldout"]) & (~panel["is_tune_target"])
+                            & (panel["time"] == t)]
+                if len(don) and len(q):
+                    groups.append((t, q, don))
+        else:
+            # Legacy station-fold path
+            names = score_df["station_name"].unique()
+            folds = station_folds(names, max(int(n_folds), 2), seed=22)
+            groups = []
+            for fold in folds:
+                fset = set(fold)
+                targets = score_df[score_df["station_name"].isin(fset)]
+                for t, q in targets.groupby("time", sort=False):
+                    don = panel[(~panel["is_heldout"]) & (panel["time"] == t)
+                                & (~panel["station_name"].isin(fset))]
+                    if len(don) and len(q):
+                        groups.append((t, q, don))
 
     if jobs == 1:
         results = [_score_group(don, q) for _t, q, don in tqdm(groups, desc=f"  {var}", leave=False)]

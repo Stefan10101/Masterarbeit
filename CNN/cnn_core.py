@@ -42,8 +42,9 @@ class CNNConfig:
     lr: float = 1e-3
     weight_decay: float = 1e-4
     batch_times: int = 4
-    tile_size: int = 64
-    tiles_per_batch: int = 64
+    tile_size: int = 128
+    tiles_per_batch: int = 8
+    accum_steps: int = 4
     seed: int = 22
     device: str = "auto"
     use_amp: bool = True
@@ -183,7 +184,9 @@ def idw_fz_raster(sx, sy, sz, sv, gx, gy, elev, p=1.5, Fz=1.0, k=40, exclude_sel
     txy = np.column_stack([xx.ravel(), yy.ravel()])
     tz = elev.ravel()
     tree = cKDTree(np.column_stack([sx, sy]))
-    kk = int(min(max(k, 1), len(sv)))
+    # Leave one slot for the self-drop when exclude_self, otherwise the
+    # shift d[:, 1:kk+1] is one column short when k >= n_stations.
+    kk = int(min(max(k, 1), len(sv) - (1 if exclude_self and len(sv) > 1 else 0)))
     qk = min(kk + 1, len(sv)) if exclude_self else kk
     # A station sits in a cell, not on its centre. Half a cell (~707 m at 1 km)
     # is the geographic equivalent of the old exact pixel match.

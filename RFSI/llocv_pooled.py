@@ -151,7 +151,7 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
 
     valid = load_panel(cfg, var)
     # Override old year-based split with the shared quarter protocol
-    valid, held_out, pool, qsplits = apply_evaluation_protocol(valid)
+    valid, held_out, pool, qsplits = apply_evaluation_protocol(valid, variable=var)
     if str(var).lower().startswith("rh") and rh_t_mode in ("predicted", "observed"):
         try:
             from Kriging.kriging_data import attach_temperature

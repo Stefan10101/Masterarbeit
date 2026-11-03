@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""DEV search for CNN: base_ch × mask_frac. Trains a U-Net per combo."""
+"""
+CNN hyperparameter search.
+
+Protocol (pooled): fit on full pool × train quarters;
+score fixed tune-targets on tune quarters (donors exclude them only at prediction).
+Trains a U-Net per (n_levels, base_ch) combo.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +25,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_tuned_params_path, get_master_grid_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
-from shared.splits.evaluation_sets import prepare_for_tuning
+from shared.splits.evaluation_sets import apply_evaluation_protocol
 from cnn_core import grid_terrain, two_step_var
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, attach_temperature, attach_station_tpi
 from train_cnn import cfg_to_cnn, train_one
@@ -70,29 +76,26 @@ def main():
     variables = [args.variable] if args.variable else block.get("variables_to_process", ["temp_mean"])
     for var in variables:
         panel = load_panel(cfg, var)
-        # Fit on pool x train. Score a seeded subset of pool x tune.
+        # Fit on full pool × train. Score fixed tune-targets on tune.
         # train_one reads split=='dev' as the score set.
         from shared.splits.evaluation_sets import apply_evaluation_protocol
-        tagged, _, _, _ = apply_evaluation_protocol(panel)
+        tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
         train = tagged[(~tagged["is_heldout"]) & (tagged["split"] == "train")].copy()
-        pool = tagged.loc[~tagged["is_heldout"], "station_name"].drop_duplicates().to_numpy()
-        pool = np.array(pool, copy=True)  # shuffle requires a writable array
-        rng = np.random.default_rng(int(block.get("seed", 22)))
-        rng.shuffle(pool)
-        targets = set(pool[:max(1, int(round(len(pool) * 0.2)))])
-        dev = tagged[(~tagged["is_heldout"]) & (tagged["split"] == "tune")
-                     & (tagged["station_name"].isin(targets))].copy()
+        # Score set: fixed tune-targets on tune quarters
+        dev = tagged[(~tagged["is_heldout"]) & tagged["is_tune_target"]
+                     & (tagged["split"] == "tune")].copy()
         dev["split"] = "dev"
-        pool_tune = tagged[(~tagged["is_heldout"]) & (tagged["split"] == "tune")
-                           & (~tagged["station_name"].isin(targets))].copy()
+        # Temporary donors for prediction: pool minus tune-targets
+        pool_tune = tagged[(~tagged["is_heldout"]) & (~tagged["is_tune_target"])
+                           & (tagged["split"] == "tune")].copy()
         pool_tune["split"] = "pool"
         panel = pd.concat([train, dev, pool_tune], ignore_index=True)
         if str(var).lower().startswith("rh"):
             panel = attach_temperature(panel, cfg)
         if str(var).lower().startswith("wind"):
             panel = attach_station_tpi(panel)
-        print(f"{var} train rows={len(train)} dev rows={len(dev)} "
-              f"dev times={dev['time'].nunique()}", flush=True)
+        print(f"{var} train rows={len(train)} tune-target rows={len(dev)} "
+              f"tune times={dev['time'].nunique()}", flush=True)
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         trace = precip_trace(cfg, time_res, var)
         best = None

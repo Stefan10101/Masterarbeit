@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Train Localized SMACNP for one variable (daily first).
+"""Train Localized SMACNP for one variable.
 
-Loads panel, computes features, splits held-out stations and random days,
-fits PaperScaler on the training pool, trains with on-the-grid context
-sampling, early-stops on validation days, and saves the checkpoint.
+Protocol (pooled): fit on full pool × train quarters;
+early-stop on fixed tune-targets × tune quarters
+(context excludes the tune-targets).
+Saves the checkpoint.
 """
 
 from __future__ import annotations
@@ -30,7 +31,12 @@ from smacnp_data import (
 )
 from smacnp_core import SMACNP, gaussian_nll, two_step_loss
 from paths import get_smacnp_model_path
-from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of
+from shared.splits.evaluation_sets import (
+    load_holdout,
+    load_quarter_splits,
+    load_tune_targets,
+    quarter_of,
+)
 
 
 def set_seed(seed: int):
@@ -180,10 +186,14 @@ def main():
     df = df.merge(stations[["station_name"] + [c for c in feat_cols if c not in ("x", "y")]], on="station_name", how="left")
 
     station_names = df["station_name"].unique()
-    held_out, pool = load_holdout()
+    held_out, pool = load_holdout(variable=var)
+    tune_targets, _ = load_tune_targets(variable=var)
     train_stations = np.array([s for s in station_names if s in set(pool)])
     held_stations = np.array([s for s in station_names if s in set(held_out)])
-    print(f"train stations={len(train_stations)}  held-out={len(held_stations)}")
+    # Temporary donors for validation: pool minus the fixed tune-targets
+    val_context = np.array([s for s in train_stations if s not in set(tune_targets)])
+    print(f"train stations={len(train_stations)}  held-out={len(held_stations)}  "
+          f"tune-targets={len(tune_targets)}  val-context={len(val_context)}")
 
     # Wet-fraction gate on the training pool (profile: on if wet in (0.2, 0.8); snow always)
     if two_step:
@@ -220,8 +230,9 @@ def main():
     print(f"train days={len(train_days)}  val days={len(val_days)}")
     print("Precomputing day tensors...")
     train_tensors = precompute_days(train_days, df, feat_cols, y_scaler, train_stations, cfg)
-    # Validation excludes context stations so early-stopping sees pure interpolation loss
-    val_tensors = precompute_days(val_days, df, feat_cols, y_scaler, train_stations, cfg, on_grid=False)
+    # Validation: context = donors (pool minus tune-targets), targets = the rest
+    # (on_grid=False so early-stopping sees pure interpolation on the tune-targets)
+    val_tensors = precompute_days(val_days, df, feat_cols, y_scaler, val_context, cfg, on_grid=False)
     print(f"train tensors={len(train_tensors)}  val tensors={len(val_tensors)}")
 
     model = build_model(cfg, len(feat_cols), two_step).to(device)
@@ -269,13 +280,4 @@ def main():
                 print(f"early stop at epoch {epoch}")
                 break
 
-    print(f"best val={best_val:.4f}  saved to {ckpt_path}")
-    if history:
-        import pandas as pd
-        curve = ckpt_path.with_name(f"{var}_{cfg['time_resolution']}_curve.csv")
-        pd.DataFrame(history).to_csv(curve, index=False)
-        print(f"wrote {curve}  ({len(history)} epochs)")
-
-
-if __name__ == "__main__":
-    main()
+    print

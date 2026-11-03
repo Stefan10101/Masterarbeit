@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""DEV search for GAM formulas. Parallel over cells."""
+"""
+GAM hyperparameter search.
+
+Protocol (per-timestamp): train + tune quarters, score on the fixed
+tune-targets (donors exclude those targets during scoring).
+Parallel over formula / n_splines / tau cells.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +28,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs
-from shared.splits.evaluation_sets import prepare_for_tuning
+from shared.splits.evaluation_sets import apply_evaluation_protocol
 from gam_data import (
     attach_pack_terrain,
     attach_temperature,
@@ -111,7 +117,7 @@ def main():
     for var in variables:
         panel = load_panel(cfg, var)
         from shared.splits.evaluation_sets import apply_evaluation_protocol
-        tagged, _, _, _ = apply_evaluation_protocol(panel)
+        tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
         panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
         if args.max_times and panel["time"].nunique() > args.max_times:
             rng = np.random.default_rng(int(block.get("seed", 22)))
@@ -132,7 +138,9 @@ def main():
         jobs = cap_jobs(jobs, len(panel))
         print(var, "rows", len(panel), "times", panel["time"].nunique(),
               "splits", panel.groupby("split").size().to_dict(),
-              "months", months, "hours", hours, "folds", n_folds, "jobs", jobs, flush=True)
+              "tune-targets", int(panel["is_tune_target"].sum()),
+              "months", months, "hours", hours, "folds", n_folds, "jobs", jobs,
+              flush=True)
         if args.quick:
             formulas = [block.get("formula", "te_xy_s_elev")]
             ns_list = [block.get("n_splines", 10)]

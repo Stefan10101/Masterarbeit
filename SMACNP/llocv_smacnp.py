@@ -133,7 +133,7 @@ def main():
     df = feat_scaler.transform(df)
 
     station_names = df["station_name"].unique()
-    held_out, pool = load_holdout()
+    held_out, pool = load_holdout(variable=var)
     train_stations = np.array([s for s in station_names if s in set(pool)])
     held_stations = np.array([s for s in station_names if s in set(held_out)])
     print(f"evaluating on {len(held_stations)} held-out stations")

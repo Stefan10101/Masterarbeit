@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Tune pooled RFSI hyperparameters on DEV medoid months.
+Tune pooled RFSI hyperparameters.
 
-Search space from config.yaml (n_obs_list, rf_tunable).
-Score: 5-fold station CV on the pooled medoid-month panel.
-Writes RFSI/Output/cluster_params/{res}/pooled/{var}_pooled_params.yaml
+Protocol (pooled): fit on full pool × train quarters;
+score fixed tune-targets on tune quarters (donors exclude them only at prediction).
+Writes RFSI/Output/.../{var}_pooled_params.yaml and the search CSV.
 """
 
 from __future__ import annotations
@@ -153,23 +153,16 @@ def load_medoid_times(cfg, var, cluster_method: str):
     return pd.DatetimeIndex(dev_ts).unique()
 
 
-def _tune_targets(panel, seed=22, frac=0.2):
-    """Seeded subset of pool stations used as the tune score targets."""
-    pool = panel.loc[~panel["is_heldout"], "station_name"].drop_duplicates().to_numpy()
-    pool = np.array(pool, copy=True)  # shuffle requires a writable array
-    rng = np.random.default_rng(seed)
-    rng.shuffle(pool)
-    n = max(1, int(round(len(pool) * frac)))
-    return set(pool[:n])
-
-
 def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
                 min_stations, n_splits, primary, rh_t_mode="none", two_step=False, tau_wet=0.5):
-    """Fit on pool x train quarters, score a seeded subset of pool x tune."""
-    targets = _tune_targets(panel)
+    """Fit on full pool × train; score fixed tune-targets on tune quarters.
+    Donors exclude tune-targets only at prediction time."""
+    if "is_tune_target" not in panel.columns or not panel["is_tune_target"].any():
+        return None
+    # Fit includes the tune-target stations (they re-enter after selection)
     train = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
-    hold = panel[(~panel["is_heldout"]) & (panel["split"] == "tune")
-                 & (panel["station_name"].isin(targets))]
+    hold = panel[(~panel["is_heldout"]) & panel["is_tune_target"]
+                 & (panel["split"] == "tune")]
     if train["station_name"].nunique() < min_stations or hold.empty:
         return None
     X_train, _ = prepare_covariates(
@@ -192,8 +185,9 @@ def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
         return None
     obs_all, pred_all = [], []
     for t, hold_t in hold.groupby("time", sort=False):
-        others = panel[(~panel["is_heldout"]) & (panel["time"] == t)
-                       & (~panel["station_name"].isin(targets))]
+        # Temporary donors: exclude the tune-targets
+        others = panel[(~panel["is_heldout"]) & (~panel["is_tune_target"])
+                       & (panel["time"] == t)]
         if len(others) < max(min_stations, n_obs):
             continue
         X_hold, _ = prepare_covariates(
@@ -239,7 +233,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
 
     panel = load_panel(cfg, var)
     from shared.splits.evaluation_sets import apply_evaluation_protocol
-    tagged, _, _, _ = apply_evaluation_protocol(panel)
+    tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
     panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
     rh_t_mode = str(rfsi.get("rh_t_mode", "none"))
     two_step = bool(rfsi.get("two_step", True)) and two_step_var(var)
@@ -260,7 +254,8 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
         panel = panel[panel["time"].isin(keep)].copy()
     print(f"  tune panel: {len(panel):,} rows | "
           f"{panel['station_name'].nunique()} stations | "
-          f"{panel['time'].nunique()} times")
+          f"{panel['time'].nunique()} times | "
+          f"tune-targets={int(panel['is_tune_target'].sum())}")
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
 
     X_all, encoder = prepare_covariates(
@@ -303,7 +298,8 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
                 seen.add(g)
                 uniq.append(g)
         grid = uniq
-    print(f"  search {len(grid)} combos, fit on train, score pool x tune, "
+    print(f"  search {len(grid)} combos, fit on train × pool, "
+          f"score fixed tune-targets × tune", flush=True)
           f"{n_est_search} trees")
     rows = []
     t0 = time.perf_counter()

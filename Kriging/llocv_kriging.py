@@ -108,7 +108,7 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
                  months=None, rh_t_mode=None, pack=None, jobs: int = 1):
     panel = load_panel(cfg, var)
     # Shared protocol
-    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
+    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel, variable=var)
     if months:
         panel = subset_times(panel, months)
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))

@@ -90,7 +90,7 @@ def station_folds(names: list[str], n_folds: int, seed: int) -> list[list[str]]:
 
 def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations):
     panel = attach_extras(load_panel(cfg, var), cfg, var)
-    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel)
+    panel, held_out, pool, qsplits = apply_evaluation_protocol(panel, variable=var)
     if cfg.get("_quick_months"):
         panel = subset_times(panel, cfg["_quick_months"])
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))

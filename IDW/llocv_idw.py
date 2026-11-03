@@ -34,7 +34,7 @@ from shared.splits.evaluation_sets import (
     load_quarter_splits,
     quarter_of,
 )
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res
 
 
 TRACE = {
@@ -74,14 +74,13 @@ def main():
     p.add_argument("--jobs", type=int, default=None,
                    help="parallel test timestamps (default: half the logical cores)")
     add_time_res_arg(p)
+    add_hours_arg(p)
     args = p.parse_args()
 
     cfg = load_config()
     time_res = apply_time_res(cfg, args)
     domain = cfg.get("domain", {}).get("preset", "full")
     variables = args.variables or ["temp_mean", "precip_sum"]
-    held_out, _pool = load_holdout()
-    held_set = set(held_out)
     test_quarters = set(load_quarter_splits()["test"])
 
     print("=" * 72)
@@ -89,8 +88,10 @@ def main():
     print("=" * 72)
 
     for var in variables:
-        panel = load_panel(cfg, var)
-        tagged, _, _, _ = apply_evaluation_protocol(panel)
+        held_out, _pool = load_holdout(variable=var)
+        held_set = set(held_out)
+        panel = load_panel(cfg, var, hours=getattr(args, 'hours', None))
+        tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
         if args.months and args.months != "all":
             from idw_data import subset_times
             tagged = subset_times(tagged, args.months)

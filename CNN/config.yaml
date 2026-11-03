@@ -44,11 +44,12 @@ cnn:
   lr: 0.001
   weight_decay: 0.0001
   batch_times: 2          # leave headroom so the desktop GPU is not starved
-  tile_size: 64
-  tiles_per_batch: 64
+  tile_size: 128
+  tiles_per_batch: 8
+  accum_steps: 4
   seed: 22
   device: "auto"
-  use_amp: true
+  use_amp: false
   n_folds: 5
 
   search:

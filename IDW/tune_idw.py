@@ -3,9 +3,9 @@
 Global IDW hyperparameter tune.
 
 One (p, Fz, k) per variable.
-Score: pool stations at tune quarters only (prepare_for_tuning drops held-out
-and test quarters; this script then keeps split=='dev').
-Proof runs: --max-times caps the tune timestamps (default 400).
+Protocol (per-timestamp): train + tune quarters, score on the fixed
+tune-targets (donors = pool minus those targets during scoring).
+Proof runs: --max-times caps the timestamps (default 400).
 
 Writes:
   Methods/IDW/Output/global_params/{time_res}/{var}_params.yaml
@@ -38,8 +38,13 @@ from idw_data import (
     load_panel,
     save_global_params,
 )
-from shared.splits.evaluation_sets import load_holdout, prepare_for_tuning
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.splits.evaluation_sets import (
+    apply_evaluation_protocol,
+    load_holdout,
+    load_tune_targets,
+    protocol_masks,
+)
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res
 
 
 TRACE = {
@@ -96,21 +101,38 @@ def _eval_combo(args):
     return {"p": p, "Fz": Fz, "k": k, **_score_one(field, p, Fz, k, tree, var, trace)}
 
 
-def optimize_field(field, param_grid, primary="rmse", n_jobs=1,
-                   show_progress=False, var: str = "", trace: float = 1.0):
+def _score_targets(donors, targets, p, Fz, k, var, trace):
+    """Score one (p, Fz, k) on fixed targets using donors (no LOO)."""
+    if len(donors) < 5 or len(targets) < 1:
+        return {"rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan, "n": 0}
+    from idw_core import interpolate_idw
+    tree = KDTree(donors[["x", "y"]].to_numpy())
+    pred = interpolate_idw(
+        station_values=donors["value"].to_numpy(),
+        station_coords=donors[["x", "y"]].to_numpy(),
+        station_elev=donors["elev"].to_numpy(),
+        target_coords=targets[["x", "y"]].to_numpy(),
+        target_elev=targets["elev"].to_numpy(),
+        tree=tree,
+        p=float(p), Fz=float(Fz), k=min(int(k), len(donors)),
+        var=var, trace=trace,
+    )
+    return compute_metrics(targets["value"].to_numpy(), pred)
+
+
+def optimize_on_targets(donors, targets, param_grid, primary="rmse", n_jobs=1,
+                        var: str = "", trace: float = 1.0):
     p_list = param_grid.get("p", [2.0])
     Fz_list = param_grid.get("Fz", [0.0, 0.5])
     k_list = param_grid.get("k_neighbors", [16])
-    tree = KDTree(field[["x", "y"]].to_numpy())
-    combos = [(field, p, Fz, k, tree, var, trace)
-              for p in p_list for Fz in Fz_list for k in k_list]
+    combos = [(p, Fz, k) for p in p_list for Fz in Fz_list for k in k_list]
+    def one(c):
+        p, Fz, k = c
+        return {"p": p, "Fz": Fz, "k": k, **_score_targets(donors, targets, p, Fz, k, var, trace)}
     if n_jobs == 1:
-        iterator = tqdm(combos, leave=False, desc="    combos") if show_progress else combos
-        results = [_eval_combo(c) for c in iterator]
+        results = [one(c) for c in combos]
     else:
-        results = Parallel(n_jobs=n_jobs, backend="threading")(
-            delayed(_eval_combo)(c) for c in combos
-        )
+        results = Parallel(n_jobs=n_jobs, backend="threading")(delayed(one)(c) for c in combos)
     df = pd.DataFrame(results)
     if df[primary].isna().all():
         return {"p": 2.0, "Fz": 0.5, "k": 16}, {"rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan}, df
@@ -136,6 +158,7 @@ def main():
     p.add_argument("--jobs", type=int, default=None,
                    help="threads over (p, Fz, k) combos (default: half the logical cores)")
     add_time_res_arg(p)
+    add_hours_arg(p)
     args = p.parse_args()
 
     cfg = load_config()
@@ -148,26 +171,32 @@ def main():
         "temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean",
     ]
 
-    held_out, _pool = load_holdout()
-    held_set = set(held_out)
-
     print("=" * 72)
     print(f"IDW global tune | {time_res} | vars={variables}")
+    print(f"  protocol: train+tune quarters, score fixed tune-targets")
     print("=" * 72)
 
     for var in variables:
-        panel = load_panel(cfg, var)
-        panel = prepare_for_tuning(panel)
-        # Tune quarters only. prepare_for_tuning remaps tune -> dev.
-        panel = panel[panel["split"] == "dev"].copy()
+        held_out, _pool = load_holdout(variable=var)
+        tune_targets, _ = load_tune_targets(variable=var)
+        held_set = set(held_out)
+        tt_set = set(tune_targets)
+        panel = load_panel(cfg, var, hours=getattr(args, 'hours', None))
+        tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
+        # Per-timestamp: train + tune quarters, drop held-out
+        panel = tagged[
+            (~tagged["is_heldout"])
+            & (tagged["split"].isin(["train", "tune"]))
+        ].copy()
         if args.months and args.months != "all":
             from idw_data import subset_times
             panel = subset_times(panel, args.months)
         trace = TRACE.get(var, {}).get(time_res, 1.0)
         two = two_step_var(var)
         print(f"  {var}  two_step={two}  trace={trace}  "
-              f"tune times={panel['time'].nunique()}  "
-              f"stations={panel['station_name'].nunique()}")
+              f"times={panel['time'].nunique()}  "
+              f"stations={panel['station_name'].nunique()}  "
+              f"tune-targets present={panel['is_tune_target'].sum()}")
 
         out_exists = (SCRIPT_DIR / "Output" / "global_params" / time_res / f"{var}_params.yaml")
         if out_exists.exists() and not args.force:
@@ -199,9 +228,13 @@ def main():
             field = build_field(panel, ts, min_stations, held_set)
             if field is None:
                 continue
-            best_params, best_scores, combo_df = optimize_field(
-                field, param_grid, primary=primary, n_jobs=n_jobs,
-                show_progress=(n_jobs == 1), var=var, trace=trace,
+            donors = field[~field["station_name"].isin(tt_set)]
+            targets = field[field["station_name"].isin(tt_set)]
+            if len(targets) < 1 or len(donors) < 5:
+                continue
+            best_params, best_scores, combo_df = optimize_on_targets(
+                donors, targets, param_grid, primary=primary, n_jobs=n_jobs,
+                var=var, trace=trace,
             )
             rows.append({**best_params, **best_scores, "time": str(ts)})
             combo_df = combo_df.copy()

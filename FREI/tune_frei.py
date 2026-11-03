@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""DEV search for Frei.
+"""
+Frei hyperparameter search.
 
-Default is coordinate descent on a seasonal-4 month cut so the full
-n_regions × shrink × k × across_w grid does not run first.
---mode grid restores the product search. --quick forces 2 folds + seasonal4 + coord.
+Protocol (per-timestamp): train + tune quarters, score on the fixed
+tune-targets (donors exclude those targets during scoring).
+Default is coordinate descent. --mode grid restores the product search.
+--quick forces 2 folds + seasonal4 + coord.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_frei_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs
-from shared.splits.evaluation_sets import prepare_for_tuning
+from shared.splits.evaluation_sets import apply_evaluation_protocol, load_tune_targets
 from frei_data import (
     attach_temperature,
     compute_block,
@@ -56,7 +58,7 @@ def _init(panel, cfg, packs, n_folds, var):
 def _eval_cell(nr, sh, k, aw):
     fcfg = cfg_to_frei(_CFG, {"n_regions": nr, "shrink": sh, "k": k, "across_w": aw})
     fcfg.select_metric = False
-    # Pool stations x tune quarters. Donors are the other pool stations.
+    # Score fixed tune-targets on train+tune; donors exclude them.
     pred = run_llocv(_PANEL, _VAR, fcfg, _N_FOLDS, {"train"}, {"tune"}, _PACKS.get(int(nr)))
     met = compute_metrics(pred["observed"], pred["predicted"])
     nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0
@@ -157,7 +159,7 @@ def main():
     for var in variables:
         panel = load_panel(cfg, var)
         from shared.splits.evaluation_sets import apply_evaluation_protocol
-        tagged, _, _, _ = apply_evaluation_protocol(panel)
+        tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
         # Pool stations only for the search. Drop the official held-out set.
         panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
         if args.max_times and panel["time"].nunique() > args.max_times:
@@ -179,6 +181,7 @@ def main():
         print(
             f"{var} rows={len(panel)} times={panel['time'].nunique()} "
             f"splits={panel.groupby('split').size().to_dict()} "
+            f"tune-targets={int(panel['is_tune_target'].sum())} "
             f"mode={mode} months={months} hours={hours} folds={n_folds} jobs={jobs}",
             flush=True,
         )
