@@ -44,7 +44,7 @@ gam:
   seed: 22
   n_folds: 5
   predict_tile: 50000
-  r_timeout: 600
+  r_timeout: 3600
   rh_t_mode: "predicted"
   wind_watershed: true
   n_regions: 6

@@ -29,7 +29,7 @@ def parse_args():
 
 def get_bbox_for_domain(cfg: dict, domain_name: str) -> tuple:
     domain_cfg = cfg.get("domain", {})
-    buffer_m = domain_cfg.get("buffer_m", 15000)
+    buffer_m = domain_cfg.get("buffer_m", 100000)
     custom_bbox = domain_cfg.get("custom_bbox", [100000, 275000, 395000, 400000])
     predefined = cfg.get("predefined_bboxes", {})
 

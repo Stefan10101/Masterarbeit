@@ -2,8 +2,8 @@
 """
 Per-timestamp GAM (mode A).
 
-Preferred solver: mgcv via fit_gam.R / predict_gam.R (REML).
-Fallback: numpy B-splines if R/mgcv is missing.
+Solver: mgcv bam (discrete) via fit_gam.R / predict_gam.R.
+No numpy fallback.
 
 Formulas searched on DEV:
   te_xy_s_elev   te(x,y)+s(elev)+terrain+CLC
@@ -149,7 +149,7 @@ class GAMInterpolator:
     def _fit_r(self, df: pd.DataFrame, family: str) -> bool:
         script = self._r_dir / self.cfg.fit_r
         if not script.exists() or not self._use_r:
-            return False
+            raise RuntimeError("Rscript or fit_gam.R not available")
         self.close()
         tmp = Path(tempfile.mkdtemp(prefix="gam_"))
         train = tmp / "train.parquet"
@@ -168,13 +168,14 @@ class GAMInterpolator:
             err = ""
             if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
                 err = exc.stderr[-500:]
-            print(f"  mgcv failed, numpy fallback: {type(exc).__name__} {err}", flush=True)
             shutil.rmtree(tmp, ignore_errors=True)
-            return False
+            raise RuntimeError(
+                f"mgcv fit failed ({type(exc).__name__}): {err}"
+            ) from exc
         model = out / "model.rds"
         if not model.exists():
             shutil.rmtree(tmp, ignore_errors=True)
-            return False
+            raise RuntimeError("mgcv fit produced no model.rds")
         self._r_model = model
         self._r_tmp = tmp
         return True
@@ -315,40 +316,17 @@ class GAMInterpolator:
             self._backend = "mgcv"
             self._family = family
             return self
-        self._fit_numpy(*self._fit_args, family=family)
-        return self
+        raise RuntimeError("mgcv fit returned without a model")
 
     def predict_raw(self, x, y, elev, clc=None, slope=None, sinasp=None, cosasp=None,
                     tmean=None) -> np.ndarray:
         if getattr(self, "_backend", None) == "mgcv":
             df = self._frame(x, y, elev, None, clc, slope, sinasp, cosasp, tmean=tmean)
             hat = self._predict_r(df)
-            if hat is not None:
-                return hat
-            if getattr(self, "_fit_args", None) is not None:
-                self._fit_numpy(*self._fit_args)
-            else:
-                self._backend = "numpy"
-        if not self._knots:
-            raise RuntimeError("GAM has no coefficients (mgcv predict failed and numpy was not fit)")
-        x = np.asarray(x, float)
-        n = x.size
-        out = np.empty(n)
-        tile = self.cfg.predict_tile
-        for i0 in range(0, n, tile):
-            sl = slice(i0, i0 + tile)
-            X, _ = self._design(
-                x[sl], np.asarray(y, float)[sl], np.asarray(elev, float)[sl],
-                None if clc is None else np.asarray(clc)[sl],
-                None if slope is None else np.asarray(slope, float)[sl],
-                None if sinasp is None else np.asarray(sinasp, float)[sl],
-                None if cosasp is None else np.asarray(cosasp, float)[sl],
-                fit=False,
-            )
-            out[sl] = X @ self._coef
-        if getattr(self, "_family", "gaussian") == "binomial":
-            out = 1.0 / (1.0 + np.exp(-np.clip(out, -20, 20)))
-        return out
+            if hat is None:
+                raise RuntimeError("mgcv predict failed")
+            return hat
+        raise RuntimeError("GAM has no mgcv model")
 
     def predict_timestamp(
         self, x, y, elev, values, xq, yq, zq,

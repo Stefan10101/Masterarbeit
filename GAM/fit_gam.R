@@ -78,7 +78,18 @@ fam <- switch(tolower(family_name),
 )
 
 form <- as.formula(paste("y ~", rhs))
-model <- mgcv::gam(form, data = df, family = fam, method = "REML")
+
+# bam + discrete is the scalable path for tensor smooths at station density.
+# Falls back to gam only if bam is unavailable or fails to start.
+ctrl <- mgcv::gam.control(maxit = 40)
+model <- tryCatch(
+  mgcv::bam(form, data = df, family = fam, method = "fREML",
+            discrete = TRUE, control = ctrl),
+  error = function(e) {
+    message("bam failed, falling back to gam: ", conditionMessage(e))
+    mgcv::gam(form, data = df, family = fam, method = "REML", control = ctrl)
+  }
+)
 
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 saveRDS(model, file.path(out_dir, "model.rds"))

@@ -94,7 +94,7 @@ def main():
 
     # Domain settings from config
     domain_cfg = cfg.get("domain", {})
-    buffer_m = domain_cfg.get("buffer_m", 15000)
+    buffer_m = domain_cfg.get("buffer_m", 100000)
     custom_bbox = domain_cfg.get("custom_bbox", [])
     predefined_bboxes = cfg.get("predefined_bboxes", {})
 

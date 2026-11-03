@@ -6,7 +6,7 @@ projected_crs: "EPSG:31287"
 resolutions_to_process: [1000]
 
 domain:
-  buffer_m: 15000
+  buffer_m: 100000
 
 predefined_bboxes:
   # Alpine Convention perimeter in EPSG:31287

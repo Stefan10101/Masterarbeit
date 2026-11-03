@@ -19,6 +19,7 @@ import time
 import traceback
 
 import numpy as np
+import pandas as pd
 import yaml
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -41,7 +42,7 @@ from gam_data import (
     subset_times,
 )
 from gam_core import two_step_var
-from llocv_gam import cfg_to_gam, run_llocv
+from llocv_gam import _score_one, build_score_payloads, cfg_to_gam
 
 _PANEL = None
 _CFG = None
@@ -162,41 +163,107 @@ def main():
         )
         for i, c in enumerate(cells, start=1):
             print(f"  queued {i}/{len(cells)} form={c[0]} ns={c[1]} tau={c[2]}", flush=True)
-        if jobs == 1:
-            _init(panel, cfg, n_folds, var)
-            results = [_eval_cell(*c) for c in cells]
-        else:
-            results = []
+        # One pool over (cell, timestamp). Same structure on every timescale.
+        work = []
+        for ci, (form, ns, tau) in enumerate(cells):
+            tr = precip_trace(cfg, cfg["time_resolution"], var)
+            gcfg = cfg_to_gam(cfg, {
+                "formula": form, "n_splines": ns, "tau_wet": tau, "trace": tr,
+            })
+            payloads = build_score_payloads(
+                panel, var, gcfg, n_folds, {"train"}, {"tune"},
+            )
             print(
-                f"workers={jobs}  (worker fold lines may appear late on Windows; "
-                f"DONE lines print as soon as a cell finishes)",
+                f"  cell {ci+1}/{len(cells)} form={form} ns={ns} tau={tau} "
+                f"timestamps={len(payloads)}",
                 flush=True,
             )
-            with ProcessPoolExecutor(
-                max_workers=jobs,
-                initializer=_init,
-                initargs=(panel, cfg, n_folds, var),
-            ) as ex:
-                futs = {ex.submit(_eval_cell, *c): c for c in cells}
-                n_left = len(futs)
-                for fut in as_completed(futs):
-                    cell = futs[fut]
-                    n_left -= 1
-                    try:
-                        row = fut.result()
-                    except Exception as exc:
+            for pl in payloads:
+                work.append((ci, pl))
+
+        results_parts = {ci: [] for ci in range(len(cells))}
+        t0 = {ci: time.time() for ci in range(len(cells))}
+        results = []
+
+        def _finish_cell(ci):
+            parts = results_parts[ci]
+            if not parts:
+                return None
+            pred = pd.concat(parts, ignore_index=True)
+            met = compute_metrics(pred["observed"], pred["predicted"])
+            form, ns, tau = cells[ci]
+            return {
+                "formula": form,
+                "n_splines": int(ns),
+                "tau_wet": float(tau),
+                "rmse": float(met["rmse"]),
+                "n": int(len(pred)),
+                "finite": int(np.isfinite(pred["predicted"]).sum()),
+                "sec": float(time.time() - t0[ci]),
+            }
+
+        if jobs == 1 or len(work) <= 1:
+            pending = {ci: sum(1 for c, _ in work if c == ci) for ci in range(len(cells))}
+            for ci, payload in work:
+                i, ts, nd, nq, part = _score_one(payload)
+                results_parts[ci].append(part)
+                pending[ci] -= 1
+                print(
+                    f"    cell {ci+1} [{i}/{payload[1]}] {ts} "
+                    f"donors={nd} targets={nq}  left_in_cell={pending[ci]}",
+                    flush=True,
+                )
+                if pending[ci] == 0:
+                    row = _finish_cell(ci)
+                    if row:
+                        results.append(row)
                         print(
-                            f"CELL FAILED form={cell[0]} ns={cell[1]} tau={cell[2]} "
-                            f"{type(exc).__name__}: {exc}  remaining={n_left}",
+                            f"DONE  form={row['formula']} ns={row['n_splines']} "
+                            f"tau={row['tau_wet']} RMSE={row['rmse']:.3f} "
+                            f"n={row['n']} finite={row['finite']} {row['sec']:.0f}s",
+                            flush=True,
+                        )
+        else:
+            print(
+                f"workers={jobs}  tasks={len(work)}  "
+                f"(one pool over cell x timestamp)",
+                flush=True,
+            )
+            with ProcessPoolExecutor(max_workers=jobs) as ex:
+                futs = {ex.submit(_score_one, pl): (ci, pl) for ci, pl in work}
+                pending = {
+                    ci: sum(1 for c, _ in work if c == ci)
+                    for ci in range(len(cells))
+                }
+                for fut in as_completed(futs):
+                    ci, payload = futs[fut]
+                    try:
+                        i, ts, nd, nq, part = fut.result()
+                    except Exception as exc:
+                        form, ns, tau = cells[ci]
+                        print(
+                            f"CELL FAILED form={form} ns={ns} tau={tau} "
+                            f"{type(exc).__name__}: {exc}",
                             flush=True,
                         )
                         raise
-                    results.append(row)
+                    results_parts[ci].append(part)
+                    pending[ci] -= 1
                     print(
-                        f"PARENT got form={row['formula']} ns={row['n_splines']} "
-                        f"RMSE={row['rmse']:.3f} {row.get('sec', 0):.0f}s  remaining={n_left}",
+                        f"    cell {ci+1} [{i}/{payload[1]}] {ts} "
+                        f"donors={nd} targets={nq}  left_in_cell={pending[ci]}",
                         flush=True,
                     )
+                    if pending[ci] == 0:
+                        row = _finish_cell(ci)
+                        if row:
+                            results.append(row)
+                            print(
+                                f"DONE  form={row['formula']} ns={row['n_splines']} "
+                                f"tau={row['tau_wet']} RMSE={row['rmse']:.3f} "
+                                f"n={row['n']} finite={row['finite']} {row['sec']:.0f}s",
+                                flush=True,
+                            )
         results.sort(key=lambda r: (r["formula"], r["n_splines"], r["tau_wet"]))
         best = None
         for row in results:
@@ -213,7 +280,6 @@ def main():
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(best, f)
         if results:
-            import pandas as pd
             sp = path.with_name(f"{var}_search.csv")
             pd.DataFrame(results).to_csv(sp, index=False)
             print(f"wrote {sp}  ({len(results)} trials)", flush=True)

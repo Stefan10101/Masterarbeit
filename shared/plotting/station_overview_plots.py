@@ -6,6 +6,11 @@ General station overview plots (all unique stations, not variable-specific).
 Uses QC/stations_overview.csv as the source of truth and the COP30 DEM
 for elevation differences. Map style matches overview_domain_map.py
 (blackscale DEM, Alpine Convention perimeter, no inset).
+
+Elevation classes (plots only): Valley < 1500 m (circle), Mountain >= 1500 m
+(triangle). Stations drawn with white fill and thin black border. Alpine
+perimeter in dark blue. Per-variable maps highlight held-out stations in
+solid orange. Legends include station counts and correct markers.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import rasterio
+import yaml
 from rasterio.enums import Resampling
 from rasterio.warp import reproject
 
@@ -34,20 +40,18 @@ from paths import DATA_ROOT, get_dem_path, get_metadata_path
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+ELEV_CUTOFF = 1500  # m; valley below, mountain at or above
 ELEV_BINS = [
-    ("Valley", 0, 800),
-    ("Mid-mountain", 800, 2000),
-    ("Mountain", 2000, 4500),
+    ("Valley", 0, ELEV_CUTOFF),
+    ("Mountain", ELEV_CUTOFF, 4500),
 ]
-MAP_CLASS_COLORS = {
-    "Valley": "#0346ff",
-    "Mid-mountain": "#028d09",
-    "Mountain": "#ffa600",
-}
+# Station style: white fill, thin black border
+MAP_FILL = "white"
+MAP_EDGE = "black"
+MAP_EDGE_LW = 0.45
 ELEV_MARKERS = {
     "Valley": "o",
-    "Mid-mountain": "^",
-    "Mountain": "p",
+    "Mountain": "^",
 }
 ELEV_HIST_BIN = 200
 
@@ -122,10 +126,7 @@ logger = logging.getLogger(__name__)
 def elev_class(h):
     if pd.isna(h):
         return None
-    for name, lo, hi in ELEV_BINS:
-        if lo <= h < hi:
-            return name
-    return None
+    return "Valley" if h < ELEV_CUTOFF else "Mountain"
 
 
 BUFFER_KM = 100
@@ -315,7 +316,7 @@ def _base_map(ax, peri, main_extent):
             cmap="gray_r", vmin=0, vmax=3200,
             transform=ccrs.PlateCarree(), zorder=1, interpolation="nearest",
         )
-    peri.plot(ax=ax, facecolor="none", edgecolor="#c0392b", linewidth=0.9,
+    peri.plot(ax=ax, facecolor="none", edgecolor="#1a365d", linewidth=0.9,
               transform=ccrs.PlateCarree(), zorder=5)
     ax.add_feature(cfeature.COASTLINE.with_scale("10m"), linewidth=0.3, edgecolor="0.4", zorder=3)
     ax.add_feature(cfeature.OCEAN.with_scale("10m"), facecolor="#e6f3ff", edgecolor="none", zorder=0)
@@ -372,16 +373,18 @@ def plot_station_map(stations: pd.DataFrame):
         sub = stations[stations["elev_class"] == name]
         if sub.empty:
             continue
+        n = len(sub)
         ax.scatter(
             sub["lon"], sub["lat"],
-            marker=ELEV_MARKERS[name], s=14, c=MAP_CLASS_COLORS[name],
-            edgecolors="white", linewidths=0.25,
+            marker=ELEV_MARKERS[name], s=14, c=MAP_FILL,
+            edgecolors=MAP_EDGE, linewidths=MAP_EDGE_LW,
             transform=ccrs.PlateCarree(), zorder=6,
         )
+        label = f"{name} (<{ELEV_CUTOFF} m)" if name == "Valley" else f"{name} (≥{ELEV_CUTOFF} m)"
         handles.append(plt.Line2D(
             [0], [0], marker=ELEV_MARKERS[name], color="w",
-            markerfacecolor=MAP_CLASS_COLORS[name], markeredgecolor="white",
-            markersize=7, label=f"{name} ({lo}–{hi} m)",
+            markerfacecolor=MAP_FILL, markeredgecolor=MAP_EDGE, markeredgewidth=MAP_EDGE_LW,
+            markersize=7, label=f"{label} (n={n})",
         ))
     ax.legend(handles=handles, loc="lower right", frameon=True, framealpha=0.9,
               fontsize=8, title="Station elevation", title_fontsize=8)
@@ -403,55 +406,152 @@ def plot_network_counts(stations: pd.DataFrame):
 
 
 def plot_variables_per_station(stations: pd.DataFrame):
-    """Stacked bar: stations by number of variables, coloured by network provider."""
+    """Stacked bar: percentage of each network's stations by number of variables measured."""
     df = stations.copy()
     df["provider_label"] = df["network_provider"].map(rename_provider)
     df = df.dropna(subset=["provider_label"])
-    ct = pd.crosstab(df["n_variables"], df["provider_label"])
-    ct = ct.reindex(sorted(ct.index))
-    # Stable colour cycle for providers
-    providers = list(ct.columns)
-    cmap = plt.cm.tab10(np.linspace(0, 1, max(len(providers), 1)))
-    fig, ax = plt.subplots(figsize=(7, 5))
-    bottom = np.zeros(len(ct))
-    x = np.arange(len(ct))
-    for i, prov in enumerate(providers):
-        vals = ct[prov].values.astype(float)
-        ax.bar(x, vals, bottom=bottom, color=cmap[i], edgecolor="white", linewidth=0.3, label=prov)
+    ct = pd.crosstab(df["provider_label"], df["n_variables"])
+    ct = ct.reindex(columns=sorted(ct.columns))
+    # Normalize each provider to 100% so absolute station counts do not skew the view
+    ct_pct = ct.div(ct.sum(axis=1), axis=0) * 100
+    providers = list(ct_pct.index)
+    n_vars_levels = list(ct_pct.columns)
+    # Muted sequential palette for variable counts
+    cmap = plt.cm.Blues(np.linspace(0.35, 0.9, max(len(n_vars_levels), 1)))
+    fig, ax = plt.subplots(figsize=(8, max(4, 0.4 * len(providers))))
+    bottom = np.zeros(len(providers))
+    y = np.arange(len(providers))
+    for i, nv in enumerate(n_vars_levels):
+        vals = ct_pct[nv].values.astype(float)
+        ax.barh(y, vals, left=bottom, color=cmap[i], edgecolor="white", linewidth=0.3,
+                label=f"{int(nv)} variable{'s' if nv != 1 else ''}")
         bottom += vals
-    ax.set_xticks(x)
-    ax.set_xticklabels([str(int(v)) for v in ct.index])
-    ax.set_xlabel("Number of variables measured")
-    ax.set_ylabel("Number of stations")
-    ax.legend(frameon=True, framealpha=0.92, fontsize=6, loc="upper right", title="Network", title_fontsize=6.5, borderpad=0.3, labelspacing=0.25, handlelength=1.0, handletextpad=0.4)
+    ax.set_yticks(y)
+    ax.set_yticklabels(providers)
+    ax.set_xlabel("Share of stations (%)")
+    ax.set_xlim(0, 100)
+    ax.legend(frameon=True, framealpha=0.92, fontsize=6, loc="lower right",
+              title="Variables measured", title_fontsize=6.5, borderpad=0.3,
+              labelspacing=0.25, handlelength=1.0, handletextpad=0.4)
     style_axes(ax)
     save(fig, PLOT_DIR / "03a_variables_per_station_stacked.png")
 
-    # Map coloured by number of variables
+    # Per-variable maps are produced separately (see plot_per_variable_maps)
+
+
+# Overview names used in stations_overview.csv "variables" column
+VARIABLES = [
+    "temperature",
+    "precipitation",
+    "wind_speed",
+    "relative_humidity",
+    "snow_height",
+]
+VAR_SHORT = {
+    "temperature": "temp",
+    "precipitation": "precip",
+    "wind_speed": "wind",
+    "relative_humidity": "rh",
+    "snow_height": "snow",
+}
+HOLDOUT_COLOR = "#e67e22"  # solid orange for held-out stations
+
+
+def _stations_for_variable(stations: pd.DataFrame, overview_name: str) -> pd.DataFrame:
+    """Stations whose variables list contains the overview name."""
+    def has_var(cell) -> bool:
+        if pd.isna(cell):
+            return False
+        return overview_name in [p.strip() for p in str(cell).split(",")]
+    mask = stations["variables"].map(has_var)
+    return stations.loc[mask].copy()
+
+
+def _load_holdout_names(overview_name: str) -> set:
+    """Load held-out station names for the variable; empty set if file missing."""
+    splits_dir = CODE_DIR / "shared" / "splits"
+    path = splits_dir / f"holdout_stations_{overview_name}.yaml"
+    if not path.exists():
+        # Fall back to legacy global file
+        path = splits_dir / "holdout_stations.yaml"
+        if not path.exists():
+            logger.warning(f"No holdout file for {overview_name}")
+            return set()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f)
+        return set(raw.get("held_out", []))
+    except Exception as exc:
+        logger.warning(f"Could not load holdout for {overview_name}: {exc}")
+        return set()
+
+
+def plot_per_variable_maps(stations: pd.DataFrame):
+    """One map per variable: stations that measure it, held-out coloured distinctly.
+    Markers follow the valley/mountain classification (circle / triangle).
+    """
     peri = load_alpine_perimeter()
     main_extent = FIXED_MAP_EXTENT
-
     stations = keep_inside_buffer(stations)
-    fig = plt.figure(figsize=(12.0, 8.0))
-    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0], projection=ccrs.PlateCarree())
-    _base_map(ax, peri, main_extent)
 
-    handles = []
-    for n in sorted(stations["n_variables"].dropna().unique()):
-        sub = stations[stations["n_variables"] == n]
-        color = VAR_COLORS.get(int(n), PAL["primary"])
-        ax.scatter(
-            sub["lon"], sub["lat"],
-            marker="o", s=12, c=color, edgecolors="white", linewidths=0.2,
-            transform=ccrs.PlateCarree(), zorder=6,
+    for overview_name in VARIABLES:
+        sub = _stations_for_variable(stations, overview_name)
+        if sub.empty:
+            logger.info(f"No stations for {overview_name}")
+            continue
+        holdout = _load_holdout_names(overview_name)
+        sub["is_holdout"] = sub["station_name"].isin(holdout)
+
+        fig = plt.figure(figsize=(12.0, 8.0))
+        ax = fig.add_axes([0.0, 0.0, 1.0, 1.0], projection=ccrs.PlateCarree())
+        _base_map(ax, peri, main_extent)
+
+        handles = []
+        # Non-holdout first (background)
+        for name in ("Valley", "Mountain"):
+            m = (sub["elev_class"] == name) & (~sub["is_holdout"])
+            part = sub.loc[m]
+            if part.empty:
+                continue
+            n = len(part)
+            ax.scatter(
+                part["lon"], part["lat"],
+                marker=ELEV_MARKERS[name], s=14, c=MAP_FILL,
+                edgecolors=MAP_EDGE, linewidths=MAP_EDGE_LW,
+                transform=ccrs.PlateCarree(), zorder=6,
+            )
+            label = f"{name} (<{ELEV_CUTOFF} m)" if name == "Valley" else f"{name} (≥{ELEV_CUTOFF} m)"
+            handles.append(plt.Line2D(
+                [0], [0], marker=ELEV_MARKERS[name], color="w",
+                markerfacecolor=MAP_FILL, markeredgecolor=MAP_EDGE, markeredgewidth=MAP_EDGE_LW,
+                markersize=7, label=f"{label} (n={n})",
+            ))
+        # Hold-out on top
+        for name in ("Valley", "Mountain"):
+            m = (sub["elev_class"] == name) & sub["is_holdout"]
+            part = sub.loc[m]
+            if part.empty:
+                continue
+            n = len(part)
+            ax.scatter(
+                part["lon"], part["lat"],
+                marker=ELEV_MARKERS[name], s=16, c=HOLDOUT_COLOR,
+                edgecolors="white", linewidths=0.35,
+                transform=ccrs.PlateCarree(), zorder=7,
+            )
+            label = f"Held-out {name} (n={n})"
+            handles.append(plt.Line2D(
+                [0], [0], marker=ELEV_MARKERS[name], color="w",
+                markerfacecolor=HOLDOUT_COLOR, markeredgecolor="white", markeredgewidth=0.35,
+                markersize=7, label=label,
+            ))
+        ax.legend(handles=handles, loc="lower right", frameon=True, framealpha=0.9,
+                  fontsize=8, title=overview_name.replace("_", " ").title(), title_fontsize=8)
+        short = VAR_SHORT[overview_name]
+        save(fig, PLOT_DIR / f"03b_{short}_stations_map.png")
+        logger.info(
+            f"{overview_name}: {len(sub)} stations, {int(sub['is_holdout'].sum())} held out"
         )
-        handles.append(plt.Line2D(
-            [0], [0], marker="o", color="w", markerfacecolor=color,
-            markeredgecolor="white", markersize=6, label=f"{int(n)} variable{'s' if n != 1 else ''}",
-        ))
-    ax.legend(handles=handles, loc="lower right", frameon=True, framealpha=0.9,
-              fontsize=8, title="Variables measured", title_fontsize=8)
-    save(fig, PLOT_DIR / "03b_variables_per_station_map.png")
 
 
 def plot_elevation_hist(stations: pd.DataFrame):
@@ -494,6 +594,7 @@ def plot_elev_diff(stations: pd.DataFrame):
                label=f"Median {np.median(diff):.0f} m")
     ax.set_xlabel("Metadata elevation − DEM elevation (m)")
     ax.set_ylabel("Number of stations")
+    ax.set_xlim(-100, 100)
     ax.legend(frameon=False, fontsize=8, loc="upper right")
     style_axes(ax)
     save(fig, PLOT_DIR / "05_elevation_difference.png")
@@ -525,6 +626,7 @@ def main():
         plot_station_map(stations)
         plot_network_counts(stations)
         plot_variables_per_station(stations)
+        plot_per_variable_maps(stations)
         plot_elevation_hist(stations)
         plot_elev_diff(stations)
         PLOT_DIR = orig

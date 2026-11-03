@@ -152,23 +152,18 @@ def _score_one(payload):
     return i, str(ts), len(don), len(q), part.drop(columns=[var])
 
 
-def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, progress: str | None = None,
-              pack=None, jobs: int = 1):
-    """Protocol-aware. Final scores: held-out x test (full-pool donors).
-    Tuning: fixed tune-targets on the requested splits (donors exclude them)."""
+def build_score_payloads(panel, var, gcfg, n_folds, fit_splits, score_splits):
+    """Return (timestamp, donors, targets) payloads for one formula cell.
+    Same grouping as run_llocv; does not score. Works for any timescale."""
     panel, held_out, pool, qsplits = apply_evaluation_protocol(panel, variable=var)
     score_ok = {"tune" if s == "dev" else s for s in score_splits}
-    # Only the final test uses the held-out stations. Tune scores the pool.
     heldout_score = score_splits == {"all"} or "test" in score_ok
     if heldout_score:
         score_df = panel[(panel["is_heldout"]) & (panel["split"].isin(score_ok))]
     else:
         score_df = panel[(~panel["is_heldout"]) & (panel["split"].isin(score_ok))]
     if score_df.empty:
-        print(f"  {var} no score rows for {sorted(score_ok)}", flush=True)
-        return pd.DataFrame(columns=["station_name", "time", "split", "observed", "predicted"])
-
-    # Build (timestamp, targets, donors) groups
+        return []
     groups = []
     if heldout_score:
         for ts, q in score_df.groupby("time", sort=False):
@@ -176,7 +171,6 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, pr
                         & (~panel["station_name"].isin(set(q["station_name"])))]
             groups.append((ts, q, don))
     else:
-        # Hyperparameter stage: score the fixed tune-targets.
         if "is_tune_target" in panel.columns and panel["is_tune_target"].any():
             targets = score_df[score_df["is_tune_target"]]
             for ts, q in targets.groupby("time", sort=False):
@@ -184,7 +178,6 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, pr
                             & (panel["time"] == ts)]
                 groups.append((ts, q, don))
         else:
-            # Legacy station-fold fallback
             names = score_df["station_name"].unique()
             folds = station_folds(names, max(int(n_folds), 2), seed=gcfg.seed)
             for fold in folds:
@@ -194,15 +187,26 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, pr
                     don = panel[(~panel["is_heldout"]) & (panel["time"] == ts)
                                 & (~panel["station_name"].isin(fset))]
                     groups.append((ts, q, don))
-
-    print(f"  {var} scoring {len(groups)} groups, {len(score_df)} target rows, "
-          f"form={gcfg.formula} ns={gcfg.n_splines} jobs={jobs}", flush=True)
     payloads = []
+    n = len(groups)
     for i, (ts, q, don) in enumerate(groups, start=1):
         if don["station_name"].nunique() < gcfg.min_stations:
-            print(f"    [{i}/{len(groups)}] {ts} skipped, too few donors", flush=True)
             continue
-        payloads.append((i, len(groups), ts, don, q, var, gcfg))
+        payloads.append((i, n, ts, don, q, var, gcfg))
+    return payloads
+
+
+def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, progress: str | None = None,
+              pack=None, jobs: int = 1):
+    """Protocol-aware. Final scores: held-out x test (full-pool donors).
+    Tuning: fixed tune-targets on the requested splits (donors exclude them)."""
+    payloads = build_score_payloads(panel, var, gcfg, n_folds, fit_splits, score_splits)
+    if not payloads:
+        print(f"  {var} no score rows", flush=True)
+        return pd.DataFrame(columns=["station_name", "time", "split", "observed", "predicted"])
+    n_groups = payloads[0][1]
+    print(f"  {var} scoring {len(payloads)} groups, "
+          f"form={gcfg.formula} ns={gcfg.n_splines} jobs={jobs}", flush=True)
     rows = []
     first_err = None
     if jobs <= 1 or len(payloads) <= 1:
@@ -210,12 +214,12 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, pr
             i = payload[0]
             try:
                 i, ts, nd, nq, part = _score_one(payload)
-                print(f"    [{i}/{len(groups)}] {ts} donors={nd} targets={nq}", flush=True)
+                print(f"    [{i}/{n_groups}] {ts} donors={nd} targets={nq}", flush=True)
                 rows.append(part)
             except Exception as exc:
                 if first_err is None:
                     first_err = exc
-                print(f"    [{i}/{len(groups)}] failed: {type(exc).__name__}: {exc}", flush=True)
+                print(f"    [{i}/{n_groups}] failed: {type(exc).__name__}: {exc}", flush=True)
     else:
         with ProcessPoolExecutor(max_workers=jobs) as ex:
             futs = {ex.submit(_score_one, p): p[0] for p in payloads}
@@ -223,12 +227,12 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, pr
                 i = futs[fut]
                 try:
                     i, ts, nd, nq, part = fut.result()
-                    print(f"    [{i}/{len(groups)}] {ts} donors={nd} targets={nq}", flush=True)
+                    print(f"    [{i}/{n_groups}] {ts} donors={nd} targets={nq}", flush=True)
                     rows.append(part)
                 except Exception as exc:
                     if first_err is None:
                         first_err = exc
-                    print(f"    [{i}/{len(groups)}] failed: {type(exc).__name__}: {exc}", flush=True)
+                    print(f"    [{i}/{n_groups}] failed: {type(exc).__name__}: {exc}", flush=True)
     if not rows:
         if first_err is not None:
             print(f"  {var} no rows, first error: {first_err}", flush=True)

@@ -239,7 +239,7 @@ def load_elevation_on_grid(x, y):
     return elev
 
 
-def alpine_mask(x, y, buffer_km: float = 50.0):
+def alpine_mask(x, y, buffer_km: float = 100.0):
     """Boolean mask (ny, nx): True inside Alpine Convention perimeter + buffer."""
     import geopandas as gpd
     from shapely.ops import unary_union
@@ -311,7 +311,7 @@ def process_one_timestep(args):
     method = detect_method(ds, fallback=PLOTTING_CFG.get("method", "IDW"))
 
     if not hasattr(process_one_timestep, "_mask") or process_one_timestep._mask_shape != C.shape:
-        process_one_timestep._mask = alpine_mask(X, Y, buffer_km=50.0)
+        process_one_timestep._mask = alpine_mask(X, Y, buffer_km=100.0)
         process_one_timestep._mask_shape = C.shape
         process_one_timestep._lines = _load_lines_31287()
     mask = process_one_timestep._mask

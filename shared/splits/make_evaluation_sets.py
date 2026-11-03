@@ -16,7 +16,9 @@ and the global
 
 Every method loads the variable-specific station lists (pass variable= to
 apply_evaluation_protocol / load_holdout). Held-out stations are never used
-as donors; tune-targets are held out only during hyperparameter scoring.
+as donors and lie strictly inside the Alpine Convention perimeter;
+tune-targets are held out only during hyperparameter scoring.
+Pool stations (donors) may lie in the perimeter + 100 km domain.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ from shared.splits.evaluation_sets import (
     tune_targets_path,
     stations_measuring,
     stations_inside_domain,
+    stations_inside_perimeter,
     OVERVIEW_VARS,
     QUARTER_SPLITS_PATH,
 )
@@ -108,34 +111,45 @@ def main() -> None:
 
     stations = load_station_table()
 
-    # Restrict once to the interpolation domain (same bbox + buffer as grids)
+    # Domain = Alpine Convention perimeter + 100 km (matches plot_maps.alpine_mask).
+    # Donors may come from the full domain.
+    # Held-out stations must lie strictly inside the Alpine Convention perimeter
+    # (union of all polygons, including any exclave).
     domain_stations = stations_inside_domain(stations)
+    perimeter_stations = stations_inside_perimeter(domain_stations)
     print(f"stations inside interpolation domain: {len(domain_stations)}")
+    print(f"stations strictly inside Alpine Convention perimeter: {len(perimeter_stations)}")
 
     for var in OVERVIEW_VARS:
         measuring = stations_measuring(domain_stations, var)
-        print(f"\n{var}: {len(measuring)} stations measure it inside the domain")
-        if measuring.empty:
-            print(f"  skipped (no stations)")
+        measuring_peri = stations_measuring(perimeter_stations, var)
+        print(f"\n{var}: {len(measuring)} in domain, {len(measuring_peri)} inside perimeter")
+        if measuring_peri.empty:
+            print(f"  skipped (no stations inside perimeter)")
             continue
 
-        held, pool = select_stratified_holdout(
-            measuring,
+        # Stratified hold-out drawn only from stations inside the perimeter.
+        held, _ = select_stratified_holdout(
+            measuring_peri,
             fraction=args.fraction,
             seed=args.seed,
             n_elev_bins=args.elev_bins,
             spatial_step_deg=args.spatial_step,
-            domain_only=False,  # already filtered
+            domain_only=False,
             alpine_only=False,
         )
+        # Pool = every domain station measuring the variable, minus the held-out.
+        held_set = set(held)
+        pool = [sid for sid in measuring["station_name"].astype(str) if sid not in held_set]
+
         hold_meta = {
             "variable": var,
             "fraction": args.fraction,
             "seed": args.seed,
             "n_elev_bins": args.elev_bins,
             "spatial_step_deg": args.spatial_step,
-            "domain": "Alpine Convention polygon + 50 km (matches plot_maps alpine_mask)",
-            "source": "stations_overview.csv variables column; domain-filtered",
+            "domain": "pool = Alpine Convention polygon + 100 km; held-out = strictly inside Alpine Convention perimeter (all polygons / exclave included)",
+            "source": "stations_overview.csv variables column; domain-filtered, hold-out perimeter-filtered",
         }
         hpath = holdout_path(var)
         write_holdout(held, pool, hold_meta, hpath)

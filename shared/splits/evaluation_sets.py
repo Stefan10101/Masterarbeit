@@ -4,12 +4,15 @@ Shared evaluation sets for the thesis method comparison.
 
 Spatial hold-out
 ----------------
-Stratified selection of stations that lie inside the interpolation domain
-(Alpine Convention polygon + 50 km, matching plot_maps.alpine_mask)
+Stratified selection of stations that lie strictly inside the Alpine
+Convention perimeter (union of all polygons, including any exclave)
 AND that measure the variable of interest.
-Stations are spread across the domain (coarse lon/lat grid) and across
+Stations are spread across the perimeter (coarse lon/lat grid) and across
 elevation bands. Controlled by a seed so the set is reproducible.
 Written once per variable; every method loads the list for its variable.
+
+Pool stations (donors) may come from the wider interpolation domain
+(Alpine Convention polygon + 100 km, matching plot_maps.alpine_mask).
 
 Temporal splits
 ---------------
@@ -86,23 +89,21 @@ PERIMETER_URL = (
 )
 PERIMETER_CACHE = _HERE / "geometry_cache" / "alpine_convention_perimeter.geojson"
 
-# Evaluation domain: Alpine Convention bbox (same as grids) + 150 km buffer.
-# Grids/produce use buffer_m=15000; station selection for splits uses 150 km
-# so donors can come from the wider area around the interpolation domain.
+# Evaluation domain: Alpine Convention polygon + 100 km buffer.
+# Grids/produce use the same 100 km buffer so the interpolation extent matches.
 _GRIDS_CFG = Path(__file__).resolve().parents[1] / "grids" / "config.yaml"
 DEFAULT_BBOX_EPSG31287 = (-76229, 123066, 637216, 501366)
-DEFAULT_BUFFER_M = 150000.0
+DEFAULT_BUFFER_M = 100000.0
 DEFAULT_CRS = "EPSG:31287"
 
 
 def _load_domain_bbox() -> Tuple[Tuple[float, float, float, float], float, str]:
     """Return (xmin, ymin, xmax, ymax) of the Alpine bbox, buffer_m, crs.
 
-    Buffer is fixed at 150 km for station selection (independent of the
-    15 km buffer used by the grids themselves).
+    Buffer is fixed at 100 km for station selection (same as the grids).
     """
     bbox = DEFAULT_BBOX_EPSG31287
-    buf = DEFAULT_BUFFER_M  # 150 km
+    buf = DEFAULT_BUFFER_M  # 100 km
     crs = DEFAULT_CRS
     if _GRIDS_CFG.exists():
         with open(_GRIDS_CFG, "r", encoding="utf-8") as f:
@@ -116,13 +117,13 @@ def stations_inside_domain(
     stations: pd.DataFrame,
     lon_col: str = "lon",
     lat_col: str = "lat",
-    buffer_km: float = 50.0,
+    buffer_km: float = 100.0,
 ) -> pd.DataFrame:
     """
     Keep stations inside the area that is actually interpolated.
 
     Matches plot_maps.alpine_mask: Alpine Convention perimeter (true polygon)
-    buffered by 50 km in EPSG:31287. Stations outside this region are never
+    buffered by 100 km in EPSG:31287. Stations outside this region are never
     used as donors or targets.
     """
     if not HAS_GEOPANDAS:
@@ -169,15 +170,28 @@ def stations_inside_perimeter(
     lon_col: str = "lon",
     lat_col: str = "lat",
 ) -> pd.DataFrame:
-    """Return the subset of stations that lie inside the Alpine Convention perimeter."""
+    """Return the subset of stations that lie inside the Alpine Convention perimeter.
+
+    Uses the union of all perimeter polygons so any exclave is included.
+    Invalid rings are repaired with buffer(0).
+    """
+    if not HAS_GEOPANDAS:
+        raise ImportError("geopandas is required for the Alpine perimeter filter")
     peri = load_alpine_perimeter()
+    if peri.crs is None:
+        peri = peri.set_crs("EPSG:4326")
+    peri = peri.copy()
+    peri["geometry"] = peri.geometry.buffer(0)  # repair invalid rings
+    geom = peri.union_all()
+
+    df = stations.dropna(subset=[lon_col, lat_col]).copy()
     pts = gpd.GeoDataFrame(
-        stations,
-        geometry=gpd.points_from_xy(stations[lon_col], stations[lat_col]),
+        df,
+        geometry=gpd.points_from_xy(df[lon_col], df[lat_col]),
         crs="EPSG:4326",
     )
-    inside = pts.within(peri.union_all())
-    return stations.loc[inside.to_numpy()].copy()
+    inside = pts.within(geom)
+    return df.loc[inside.to_numpy()].copy()
 
 
 def stations_measuring(
@@ -237,7 +251,8 @@ def select_stratified_holdout(
     """
     Stratified hold-out.
 
-    1. Optionally restrict to the interpolation domain or the Alpine perimeter.
+    1. Optionally restrict to the interpolation domain or the Alpine perimeter
+       (strict; union of all polygons including any exclave).
     2. Bin stations by a coarse lon/lat grid and by elevation quantiles.
     3. Sample proportionally inside each non-empty (grid-cell × elev-bin)
        so the held-out set is spread in space and height.

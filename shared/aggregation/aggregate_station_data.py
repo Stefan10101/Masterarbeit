@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Aggregate raw Kombiniert series into Source/aggregated/."""
+"""Aggregate raw station series into Source/aggregated/.
+
+Adds an inside_domain column (1 = inside Alpine Convention perimeter + 100 km, 0 = outside).
+All stations are retained so the flag can be verified.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ sys.path.insert(0, str(CODE_DIR))
 
 from paths import get_aggregated_data_path, get_metadata_path, get_raw_data_dir, ensure_dir
 from aggregation_core import aggregate_all_stations, get_time_col_name
+from shared.splits.evaluation_sets import stations_inside_domain
 
 DEFAULT_CFG = CODE_DIR / "shared" / "source" / "config.yaml"
 
@@ -44,8 +49,16 @@ def main():
     ensure_dir(out_file.parent)
 
     print(f"aggregate {resolution} -> {out_file}", flush=True)
+    metadata = pd.read_csv(get_metadata_path())
+    # Flag stations inside Alpine Convention perimeter + 100 km; keep everyone.
+    inside = stations_inside_domain(metadata, buffer_km=100.0)
+    inside_ids = set(inside["station_name"].astype(str))
+    print(
+        f"stations inside domain (perimeter + 100 km): {len(inside_ids)} / {len(metadata)}",
+        flush=True,
+    )
     combined = aggregate_all_stations(
-        metadata_df=pd.read_csv(get_metadata_path()),
+        metadata_df=metadata,
         data_dir=get_raw_data_dir(),
         targets=cfg["targets"],
         resolution=resolution,
@@ -67,8 +80,17 @@ def main():
         if args.end_date:
             combined = combined[combined[time_col] <= args.end_date]
 
+    combined["inside_domain"] = (
+        combined["station_name"].astype(str).isin(inside_ids).astype("int8")
+    )
+
     combined.to_parquet(out_file, index=False, compression="zstd")
     print(f"Saved {out_file} rows={len(combined):,}", flush=True)
+    print(
+        f"inside_domain=1: {int(combined['inside_domain'].sum()):,} rows "
+        f"({combined.loc[combined['inside_domain']==1, 'station_name'].nunique()} stations)",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
