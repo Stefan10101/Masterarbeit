@@ -35,10 +35,11 @@ from paths import (
     get_domain_stations_path,
     get_nested_llocv_path,
 )
-from rfsi_core import RFSI, build_covariates, extras_for_var, neighbor_width, two_step_var
+from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, extras_for_var, neighbor_width, two_step_var
 from rfsi_optimizer import compute_metrics
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of, apply_evaluation_protocol
+from shared.metrics import compute_metrics as eval_metrics, print_eval
 
 import importlib.util as _ilu
 _splits_path = Path(__file__).resolve().parents[1] / "shared" / "splits" / "splits.py"
@@ -103,7 +104,8 @@ def load_panel(cfg, var):
         elif "hoehe" in stations.columns:
             stations = stations.rename(columns={"hoehe": "elev"})
     keep = ["station_name", "x", "y"]
-    for extra in ("elev", "clc_code", "clc_level2", "slope", "northness", "tpi"):
+    for extra in ("elev", "clc_code", "clc_level2", "slope", "northness", "tpi",
+                  "smooth_elev", "dist_to_coast", "signed_dist_to_ridge"):
         if extra in stations.columns:
             keep.append(extra)
     stations = stations[keep].drop_duplicates("station_name")
@@ -160,11 +162,7 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
             tpanel = load_panel(cfg, "temp_mean")[["station_name", "time", "temp_mean"]]
             valid = valid.merge(tpanel, on=["station_name", "time"], how="left")
     if pack is not None:
-        try:
-            from Kriging.kriging_data import attach_pack_terrain
-            valid = attach_pack_terrain(valid, pack)
-        except Exception as exc:
-            print(f"  pack attach failed: {exc}")
+        valid = attach_region(valid, pack)
     if months:
         try:
             from Kriging.kriging_data import subset_times
@@ -275,6 +273,9 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
         f"RMSE={met_all['rmse']:.3f}  MAE={met_all['mae']:.3f}  "
         f"NSE={met_all['nse']:.3f}  KGE={met_all['kge']:.3f}  CCC={met_all['ccc']:.3f}"
     )
+    if "split" in pred_df.columns and (pred_df["split"] == "test").any():
+        part = pred_df[pred_df["split"] == "test"]
+        print_eval(eval_metrics(part["observed"], part["predicted"], var, cfg["time_resolution"]), prefix="  test ")
     return pred_df
 
 
@@ -342,7 +343,7 @@ def main():
     if args.quick:
         n_folds = n_folds or 2
         months = months or "seasonal4"
-    pack = None  # temp/precip do not use watershed regions
+    pack = build_region_pack(cfg, int(cfg.get('rfsi', {}).get('n_regions', 6)))
     for var in wanted:
         run_variable(
             cfg, var, fit_splits, score_splits,

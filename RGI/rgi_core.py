@@ -20,6 +20,7 @@ import torch.nn.functional as F
 
 from rgi_graph import knn_edges_fast
 from rgi_data import FeatureScaler
+from shared.terrain import elev_bin
 
 
 def two_step_var(var: str) -> bool:
@@ -168,6 +169,10 @@ class RGI:
 
     def _build_net(self, n_clc: int) -> ResidualGNN:
         torch.manual_seed(self.cfg.seed)
+        extra = len(self.cfg.extra_cols)
+        # 250 m elev-bin as a single smooth index for two-step (precip/snow).
+        if self.cfg.two_step and two_step_var(self.cfg.var_name):
+            extra += 1
         net = ResidualGNN(
             n_clc=n_clc,
             hidden=self.cfg.hidden_dim,
@@ -175,7 +180,7 @@ class RGI:
             alpha=self.cfg.alpha,
             dropout=self.cfg.dropout,
             clc_embed_dim=self.cfg.clc_embed_dim,
-            extra_dim=len(self.cfg.extra_cols),
+            extra_dim=extra,
         )
         return net.to(self.device)
 
@@ -201,6 +206,11 @@ class RGI:
         xyz = self.scaler.coord_block(frame["x"], frame["y"], elev)
         clc = self.scaler.clc_index(frame["clc_code"])
         extra = self.scaler.extra_block(frame)
+        # Append scaled 250 m elev-bin for two-step (smooth, not free one-hot).
+        if self.cfg.two_step and two_step_var(var):
+            b = elev_bin(elev).astype(np.float32)
+            b_s = ((b - b.mean()) / max(b.std(), 1.0)).reshape(-1, 1)
+            extra = b_s if extra is None else np.hstack([extra, b_s])
         t = {
             "value": torch.from_numpy(value).to(self.device),
             "mask": torch.from_numpy(mask).to(self.device),
@@ -247,6 +257,7 @@ class RGI:
             wet = float(np.mean(raw_vals > self.cfg.trace)) if len(raw_vals) else 0.0
             log(f"  two_step on: wet={wet:.3f}")
         self.cfg.two_step = use_two
+        self.cfg.var_name = var
         # Keep full frames so the donor distribution at predict time matches
         # training. Loss is masked to wet queries inside epoch_loss when two-step.
         self.scaler = FeatureScaler()

@@ -23,6 +23,8 @@ except ImportError:  # pragma: no cover
     nn = None
     F = None
 
+from shared.terrain import elev_bin
+
 
 @dataclass
 class CNNConfig:
@@ -66,6 +68,48 @@ def clip_var(var: str, pred) -> np.ndarray:
     if v.startswith("rh"):
         return np.clip(out, 0.0, 100.0)
     return out
+
+
+
+# Continuous covariates CNN does not already have as dedicated channels.
+# elev, CLC, slope, sinasp, cosasp, northness are in the base pack.
+CNN_EXTRA_COVARIATES = (
+    "smooth_elev", "tpi", "dist_to_coast", "signed_dist_to_ridge",
+    "basin_continuity", "elev_above_valley",
+)
+
+
+def load_extra_covariates(cfg, resolution: int = 1000):
+    """Enabled core covariates as scaled rasters, in a fixed order.
+
+    Returns (list of arrays, count). Same list must be used in train and produce
+    so the channel count matches.
+    """
+    from paths import get_grid_terrain_path
+    from shared.terrain import enabled_covariates
+    enabled = set(enabled_covariates(cfg))
+    want = [c for c in CNN_EXTRA_COVARIATES if c in enabled]
+    path = get_grid_terrain_path(resolution)
+    if not path.exists() or not want:
+        return [], 0
+    import xarray as xr
+    ds = xr.open_dataset(path)
+    out = []
+    for col in want:
+        if col not in ds:
+            continue
+        arr = ds[col].values.astype("float32")
+        arr = arr.copy()
+        finite = arr[arr == arr]
+        sd = float(finite.std()) if finite.size else 1.0
+        if sd < 1e-8:
+            sd = 1.0
+        mu = float(finite.mean()) if finite.size else 0.0
+        arr = (arr - mu) / sd
+        arr[~ (arr == arr)] = 0.0
+        out.append(arr)
+    ds.close()
+    return out, len(out)
 
 
 def n_in_channels(cfg: CNNConfig, subdaily: bool, extra_ch: int = 0) -> int:
@@ -441,6 +485,13 @@ class CNNInterpolator:
         if extras:
             for ex in extras:
                 chans.append(np.asarray(ex, dtype=np.float32))
+        # 250 m elev-bin as a single scaled channel (smooth). Continuous elev
+        # and the convolutional spatial context already allow location to
+        # override the bin. Free one-hot removed.
+        if getattr(self.cfg, "two_step", False):
+            b = elev_bin(elev).astype(np.float32)
+            b_s = (b - b.mean()) / max(b.std(), 1.0)
+            chans.append(b_s)
         packed = np.stack(chans, axis=0).astype(np.float32)
         if packed.shape[0] != int(self.in_ch):
             raise RuntimeError(

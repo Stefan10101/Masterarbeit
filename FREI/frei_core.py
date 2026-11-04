@@ -27,6 +27,8 @@ from scipy.spatial import cKDTree
 CODE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE_DIR))
 
+from shared.terrain import elev_bin
+
 
 @dataclass
 class FreiConfig:
@@ -298,9 +300,19 @@ class FreiInterpolator:
             bg_q = self._bg_at(xq, yq, zq, params)
             info["params"] = params
         elif bg == "linear":
-            cols_s = [z] + list(extra_s or [])
+            # z-score extras so metres and degrees do not dominate the least squares
+            extras_s, extras_q = [], []
+            for a, b in zip(extra_s or [], extra_q or []):
+                a = np.asarray(a, dtype=np.float64)
+                b = np.asarray(b, dtype=np.float64)
+                mu = float(np.nanmean(a)) if np.isfinite(a).any() else 0.0
+                sd = float(np.nanstd(a)) if np.isfinite(a).any() else 1.0
+                sd = sd if np.isfinite(sd) and sd > 1e-8 else 1.0
+                extras_s.append(np.where(np.isfinite(a), (a - mu) / sd, 0.0))
+                extras_q.append(np.where(np.isfinite(b), (b - mu) / sd, 0.0))
+            cols_s = [z] + extras_s
             coef, bg_s = _lstsq_bg(t, *cols_s)
-            cols_q = [zq] + list(extra_q or [])
+            cols_q = [zq] + extras_q
             bg_q = _apply_bg(coef, *cols_q)
             info["lin_coef"] = coef
         else:
@@ -361,17 +373,35 @@ class FreiInterpolator:
         return clip_var(var, hat), info
 
     def _two_step(self, x, y, z, t, xq, yq, zq, var, extra_s=None, extra_q=None):
+        # 250 m elev bin as a single scaled index + spatial interactions.
+        # Smooth (not free dummies); x*bin / y*bin let location override.
+        def _bin_cols(elev, xx, yy):
+            b = elev_bin(elev).astype(np.float64)
+            mu = float(b.mean()) if b.size else 0.0
+            sd = float(b.std()) if b.size else 1.0
+            if sd < 1e-8:
+                sd = 1.0
+            b_s = (b - mu) / sd
+            xs = (np.asarray(xx, dtype=np.float64) - np.mean(xx)) / max(np.std(xx), 1.0)
+            ys = (np.asarray(yy, dtype=np.float64) - np.mean(yy)) / max(np.std(yy), 1.0)
+            return [b_s, b_s * xs, b_s * ys]
+        eb_s = _bin_cols(z, x, y)
+        eb_q = _bin_cols(zq, xq, yq)
         wet = (t > self.cfg.trace).astype(float)
-        p, info = self._field(x, y, z, wet, xq, yq, zq, bg="mean")
+        p, info = self._field(
+            x, y, z, wet, xq, yq, zq, bg="linear",
+            extra_s=eb_s, extra_q=eb_q,
+        )
         p = np.clip(p, 0.0, 1.0)
         wet_m = t > self.cfg.trace
         bg = "linear" if extra_s else "mean"
         if wet_m.sum() >= 5:
             amt_in = np.log1p(np.maximum(t[wet_m], 0.0))
-            es = [c[wet_m] for c in extra_s] if extra_s else None
+            es = ([c[wet_m] for c in extra_s] if extra_s else []) + [c[wet_m] for c in eb_s]
+            eq = (list(extra_q) if extra_q else []) + eb_q
             amt, info2 = self._field(
                 x[wet_m], y[wet_m], z[wet_m], amt_in, xq, yq, zq,
-                bg=bg, extra_s=es, extra_q=extra_q,
+                bg="linear", extra_s=es, extra_q=eq,
             )
             amt = np.maximum(np.expm1(amt), 0.0)
             info = {**info, "amount_across_w": info2.get("across_w"), "amount_bg": bg}

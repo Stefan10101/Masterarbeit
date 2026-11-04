@@ -13,7 +13,7 @@ paths:
 domain:
   preset: "full"
   custom_bbox: [-76229, 123066, 637216, 501366]
-  buffer_m: 15000
+  buffer_m: 100000
 
 predefined_bboxes:
   # Alpine Convention perimeter in EPSG:31287 (from process_new_dem.py run)

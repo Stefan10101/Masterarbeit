@@ -61,6 +61,8 @@ CORE_COVARIATES = (
     "clc",
     "dist_to_coast",
     "signed_dist_to_ridge",
+    "basin_continuity",
+    "elev_above_valley",
 )
 
 # Map config key -> column name(s) in the cache
@@ -73,6 +75,8 @@ _COVARIATE_COLS = {
     "clc": ["clc_level2"],
     "dist_to_coast": ["dist_to_coast"],
     "signed_dist_to_ridge": ["signed_dist_to_ridge"],
+    "basin_continuity": ["basin_continuity"],
+    "elev_above_valley": ["elev_above_valley"],
 }
 
 
@@ -122,3 +126,15 @@ def attach_shared_terrain(
     cache = cache[["station_name"] + keep].drop_duplicates("station_name")
     out = stations.drop(columns=[c for c in keep if c in stations.columns], errors="ignore")
     return out.merge(cache, on="station_name", how="left")
+
+
+def elev_bin(elev, width: float = 250.0) -> np.ndarray:
+    """250 m elevation bins for two-step occurrence/amount models.
+
+    Clipped to [-100, 4500] m. Wider bins (was 100 m) so each bin has more
+    stations. Used as an ordered index (not a free factor) so the elevation
+    effect stays smooth and location can override it.
+    """
+    e = np.asarray(elev, dtype=np.float64)
+    e = np.clip(e, -100.0, 4500.0)
+    return np.floor(e / width).astype(np.int32)

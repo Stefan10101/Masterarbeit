@@ -19,6 +19,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path, get_nested_llocv_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.metrics import compute_metrics as eval_metrics, print_eval
 from gam_core import GAMConfig, GAMInterpolator
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from gam_data import (
@@ -32,6 +33,16 @@ from gam_data import (
     print_split_metrics,
     subset_times,
 )
+
+
+
+def _extra(df):
+    """Enabled continuous core covariates present on the frame."""
+    cols = ("smooth_elev", "northness",
+            "dist_to_coast",
+            "basin_continuity", "elev_above_valley")
+    out = {c: df[c].to_numpy() for c in cols if c in df.columns}
+    return out or None
 
 
 def parse_split_arg(text: str) -> set[str]:
@@ -134,6 +145,11 @@ def _score_one(payload):
         cosasp_q=q["cosasp"].to_numpy() if "cosasp" in q.columns else None,
         tmean=tmean, tmean_q=tmean_q,
         region=region, region_q=region_q,
+        tpi=don["tpi"].to_numpy() if "tpi" in don.columns else None,
+        tpi_q=q["tpi"].to_numpy() if "tpi" in q.columns else None,
+        ridge=don["signed_dist_to_ridge"].to_numpy() if "signed_dist_to_ridge" in don.columns else None,
+        ridge_q=q["signed_dist_to_ridge"].to_numpy() if "signed_dist_to_ridge" in q.columns else None,
+        extra=_extra(don), extra_q=_extra(q),
     )
     part = q[["station_name", "time", "split", var]].copy()
     part["observed"] = part[var].to_numpy()
@@ -282,6 +298,9 @@ def main():
         pred.to_parquet(out, index=False)
         print(f"{var} -> {out}")
         print_split_metrics(pred)
+        if "split" in pred.columns and (pred["split"] == "test").any():
+            part = pred[pred["split"] == "test"]
+            print_eval(eval_metrics(part["observed"], part["predicted"], var, time_res), prefix="  test ")
 
 
 if __name__ == "__main__":

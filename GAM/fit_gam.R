@@ -53,7 +53,7 @@ rhs <- switch(formula_id,
   s_xy_s_elev = sprintf("s(x, k=%d) + s(yc, k=%d) + s(elev, k=%d)", kx, ky, ke),
   stop("unknown formula_id: ", formula_id)
 )
-for (col in c("slope", "sinasp", "cosasp", "tmean")) {
+for (col in c("slope", "sinasp", "cosasp", "tmean", "tpi", "signed_dist_to_ridge")) {
   if (!has(col) || nuniq(df[[col]]) < 6L) next
   # tmean is the RH covariate. If it is (near-)identical to the response,
   # it is the target itself and must not enter the formula.
@@ -67,6 +67,30 @@ if (has("clc")) {
   df$clc <- factor(df$clc)
   if (nlevels(df$clc) >= 2L) {
     rhs <- paste(rhs, "+ clc")
+  }
+}
+# region is an unordered basin id, so a factor, not a smooth on the integer.
+if (has("region")) {
+  df$region <- factor(df$region)
+  if (nlevels(df$region) >= 2L) {
+    rhs <- paste(rhs, "+ region")
+  }
+}
+# Elevation bins (250 m) as a smooth ordered index, not a free factor.
+# s(elev_bin) keeps the elevation effect smooth; ti(x, elev_bin) and
+# ti(yc, elev_bin) let location override the bin. Continuous elev is
+# already in the formula, so the bin is an additional stratified signal.
+if (has("elev_bin")) {
+  df$elev_bin <- as.numeric(df$elev_bin)
+  if (nuniq(df$elev_bin) >= 4L) {
+    kb <- k_ok(df$elev_bin, max(4L, n_splines %/% 2L))
+    rhs <- paste(rhs, sprintf("+ s(elev_bin, k=%d)", kb))
+    if (nuniq(df$x) >= 6L) {
+      rhs <- paste(rhs, sprintf("+ ti(x, elev_bin, k=c(%d,%d))", k_ok(df$x, 6L), kb))
+    }
+    if (nuniq(df$yc) >= 6L) {
+      rhs <- paste(rhs, sprintf("+ ti(yc, elev_bin, k=c(%d,%d))", k_ok(df$yc, 6L), kb))
+    }
   }
 }
 

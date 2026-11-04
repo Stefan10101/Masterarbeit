@@ -99,15 +99,15 @@ def load_panel(cfg, var: str) -> pd.DataFrame:
 
 
 def extra_cols_for_var(var: str, cfg: dict) -> tuple[str, ...]:
+    """Enabled continuous core covariates, plus variable-specific extras."""
+    from shared.terrain import enabled_covariates
     r = cfg.get("rgi", {})
     v = str(var).lower()
-    cols = []
-    if v.startswith("snow") and r.get("snow_terrain", True):
-        cols.extend(["slope", "northness"])
-    if v.startswith("wind") and r.get("wind_tpi", True):
-        cols.append("tpi")
+    cols = [c for c in enabled_covariates(cfg)
+            if c not in ("elev", "clc_level2", "sinasp", "cosasp")]
     if v.startswith("rh") and str(r.get("rh_t_mode", "predicted")) in ("predicted", "observed"):
-        cols.append("temp_mean")
+        if "temp_mean" not in cols:
+            cols.append("temp_mean")
     return tuple(cols)
 
 

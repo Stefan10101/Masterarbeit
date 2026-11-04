@@ -179,8 +179,9 @@ def main():
     if "elev" in df.columns:
         stations = stations.merge(df[["station_name", "elev"]].drop_duplicates("station_name"), on="station_name", how="left")
     stations = compute_dem_features(stations, cfg)
-    from smacnp_data import attach_clc_onehot
+    from smacnp_data import attach_clc_onehot, attach_elev_bin
     stations = attach_clc_onehot(stations)
+    stations = attach_elev_bin(stations)
     feat_cols = feature_columns(cfg)
     df = df.drop(columns=[c for c in feat_cols if c in df.columns and c not in ("x", "y")], errors="ignore")
     df = df.merge(stations[["station_name"] + [c for c in feat_cols if c not in ("x", "y")]], on="station_name", how="left")
@@ -280,4 +281,13 @@ def main():
                 print(f"early stop at epoch {epoch}")
                 break
 
-    print
+    print(f"best val={best_val:.4f}  saved to {ckpt_path}")
+    if history:
+        import pandas as pd
+        curve = ckpt_path.with_name(f"{var}_{cfg['time_resolution']}_curve.csv")
+        pd.DataFrame(history).to_csv(curve, index=False)
+        print(f"wrote {curve}  ({len(history)} epochs)")
+
+
+if __name__ == "__main__":
+    main()

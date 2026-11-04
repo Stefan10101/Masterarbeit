@@ -99,6 +99,25 @@ def main():
         zz = z if z.ndim == 2 else np.zeros_like(xx)
         print(f"grid ny={y.size} nx={x.size} ncell={xx.size} terrain…", flush=True)
         slope, sinasp, cosasp = grid_terrain(zz, x, y)
+        tpi_q = np.zeros(xx.size, dtype=np.float64)
+        ridge_q = np.zeros(xx.size, dtype=np.float64)
+        extra_q_full = {}
+        try:
+            from paths import get_grid_terrain_path
+            from shared.terrain import enabled_covariates
+            tds = xr.open_dataset(get_grid_terrain_path(int(res)))
+            if "tpi" in tds:
+                tpi_q = np.nan_to_num(tds["tpi"].values, nan=0.0).ravel().astype(np.float64)
+            if "signed_dist_to_ridge" in tds:
+                ridge_q = np.nan_to_num(tds["signed_dist_to_ridge"].values, nan=0.0).ravel().astype(np.float64)
+            for col in enabled_covariates(cfg):
+                if col in ("elev", "clc_level2", "slope", "tpi", "signed_dist_to_ridge"):
+                    continue
+                if col in tds:
+                    extra_q_full[col] = np.nan_to_num(tds[col].values, nan=0.0).ravel().astype(np.float64)
+            tds.close()
+        except Exception:
+            pass
         clc = None
         for name in ("clc_code", "clc", "landcover"):
             if name in grid:
@@ -164,6 +183,10 @@ def main():
                         cosasp=sl["cosasp"].to_numpy() if "cosasp" in sl.columns else None,
                         cosasp_q=ca_q,
                         var="temp_mean",
+                        tpi=sl["tpi"].to_numpy() if "tpi" in sl.columns else None,
+                        tpi_q=tpi_q,
+                        ridge=sl["signed_dist_to_ridge"].to_numpy() if "signed_dist_to_ridge" in sl.columns else None,
+                        ridge_q=ridge_q,
                     )
                 region = sl["region"].to_numpy() if "region" in sl.columns else None
                 region_q = None
@@ -184,6 +207,12 @@ def main():
                     trace=gcfg.trace,
                     tmean=tmean, tmean_q=tmean_q,
                     region=region, region_q=region_q,
+                    tpi=sl["tpi"].to_numpy() if "tpi" in sl.columns else None,
+                    tpi_q=tpi_q,
+                    ridge=sl["signed_dist_to_ridge"].to_numpy() if "signed_dist_to_ridge" in sl.columns else None,
+                    ridge_q=ridge_q,
+                    extra={c: sl[c].to_numpy() for c in extra_q_full if c in sl.columns} or None,
+                    extra_q={c: extra_q_full[c] for c in extra_q_full if c in sl.columns} or None,
                 )
                 be = getattr(model, "_backend", "?")
                 return (

@@ -150,19 +150,14 @@ def main():
                 else:
                     inp = field.astype(np.float32)
                 tch = cyclic_time(ts, subdaily) if model.cfg.cyclic_time else None
-                extras = None
-                if str(var).lower().startswith("wind"):
-                    from paths import get_grid_terrain_path
-                    tpath = get_grid_terrain_path(res)
-                    if tpath.exists():
-                        tg = xr.open_dataset(tpath)
-                        if "tpi" in tg:
-                            extras = [tg["tpi"].values.astype(np.float32)]
-                        tg.close()
-                elif str(var).lower().startswith("rh") and "temp_mean" in sl.columns:
+                from cnn_core import load_extra_covariates
+                cov_extras, _ = load_extra_covariates(cfg, res)
+                extras = list(cov_extras)
+                if str(var).lower().startswith("rh") and "temp_mean" in sl.columns:
                     tfield = np.zeros((ny, nx), dtype=np.float32)
                     tfield[rows, cols] = sl["temp_mean"].to_numpy(dtype=np.float32)
-                    extras = [tfield / 20.0]
+                    extras.append(tfield / 20.0)
+                extras = extras or None
                 # pack channels on CPU so the GPU step is only the forward
                 packed = model.pack_channels(
                     inp, mask, elev, clc,

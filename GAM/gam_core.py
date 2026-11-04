@@ -21,7 +21,8 @@ import tempfile
 
 import numpy as np
 import pandas as pd
-from scipy.interpolate import BSpline
+
+from shared.terrain import elev_bin
 
 
 @dataclass
@@ -119,7 +120,8 @@ class GAMInterpolator:
         self._r_model = None
 
     def _frame(self, x, y, elev, values=None, clc=None, slope=None, sinasp=None, cosasp=None,
-               tmean=None):
+               tmean=None, tpi=None, ridge=None, region=None, elev_bin=None,
+               extra=None):
         df = pd.DataFrame({
             "x": np.asarray(x, dtype=np.float64),
             "ycoord": np.asarray(y, dtype=np.float64),
@@ -135,15 +137,28 @@ class GAMInterpolator:
                 ("slope", slope, 0.0),
                 ("sinasp", sinasp, 0.0),
                 ("cosasp", cosasp, 1.0),
+                ("tpi", tpi, 0.0),
+                ("signed_dist_to_ridge", ridge, 0.0),
             ):
                 if arr is None:
-                    df[name] = fill
                     continue
                 v = np.asarray(arr, dtype=np.float64)
-                v = np.where(np.isfinite(v), v, fill)
-                df[name] = v
+                df[name] = np.where(np.isfinite(v), v, fill)
         if self.cfg.use_clc and clc is not None:
             df["clc"] = np.asarray(clc, dtype=np.int32)
+        if region is not None:
+            df["region"] = np.asarray(region, dtype=np.int32)
+        if elev_bin is not None:
+            df["elev_bin"] = np.asarray(elev_bin, dtype=np.int32)
+        if extra:
+            for name, arr in extra.items():
+                if arr is None:
+                    continue
+                v = np.asarray(arr, dtype=np.float64)
+                mu = np.nanmean(v) if np.isfinite(v).any() else 0.0
+                sd = np.nanstd(v) if np.isfinite(v).any() else 1.0
+                sd = sd if np.isfinite(sd) and sd > 1e-8 else 1.0
+                df[name] = np.where(np.isfinite(v), (v - mu) / sd, 0.0)
         return df
 
     def _fit_r(self, df: pd.DataFrame, family: str) -> bool:
@@ -292,6 +307,13 @@ class GAMInterpolator:
             parts.append(_bs(sl, self._knots["sl"], k, n2))
             parts.append(_bs(sa, self._knots["sa"], k, n2))
             parts.append(_bs(ca, self._knots["ca"], k, n2))
+        # Enabled continuous covariates as standardized linear terms.
+        for name, arr in getattr(self, "_extra_linear", []) or []:
+            v = np.asarray(arr, dtype=np.float64)
+            if v.shape[0] != x.size:
+                continue
+            mu, sd = getattr(self, "_extra_stats", {}).get(name, (0.0, 1.0))
+            parts.append(((np.where(np.isfinite(v), v, mu) - mu) / sd).reshape(-1, 1))
         if self.cfg.use_clc and clc is not None:
             g = np.asarray(clc, dtype=np.int32)
             if fit:
@@ -306,12 +328,30 @@ class GAMInterpolator:
         return np.column_stack(parts), widths
 
     def fit_gaussian(self, x, y, elev, values, clc=None, slope=None, sinasp=None, cosasp=None,
-                     family: str = "gaussian", tmean=None):
+                     family: str = "gaussian", tmean=None, tpi=None, ridge=None, region=None,
+                     elev_bin=None, extra=None):
         self._fit_args = (
             np.asarray(x, float), np.asarray(y, float), np.asarray(elev, float),
             np.asarray(values, float), clc, slope, sinasp, cosasp,
         )
-        df = self._frame(x, y, elev, values, clc, slope, sinasp, cosasp, tmean=tmean)
+        if extra is None:
+            extra = getattr(self, "_pending_extra", None)
+        if extra:
+            self._extra_stats = {}
+            cleaned = []
+            for name, arr in extra.items():
+                v = np.asarray(arr, dtype=np.float64)
+                mu = float(np.nanmean(v)) if np.isfinite(v).any() else 0.0
+                sd = float(np.nanstd(v)) if np.isfinite(v).any() else 1.0
+                sd = sd if np.isfinite(sd) and sd > 1e-8 else 1.0
+                self._extra_stats[name] = (mu, sd)
+                cleaned.append((name, v))
+            self._extra_linear = cleaned
+        df = self._frame(
+            x, y, elev, values, clc, slope, sinasp, cosasp,
+            tmean=tmean, tpi=tpi, ridge=ridge, region=region, elev_bin=elev_bin,
+            extra=extra,
+        )
         if self._fit_r(df, family):
             self._backend = "mgcv"
             self._family = family
@@ -319,9 +359,15 @@ class GAMInterpolator:
         raise RuntimeError("mgcv fit returned without a model")
 
     def predict_raw(self, x, y, elev, clc=None, slope=None, sinasp=None, cosasp=None,
-                    tmean=None) -> np.ndarray:
+                    tmean=None, tpi=None, ridge=None, region=None, elev_bin=None) -> np.ndarray:
+        qextra = getattr(self, "_pending_extra_q", None)
+        if qextra:
+            self._extra_linear = [(n, np.asarray(a)) for n, a in qextra.items()]
         if getattr(self, "_backend", None) == "mgcv":
-            df = self._frame(x, y, elev, None, clc, slope, sinasp, cosasp, tmean=tmean)
+            df = self._frame(
+                x, y, elev, None, clc, slope, sinasp, cosasp,
+                tmean=tmean, tpi=tpi, ridge=ridge, region=region, elev_bin=elev_bin,
+            )
             hat = self._predict_r(df)
             if hat is None:
                 raise RuntimeError("mgcv predict failed")
@@ -334,9 +380,13 @@ class GAMInterpolator:
         sinasp=None, sinasp_q=None, cosasp=None, cosasp_q=None,
         var: str = "temp_mean", trace: float | None = None,
         tmean=None, tmean_q=None, region=None, region_q=None,
+        tpi=None, tpi_q=None, ridge=None, ridge_q=None,
+        extra=None, extra_q=None,
     ) -> np.ndarray:
         values = np.asarray(values, float)
         tr = self.cfg.trace if trace is None else float(trace)
+        self._pending_extra = extra
+        self._pending_extra_q = extra_q
         if (
             self.cfg.wind_watershed
             and str(var).lower().startswith("wind")
@@ -347,13 +397,14 @@ class GAMInterpolator:
                 x, y, elev, values, xq, yq, zq,
                 clc, clc_q, slope, slope_q, sinasp, sinasp_q, cosasp, cosasp_q,
                 var, tr, tmean, tmean_q, region, region_q,
+                tpi, tpi_q, ridge, ridge_q,
             )
             return clip_var(var, hat)
         try:
             hat = self._predict_one(
                 x, y, elev, values, xq, yq, zq,
                 clc, clc_q, slope, slope_q, sinasp, sinasp_q, cosasp, cosasp_q,
-                var, tr, tmean, tmean_q,
+                var, tr, tmean, tmean_q, tpi, tpi_q, ridge, ridge_q, region, region_q,
             )
             return clip_var(var, hat)
         finally:
@@ -361,7 +412,8 @@ class GAMInterpolator:
 
     def _predict_by_region(self, x, y, elev, values, xq, yq, zq,
                            clc, clc_q, slope, slope_q, sinasp, sinasp_q, cosasp, cosasp_q,
-                           var, tr, tmean, tmean_q, region, region_q):
+                           var, tr, tmean, tmean_q, region, region_q,
+                           tpi=None, tpi_q=None, ridge=None, ridge_q=None):
         region = np.asarray(region)
         region_q = np.asarray(region_q)
         out = np.empty(np.asarray(xq).size, dtype=np.float64)
@@ -386,6 +438,12 @@ class GAMInterpolator:
                     var, tr,
                     None if tmean is None else np.asarray(tmean)[dmask],
                     None if tmean_q is None else np.asarray(tmean_q)[qmask],
+                    None if tpi is None else np.asarray(tpi)[dmask],
+                    None if tpi_q is None else np.asarray(tpi_q)[qmask],
+                    None if ridge is None else np.asarray(ridge)[dmask],
+                    None if ridge_q is None else np.asarray(ridge_q)[qmask],
+                    np.asarray(region)[dmask],
+                    np.asarray(region_q)[qmask],
                 )
             finally:
                 self.close()
@@ -393,14 +451,35 @@ class GAMInterpolator:
 
     def _predict_one(self, x, y, elev, values, xq, yq, zq,
                      clc, clc_q, slope, slope_q, sinasp, sinasp_q, cosasp, cosasp_q,
-                     var, tr, tmean, tmean_q):
+                     var, tr, tmean, tmean_q,
+                     tpi=None, tpi_q=None, ridge=None, ridge_q=None,
+                     region=None, region_q=None):
         if self.cfg.two_step and two_step_var(var):
+            # Elevation bins so the occurrence and amount models see that
+            # low bins are dry and high bins hold the mass (snow and precip).
+            eb = elev_bin(elev)
+            eb_q = elev_bin(zq)
             wet = (values > tr).astype(float)
-            self.fit_gaussian(x, y, elev, wet, clc, slope, sinasp, cosasp, family="binomial", tmean=tmean)
-            p = np.clip(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q, tmean=tmean_q), 0.0, 1.0)
+            self.fit_gaussian(
+                x, y, elev, wet, clc, slope, sinasp, cosasp,
+                family="binomial", tmean=tmean, tpi=tpi, ridge=ridge, region=region,
+                elev_bin=eb,
+            )
+            p = np.clip(self.predict_raw(
+                xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q,
+                tmean=tmean_q, tpi=tpi_q, ridge=ridge_q, region=region_q,
+                elev_bin=eb_q,
+            ), 0.0, 1.0)
             wet_m = values > tr
             if wet_m.sum() >= 5:
-                amt_in = np.log1p(np.maximum(np.asarray(values)[wet_m], 0.0))
+                wet_vals = np.maximum(np.asarray(values)[wet_m], 0.0)
+                # Data-driven cap: wet p99 of this timestamp. Stops spline
+                # extrapolation (common on sparse high-elev snow donors) from
+                # producing expm1 of large linear predictors.
+                cap = float(np.quantile(wet_vals, 0.99)) if wet_vals.size else 1e3
+                cap = max(cap, 1.0)
+                log_cap = np.log1p(cap)
+                amt_in = np.log1p(wet_vals)
                 self.fit_gaussian(
                     np.asarray(x)[wet_m], np.asarray(y)[wet_m], np.asarray(elev)[wet_m],
                     amt_in,
@@ -410,8 +489,18 @@ class GAMInterpolator:
                     None if cosasp is None else np.asarray(cosasp)[wet_m],
                     family="gaussian",
                     tmean=None if tmean is None else np.asarray(tmean)[wet_m],
+                    tpi=None if tpi is None else np.asarray(tpi)[wet_m],
+                    ridge=None if ridge is None else np.asarray(ridge)[wet_m],
+                    region=None if region is None else np.asarray(region)[wet_m],
+                    elev_bin=eb[wet_m],
                 )
-                amt = np.maximum(np.expm1(self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q, tmean=tmean_q)), 0.0)
+                raw = self.predict_raw(
+                    xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q,
+                    tmean=tmean_q, tpi=tpi_q, ridge=ridge_q, region=region_q,
+                    elev_bin=eb_q,
+                )
+                raw = np.minimum(raw, log_cap)
+                amt = np.maximum(np.expm1(raw), 0.0)
             else:
                 amt = np.zeros(np.asarray(xq).size)
             gate = p >= self.cfg.tau_wet
@@ -424,5 +513,11 @@ class GAMInterpolator:
                 thr = np.partition(p, -k)[-k]
                 gate = p >= thr
             return np.where(gate, amt, 0.0)
-        self.fit_gaussian(x, y, elev, values, clc, slope, sinasp, cosasp, family="gaussian", tmean=tmean)
-        return self.predict_raw(xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q, tmean=tmean_q)
+        self.fit_gaussian(
+            x, y, elev, values, clc, slope, sinasp, cosasp,
+            family="gaussian", tmean=tmean, tpi=tpi, ridge=ridge, region=region,
+        )
+        return self.predict_raw(
+            xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q,
+            tmean=tmean_q, tpi=tpi_q, ridge=ridge_q, region=region_q,
+        )

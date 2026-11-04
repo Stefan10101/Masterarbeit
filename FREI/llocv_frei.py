@@ -22,6 +22,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from paths import get_frei_tuned_params_path, get_master_grid_path, get_nested_llocv_path
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.metrics import compute_metrics as eval_metrics, print_eval
 from frei_core import FreiConfig, FreiInterpolator, two_step_var
 from frei_data import (
     attach_temperature,
@@ -57,12 +58,13 @@ def _covar_arrays(df, keys):
         "elev": "elev", "smooth_elev": "smooth_elev", "slope": "slope",
         "northness": "northness", "tpi": "tpi", "clc": "clc_level2",
         "dist_to_coast": "dist_to_coast", "signed_dist_to_ridge": "signed_dist_to_ridge",
+        "basin_continuity": "basin_continuity", "elev_above_valley": "elev_above_valley",
     }
     out = []
     for k in keys or []:
         col = colmap.get(k, k)
-        if col == "elev":
-            continue  # already the main elev term
+        if col in ("elev", "slope", "northness"):
+            continue  # elev is the main term; slope/northness are in the snow profile
         if col in df.columns:
             out.append(df[col].to_numpy(dtype=float))
     return out or None
@@ -334,6 +336,9 @@ def main():
         pred.to_parquet(out, index=False)
         print(f"{var} folds={n_folds} months={months or 'all'} hours={hours} rh_t={fcfg.rh_t_mode} -> {out}")
         print_split_metrics(pred)
+        if "split" in pred.columns and (pred["split"] == "test").any():
+            part = pred[pred["split"] == "test"]
+            print_eval(eval_metrics(part["observed"], part["predicted"], var, time_res), prefix="  test ")
 
 
 if __name__ == "__main__":

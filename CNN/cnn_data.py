@@ -122,18 +122,17 @@ def attach_station_tpi(panel: pd.DataFrame) -> pd.DataFrame:
     """Attach TPI from the shared station terrain cache (for wind)."""
     from paths import get_station_terrain_path
     path = get_station_terrain_path()
-    if not path.exists() or panel.empty:
-        panel = panel.copy()
-        panel["tpi"] = 0.0
-        return panel
-    t = pd.read_parquet(path)
-    if "tpi" not in t.columns:
-        panel = panel.copy()
-        panel["tpi"] = 0.0
-        return panel
-    keep = t[["station_name", "tpi"]].drop_duplicates("station_name")
-    out = panel.merge(keep, on="station_name", how="left")
-    out["tpi"] = out["tpi"].fillna(0.0)
+    out = panel.copy()
+    if path.exists() and not out.empty:
+        t = pd.read_parquet(path)
+        if "tpi" in t.columns:
+            keep = t[["station_name", "tpi"]].drop_duplicates("station_name")
+            out = out.drop(columns=["tpi"], errors="ignore")
+            out = out.merge(keep, on="station_name", how="left")
+    if "tpi" not in out.columns:
+        out["tpi"] = 0.0
+    else:
+        out["tpi"] = out["tpi"].fillna(0.0)
     return out
 
 

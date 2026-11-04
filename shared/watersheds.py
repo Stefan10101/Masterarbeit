@@ -2,8 +2,9 @@
 """
 DEM basins, TPI flags, valley-axis cost.
 
-Used by Frei (subregions + residual metric) and TPS (per-basin αz).
-n_regions is a DEV free parameter. Everything else is derived from the DEM.
+Shared utility. Used by Frei (subregions + residual metric) and by
+build_terrain_features.py for the core valley covariates.
+n_regions is a free parameter. Everything else is derived from the DEM.
 """
 
 from __future__ import annotations
@@ -52,33 +53,56 @@ def d8_flow(dem: np.ndarray) -> np.ndarray:
 
 
 def flow_accum(direc: np.ndarray) -> np.ndarray:
+    """Flow accumulation via Kahn topological order.
+
+    Every cell starts with 1. Accumulation is pushed downhill exactly once
+    per cell, so long rivers are fully accounted for.
+    """
+    from collections import deque
     ny, nx = direc.shape
     acc = np.ones((ny, nx), dtype=np.float64)
-    # poor-man's topological pass: iterate downhill updates
-    for _ in range(8):
-        add = np.zeros_like(acc)
-        for i, (di, dj) in enumerate(D8):
-            src = direc == i
-            if not src.any():
-                continue
-            yi, xi = np.where(src)
-            yj = np.clip(yi + di, 0, ny - 1)
-            xj = np.clip(xi + dj, 0, nx - 1)
-            np.add.at(add, (yj, xj), acc[yi, xi])
-        acc = 1.0 + add
+    indeg = np.zeros((ny, nx), dtype=np.int32)
+    for i, (di, dj) in enumerate(D8):
+        src = direc == i
+        if not src.any():
+            continue
+        yi, xi = np.where(src)
+        yj = np.clip(yi + di, 0, ny - 1)
+        xj = np.clip(xi + dj, 0, nx - 1)
+        # skip self-loops
+        valid = (yj != yi) | (xj != xi)
+        if valid.any():
+            np.add.at(indeg, (yj[valid], xj[valid]), 1)
+    q = deque(zip(*np.where(indeg == 0)))
+    while q:
+        y, x = q.popleft()
+        d = int(direc[y, x])
+        if d < 0:
+            continue
+        di, dj = D8[d]
+        yj = int(np.clip(y + di, 0, ny - 1))
+        xj = int(np.clip(x + dj, 0, nx - 1))
+        if (yj, xj) == (y, x):
+            continue
+        acc[yj, xj] += acc[y, x]
+        indeg[yj, xj] -= 1
+        if indeg[yj, xj] == 0:
+            q.append((yj, xj))
     return acc
 
 
-def label_basins(direc: np.ndarray, acc: np.ndarray, accum_pct: float, min_cells: int) -> np.ndarray:
-    """Upstream labels from high-accumulation pour points + domain edge.
+def label_basins(direc: np.ndarray, acc: np.ndarray, accum_pct: float, min_cells: int,
+                 force_edges: bool = True) -> np.ndarray:
+    """Upstream labels from high-accumulation pour points.
 
-    Vectorized: seed pour points, then propagate labels downhill in array
-    steps instead of a Python walk over every cell.
+    force_edges=True (default) also seeds every domain-border cell.
+    Set False when the domain is already masked and border seeding is unwanted.
     """
     ny, nx = direc.shape
     thr = np.percentile(acc, accum_pct)
     pour = (acc >= thr).copy()
-    pour[0, :] = pour[-1, :] = pour[:, 0] = pour[:, -1] = True
+    if force_edges:
+        pour[0, :] = pour[-1, :] = pour[:, 0] = pour[:, -1] = True
     labels = np.zeros((ny, nx), dtype=np.int32)
     ys, xs = np.where(pour)
     order = np.argsort(acc[ys, xs])[::-1]
@@ -129,6 +153,43 @@ def label_basins(direc: np.ndarray, acc: np.ndarray, accum_pct: float, min_cells
             labels[replace] = nb.reshape(ny, nx)[replace]
             print(f"      merged {int(small.sum())} tiny basins", flush=True)
     return labels
+
+
+
+def label_from_outlets(direc: np.ndarray, outlets: np.ndarray) -> np.ndarray:
+    """Label every cell by the outlet it drains to.
+
+    outlets: boolean mask of the pour points (already limited to the desired count).
+    Only those cells are seeds; domain edges are not forced.
+    Propagation follows the D8 flow downhill via pointer jumping.
+    """
+    ny, nx = direc.shape
+    labels = np.zeros((ny, nx), dtype=np.int32)
+    oy, ox = np.where(outlets)
+    if len(oy) == 0:
+        return labels
+    labels[oy, ox] = np.arange(1, len(oy) + 1, dtype=np.int32)
+
+    yy, xx = np.indices((ny, nx))
+    di = np.array([d[0] for d in D8], dtype=np.int32)
+    dj = np.array([d[1] for d in D8], dtype=np.int32)
+    d = np.clip(direc, 0, 7)
+    flows = direc >= 0
+    down_y = np.clip(yy + di[d], 0, ny - 1)
+    down_x = np.clip(xx + dj[d], 0, nx - 1)
+    down = (down_y * nx + down_x).ravel()
+    self_idx = (yy * nx + xx).ravel()
+    down = np.where(flows.ravel(), down, self_idx)
+
+    flat = labels.ravel()
+    n = flat.size
+    pos = np.arange(n, dtype=np.int64)
+    nxt = np.where(flat != 0, pos, down.astype(np.int64))
+    jumps = int(np.ceil(np.log2(max(n, 2)))) + 1
+    for _ in range(jumps):
+        nxt = nxt[nxt]
+    flat = flat[nxt]
+    return flat.reshape(ny, nx)
 
 
 def merge_basins(labels: np.ndarray, dem: np.ndarray, xs: np.ndarray, ys: np.ndarray, n_regions: int) -> np.ndarray:

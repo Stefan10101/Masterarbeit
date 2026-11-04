@@ -69,7 +69,7 @@ def _station_terrain() -> pd.DataFrame:
         return pd.DataFrame(columns=["station_name", "slope", "sinasp", "cosasp", "clc_group"])
     t = pd.read_parquet(path)
     keep = ["station_name"]
-    for c in ("slope", "sinasp", "cosasp", "clc_level2"):
+    for c in ("slope", "sinasp", "cosasp", "clc_level2", "tpi", "signed_dist_to_ridge"):
         if c in t.columns:
             keep.append(c)
     t = t[keep].drop_duplicates("station_name")
@@ -115,8 +115,14 @@ def load_panel(cfg: dict, var: str) -> pd.DataFrame:
         .merge(stations, on="station_name", how="inner")
         .dropna(subset=["x", "y", "elev", var])
     )
-    panel = panel.merge(_station_terrain(), on="station_name", how="left")
-    for c, fill in (("slope", 0.0), ("sinasp", 0.0), ("cosasp", 1.0), ("clc_group", 0)):
+    terrain = _station_terrain()
+    overlap = [c for c in terrain.columns if c != "station_name" and c in panel.columns]
+    panel = panel.drop(columns=overlap, errors="ignore")
+    panel = panel.merge(terrain, on="station_name", how="left")
+    for c, fill in (
+        ("slope", 0.0), ("sinasp", 0.0), ("cosasp", 1.0), ("clc_group", 0),
+        ("tpi", 0.0), ("signed_dist_to_ridge", 0.0),
+    ):
         if c not in panel.columns:
             panel[c] = fill
         else:

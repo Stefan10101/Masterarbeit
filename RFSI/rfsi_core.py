@@ -55,29 +55,59 @@ def clip_var(var: str, pred) -> np.ndarray:
     return out
 
 
+# Fixed order and scales so train and predict stay aligned.
+_EXTRA_KEYS = (
+    "slope", "northness", "tpi", "smooth_elev",
+    "dist_to_coast", "signed_dist_to_ridge",
+    "basin_continuity", "elev_above_valley", "tmean",
+)
+_EXTRA_SCALE = {
+    "slope": 45.0,            # degrees
+    "tpi": 100.0,             # m
+    "smooth_elev": 1000.0,    # m -> km
+    "dist_to_coast": 1.0e5,   # m
+    "signed_dist_to_ridge": 1.0e5,
+    "basin_continuity": 1.0e4,    # m
+    "elev_above_valley": 1000.0,  # m -> km
+    "tmean": 10.0,            # C
+}
+_REGION_LEVELS = 12  # one-hot width; ids outside this range are dropped
+
+
 def build_covariates(elev=None, clc_code=None, use_elev: bool = True, use_lc: bool = True,
                      extras: dict | None = None):
-    """elev in km + CLC level-2 one-hot (16 cols) + optional extras (fixed order)."""
+    """elev in km + CLC level-2 one-hot + terrain extras + region one-hot + smooth elev_bin."""
     from shared.clc import one_hot_level2
+    from shared.terrain import elev_bin
     parts = []
     if use_elev and elev is not None:
         e = np.asarray(elev, dtype=np.float32).reshape(-1)
         parts.append((e / 1000.0)[:, None])
+        # 250 m bin as a single scaled index (smooth), plus x/y interactions
+        # so location can override the elevation signal. Free one-hot removed.
+        b = elev_bin(e).astype(np.float32)
+        b_s = (b - b.mean()) / max(b.std(), 1.0)
+        parts.append(b_s[:, None])
+        # spatial override: bin × normalised coords are not available here;
+        # continuous elev + the bin index already let the forest split on both.
     if use_lc and clc_code is not None:
         parts.append(one_hot_level2(clc_code))
     if extras:
-        for key in ("slope", "northness", "tpi", "tmean"):
+        for key in _EXTRA_KEYS:
             if key not in extras or extras[key] is None:
                 continue
             v = np.asarray(extras[key], dtype=np.float32).reshape(-1)
             v = np.where(np.isfinite(v), v, 0.0)
-            if key == "tmean":
-                v = v / 10.0
-            elif key == "tpi":
-                v = v / 100.0
-            elif key == "slope":
-                v = v / 45.0
+            scale = _EXTRA_SCALE.get(key)
+            if scale:
+                v = v / scale
             parts.append(v[:, None])
+        if extras.get("region") is not None:
+            r = np.asarray(extras["region"]).reshape(-1).astype(np.int32)
+            oh = np.zeros((r.size, _REGION_LEVELS), dtype=np.float32)
+            ok = (r >= 0) & (r < _REGION_LEVELS)
+            oh[np.arange(r.size)[ok], r[ok]] = 1.0
+            parts.append(oh)
     if not parts:
         return None
     return np.hstack(parts).astype(np.float32)
@@ -386,20 +416,6 @@ class RFSI:
         hat = np.where(p >= self.tau_wet, np.maximum(hat, 0.0), 0.0)
         return clip_var(self.var_name, hat)
 
-
-def extras_for_var(df, var: str, rh_t_mode: str = "none") -> dict | None:
-    v = str(var).lower()
-    out = {}
-    if v.startswith("snow"):
-        for c in ("slope", "northness"):
-            if c in df.columns:
-                out[c] = df[c].to_numpy()
-    if v.startswith("wind") and "tpi" in df.columns:
-        out["tpi"] = df["tpi"].to_numpy()
-    if v.startswith("rh") and rh_t_mode in ("predicted", "observed") and "temp_mean" in df.columns:
-        out["tmean"] = df["temp_mean"].to_numpy()
-    return out or None
-
     def predict(
         self,
         coords_pred: np.ndarray,
@@ -419,3 +435,51 @@ def extras_for_var(df, var: str, rh_t_mode: str = "none") -> dict | None:
         if exclude_self:
             return self.predict_stations(coords_obs, z_obs, X_cov_obs=X_cov_pred)
         return self.predict_field(coords_obs, z_obs, coords_pred, X_cov_pred=X_cov_pred)
+
+
+def extras_for_var(df, var: str, rh_t_mode: str = "none") -> dict | None:
+    """Terrain extras for every variable (GAM-aligned), plus tmean for RH."""
+    out = {}
+    for c in ("slope", "northness", "tpi", "smooth_elev",
+              "dist_to_coast", "signed_dist_to_ridge",
+              "basin_continuity", "elev_above_valley", "region"):
+        if c in df.columns:
+            out[c] = df[c].to_numpy()
+    v = str(var).lower()
+    if v.startswith("rh") and rh_t_mode in ("predicted", "observed") and "temp_mean" in df.columns:
+        out["tmean"] = df["temp_mean"].to_numpy()
+    return out or None
+
+
+def build_region_pack(cfg, n_regions: int = 6):
+    """Watershed region labels on the master grid. None if the grid is missing."""
+    try:
+        import xarray as xr
+    except ImportError:
+        return None
+    from paths import get_master_grid_path
+    from shared.watersheds import WatershedConfig, build_pack
+    res = int(cfg.get("resolutions_to_process", [1000])[0])
+    path = get_master_grid_path("RFSI", res)
+    if not path.exists():
+        return None
+    g = xr.open_dataset(path)
+    if "elev" not in g:
+        return None
+    wcfg = WatershedConfig(n_regions=int(n_regions))
+    return build_pack(g["elev"].values.astype("float64"), g["x"].values, g["y"].values, wcfg)
+
+
+def attach_region(df, pack):
+    """Add watershed region id. No-op if pack is missing."""
+    if pack is None or "regions" not in pack or df is None or len(df) == 0:
+        return df
+    if "x" not in df.columns or "y" not in df.columns:
+        return df
+    from shared.watersheds import sample_region
+    out = df.copy()
+    out["region"] = sample_region(
+        pack["regions"], pack["xs"], pack["ys"],
+        out["x"].to_numpy(), out["y"].to_numpy(),
+    ).astype("int32")
+    return out

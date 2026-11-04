@@ -26,6 +26,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_nested_llocv_path, get_rgi_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.metrics import compute_metrics as eval_metrics, print_eval
 from rgi_core import RGI, RGIConfig
 from rgi_data import attach_extras, extra_cols_for_var, load_config, load_panel, print_split_metrics, subset_times
 from shared.splits.evaluation_sets import apply_evaluation_protocol
@@ -150,6 +151,9 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
     print(f"  wrote {len(pred_df):,} rows → {out_path}")
     print(f"  wall {(time.perf_counter()-t0)/60:.1f} min")
     print_split_metrics(pred_df)
+    if "split" in pred_df.columns and (pred_df["split"] == "test").any():
+        part = pred_df[pred_df["split"] == "test"]
+        print_eval(eval_metrics(part["observed"], part["predicted"], var, cfg["time_resolution"]), prefix="  test ")
     return pred_df
 
 

@@ -15,7 +15,7 @@ paths:
 domain:
   preset: "full"
   custom_bbox: [-76229, 123066, 637216, 501366]
-  buffer_m: 15000
+  buffer_m: 100000
 
 predefined_bboxes:
   full: [-76229, 123066, 637216, 501366]

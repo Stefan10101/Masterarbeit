@@ -31,6 +31,14 @@ if ("clc" %in% names(q) && "clc" %in% names(model$model)) {
 } else if ("clc" %in% names(q)) {
   q$clc <- factor(q$clc)
 }
+if ("region" %in% names(q) && "region" %in% names(model$model)) {
+  q$region <- factor(q$region, levels = levels(model$model$region))
+} else if ("region" %in% names(q)) {
+  q$region <- factor(q$region)
+}
+if ("elev_bin" %in% names(q)) {
+  q$elev_bin <- as.numeric(q$elev_bin)
+}
 
 pred <- as.numeric(predict(model, newdata = q, type = "response"))
 cat("PREDICT len:", length(pred), " first3:", paste(head(pred, 3), collapse=","), "\n")

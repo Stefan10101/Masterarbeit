@@ -32,7 +32,7 @@ from paths import (
     get_medoids_path,
     get_rfsi_tuned_params_path,
 )
-from rfsi_core import RFSI, build_covariates, extras_for_var, two_step_var
+from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, extras_for_var, two_step_var
 from rfsi_optimizer import compute_metrics
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from shared.splits.evaluation_sets import prepare_for_tuning
@@ -102,13 +102,16 @@ def load_panel(cfg, var):
     df["time"] = as_naive_utc(df[time_col], time_res)
 
     stations = pd.read_parquet(get_domain_stations_path("RFSI", "full"))
+    from shared.terrain import attach_enabled_terrain
+    stations = attach_enabled_terrain(stations, cfg)
     if "elev" not in stations.columns:
         if "elev_dem" in stations.columns:
             stations = stations.rename(columns={"elev_dem": "elev"})
         elif "hoehe" in stations.columns:
             stations = stations.rename(columns={"hoehe": "elev"})
     keep = ["station_name", "x", "y"]
-    for extra in ("elev", "clc_code"):
+    for extra in ("elev", "clc_code", "clc_level2", "slope", "northness", "tpi",
+                  "smooth_elev", "dist_to_coast", "signed_dist_to_ridge"):
         if extra in stations.columns:
             keep.append(extra)
     stations = stations[keep].drop_duplicates("station_name")
@@ -235,6 +238,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
     from shared.splits.evaluation_sets import apply_evaluation_protocol
     tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
     panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
+    panel = attach_region(panel, build_region_pack(cfg, int(cfg.get("rfsi", {}).get("n_regions", 6))))
     rh_t_mode = str(rfsi.get("rh_t_mode", "none"))
     two_step = bool(rfsi.get("two_step", True)) and two_step_var(var)
     tau_wet = float(rfsi.get("tau_wet", 0.5))
@@ -299,8 +303,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
                 uniq.append(g)
         grid = uniq
     print(f"  search {len(grid)} combos, fit on train × pool, "
-          f"score fixed tune-targets × tune", flush=True)
-          f"{n_est_search} trees")
+          f"score fixed tune-targets × tune, {n_est_search} trees", flush=True)
     rows = []
     t0 = time.perf_counter()
     n_grid = len(grid)

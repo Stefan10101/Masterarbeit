@@ -145,15 +145,23 @@ def main():
         if args.quick:
             formulas = [block.get("formula", "te_xy_s_elev")]
             ns_list = [block.get("n_splines", 10)]
+            ns_tensor = ns_list
+            tensor_forms = set()
             taus = [float(block.get("tau_wet", 0.5))]
         else:
             formulas = list(search.get("formula", [block.get("formula", "te_xy_s_elev")]))
             ns_list = list(search.get("n_splines", [block.get("n_splines", 10)]))
+            ns_tensor = list(search.get("n_splines_tensor", [n for n in ns_list if n <= 10]))
+            tensor_forms = set(search.get("tensor_formulas", ["te_xyelev", "te_xy_ti_elev"]))
             if two_step_var(var):
                 taus = list(search.get("tau_wet", [block.get("tau_wet", 0.5)]))
             else:
                 taus = [float(block.get("tau_wet", 0.5))]
-        cells = list(itertools.product(formulas, ns_list, taus))
+        cells = []
+        for form in formulas:
+            use_ns = ns_tensor if form in tensor_forms else ns_list
+            for ns, tau in itertools.product(use_ns, taus):
+                cells.append((form, ns, tau))
         n_dev_t = int(panel.loc[panel["split"] == "dev", "time"].nunique())
         n_sta = int(panel["station_name"].nunique())
         print(

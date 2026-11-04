@@ -94,6 +94,17 @@ def grid_features(grid: xr.Dataset, feat_cols: list[str], cfg: dict) -> tuple[np
         codes = np.nan_to_num(aligned["clc_level2"].values, nan=0).astype(np.int32).ravel()
         clc_oh = one_hot_level2(codes)  # (N, 16), column i = clc_l2_i
 
+    # Precompute scaled 250 m elev-bin from grid elev when requested
+    elev_bin_s = None
+    if "elev_bin" in feat_cols and "elev" in aligned:
+        from shared.terrain import elev_bin
+        b = elev_bin(np.nan_to_num(aligned["elev"].values, nan=0.0).ravel()).astype(np.float32)
+        mu = float(b.mean()) if b.size else 0.0
+        sd = float(b.std()) if b.size else 1.0
+        if sd < 1e-8:
+            sd = 1.0
+        elev_bin_s = (b - mu) / sd
+
     cols = []
     for c in feat_cols:
         if c == "x":
@@ -103,6 +114,8 @@ def grid_features(grid: xr.Dataset, feat_cols: list[str], cfg: dict) -> tuple[np
         elif c.startswith("clc_l2_") and clc_oh is not None:
             idx = int(c.rsplit("_", 1)[-1])
             cols.append(clc_oh[:, idx] if 0 <= idx < clc_oh.shape[1] else np.zeros(ny * nx, dtype=np.float32))
+        elif c == "elev_bin" and elev_bin_s is not None:
+            cols.append(elev_bin_s)
         elif c in aligned and aligned[c].ndim == 2:
             cols.append(np.nan_to_num(aligned[c].values, nan=0.0).ravel())
         else:
@@ -168,6 +181,8 @@ def main():
         )
     stations = compute_dem_features(stations, cfg)
     stations = attach_clc_onehot(stations)
+    from smacnp_data import attach_elev_bin
+    stations = attach_elev_bin(stations)
     df = df.drop(columns=[c for c in feat_cols if c in df.columns and c not in ("x", "y")], errors="ignore")
     df = df.merge(
         stations[["station_name"] + [c for c in feat_cols if c not in ("x", "y")]],

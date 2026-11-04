@@ -364,18 +364,24 @@ def _to_dev(arrs, device):
 def _attach_static(frames, elev, clc, model, slope, sinasp, cosasp, extra=None):
     """One shared terrain/CLC grid. Time is a constant channel, filled per frame.
 
-    extra: optional static raster (e.g. TPI) appended as the last channel.
+    extra: one raster or a list of rasters appended after the base channels.
     """
     z = np.zeros_like(elev, dtype=np.float32)
     n_time = len(frames[0].get("time_ch") or [])
+    if extra is None:
+        extras = None
+    elif isinstance(extra, (list, tuple)):
+        extras = list(extra) or None
+    else:
+        extras = [extra]
     shared = model.pack_channels(
         z, z, elev, clc, slope=slope, sinasp=sinasp, cosasp=cosasp,
         time_ch=([0.0] * n_time) or None,
-        extras=[extra] if extra is not None else None,
+        extras=extras,
     )
     model._shared_static = shared
     model._n_time = n_time
-    model._has_extra = extra is not None
+    model._has_extra = bool(extras)
 
 
 def _pack_from_static(frames, idx, model, rng, mask_frac):
@@ -528,11 +534,13 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
         ccfg.residual_idw = False
         print("  precip path: residual_idw off, target=log1p", flush=True)
     out_ch = 2 if use_two else 1
-    extra = 0
-    if str(var).lower().startswith("wind"):
-        extra = 1  # TPI
-    elif str(var).lower().startswith("rh"):
-        extra = 1  # tmean
+    from cnn_core import load_extra_covariates
+    cov_extras, n_cov = load_extra_covariates(cfg, int(cfg.get("resolutions_to_process", [1000])[0]))
+    extra = n_cov
+    if str(var).lower().startswith("rh"):
+        extra += 1  # tmean (per-variable, not a terrain covariate)
+    if use_two:
+        extra += 1  # smooth 250 m elev-bin index (not free one-hot)
     in_ch = n_in_channels(ccfg, subdaily, extra_ch=extra)
     model = CNNInterpolator(ccfg, in_ch=in_ch, out_ch=out_ch)
     if slope is None and ccfg.use_terrain:
@@ -583,17 +591,9 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
     # Tile path: build one field on CPU, crop query-centered tiles, accumulate.
     # Avoids full-grid backward (cuDNN) and epoch-wide materialization (UI freeze).
     print(f"  tile path  tile={tile}  tiles/batch={tiles_per}  accum={accum}", flush=True)
-    # Load static TPI for wind
-    tpi_grid = None
-    if str(var).lower().startswith("wind"):
-        from paths import get_grid_terrain_path
-        tpath = get_grid_terrain_path(int(elev.shape[1]) if elev.ndim == 2 else 1000)
-        if tpath.exists():
-            import xarray as xr
-            tg = xr.open_dataset(tpath)
-            if "tpi" in tg:
-                tpi_grid = tg["tpi"].values.astype(np.float32)
-    _attach_static(train_fr + dev_fr, elev, clc, model, slope, sinasp, cosasp, extra=tpi_grid)
+    # Enabled core covariates as extra channels (same list produce will use).
+    _attach_static(train_fr + dev_fr, elev, clc, model, slope, sinasp, cosasp,
+                   extra=cov_extras or None)
 
     def _loss_from(hat, y, m, wet):
         if two:

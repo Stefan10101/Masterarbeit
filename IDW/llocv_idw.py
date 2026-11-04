@@ -35,6 +35,7 @@ from shared.splits.evaluation_sets import (
     quarter_of,
 )
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res
+from shared.metrics import compute_metrics as eval_metrics, print_eval
 
 
 TRACE = {
@@ -130,6 +131,9 @@ def main():
         pred.to_parquet(out, index=False)
         print(f"  wrote {out.name}  ({len(pred)} rows)")
         print_metrics(pred, by="quarter")
+        if "split" in pred.columns and (pred["split"] == "test").any():
+            part = pred[pred["split"] == "test"]
+            print_eval(eval_metrics(part["observed"], part["predicted"], var, time_res), prefix="  test ")
 
     print("\nDone.")
 

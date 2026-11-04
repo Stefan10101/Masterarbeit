@@ -19,6 +19,7 @@ from scipy.optimize import minimize
 from scipy.spatial import cKDTree
 
 from kriging_data import apply_clc_map, clip_var, is_precip, merge_rare_clc, precip_trace
+from shared.terrain import elev_bin
 
 
 # ---------------------------------------------------------------------------
@@ -350,10 +351,11 @@ class KrigingInterpolator:
             "elev": "elev", "smooth_elev": "smooth_elev", "slope": "slope",
             "northness": "northness", "tpi": "tpi", "clc": "clc_level2",
             "dist_to_coast": "dist_to_coast", "signed_dist_to_ridge": "signed_dist_to_ridge",
+            "basin_continuity": "basin_continuity", "elev_above_valley": "elev_above_valley",
         }
         keys = [colmap.get(k, k) for k in (self.cfg.enabled_covariates or [])]
         # elev is already in the main trend; do not double-count
-        keys = [k for k in keys if k != "elev"]
+        keys = [k for k in keys if k not in ("elev", "clc_level2")]
         v = self.var_name.lower()
         if v.startswith("rh") and self.cfg.rh_t_mode in ("predicted", "observed"):
             if "temp_mean" not in keys:
@@ -382,6 +384,24 @@ class KrigingInterpolator:
                 mu, sd = self.extra_stats.get(k, (0.0, 1.0))
             v = np.where(np.isfinite(v), v, mu)
             cols.append((v - mu) / sd)
+        # 250 m elev bin as a single standardised index (smooth), plus
+        # x*bin and y*bin so location can override the elevation signal.
+        # Free one-hot removed to avoid hard edges and sparse-bin dominance.
+        if self.two_step and "elev" in df.columns and "x" in df.columns:
+            b = elev_bin(df["elev"].to_numpy()).astype(np.float64)
+            mu = float(b.mean()) if b.size else 0.0
+            sd = float(b.std()) if b.size else 1.0
+            if sd < 1e-8:
+                sd = 1.0
+            b_s = (b - mu) / sd
+            cols.append(b_s)
+            # spatial interactions (standardised coords if available)
+            xs = df["x"].to_numpy(dtype=np.float64)
+            ys = df["y"].to_numpy(dtype=np.float64)
+            xs = (xs - xs.mean()) / max(xs.std(), 1.0)
+            ys = (ys - ys.mean()) / max(ys.std(), 1.0)
+            cols.append(b_s * xs)
+            cols.append(b_s * ys)
         return cols
 
     def _metric(self, df: pd.DataFrame) -> np.ndarray:

@@ -105,6 +105,22 @@ def main():
                 f"years={years or 'all'} months={months or 'all'} rh_t={fcfg.rh_t_mode}",
                 flush=True,
             )
+            # Grid covariates for the linear background, same keys as LLOCV.
+            from shared.terrain import enabled_covariates
+            cov_keys = [c for c in enabled_covariates(cfg)
+                        if c not in ("elev", "slope", "northness", "clc_level2")]
+            grid_cov = {}
+            try:
+                import xarray as xr
+                from paths import get_grid_terrain_path
+                tds = xr.open_dataset(get_grid_terrain_path(int(res)))
+                for col in cov_keys:
+                    if col in tds:
+                        grid_cov[col] = np.nan_to_num(tds[col].values, nan=0.0).ravel().astype(np.float64)
+                tds.close()
+            except Exception as exc:
+                print(f"  grid covariates unavailable ({exc})", flush=True)
+
             groups = list(panel.groupby("time"))
             n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
 
@@ -113,10 +129,13 @@ def main():
                 if sl["station_name"].nunique() < min_stations:
                     return None
                 t_obs = sl["temp_mean"].to_numpy() if "temp_mean" in sl.columns else None
+                extra_s = [sl[c].to_numpy(dtype=float) for c in cov_keys if c in sl.columns]
+                extra_q = [grid_cov[c] for c in cov_keys if c in grid_cov and c in sl.columns]
                 hat, _ = model.predict_timestamp(
                     sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(),
                     sl[var].to_numpy(), xq, yq, zq, use_profile=use_profile, var=var,
                     t_obs=t_obs, t_obs_q=None,
+                    extra_s=extra_s or None, extra_q=extra_q or None,
                 )
                 stamp = pd.Timestamp(ts)
                 if stamp.tzinfo is not None:

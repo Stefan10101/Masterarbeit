@@ -105,7 +105,8 @@ def compute_dem_features(stations: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     if feats.get("signed_dist_to_ridge", True):
         want.append("signed_dist_to_ridge")
     # Optional extras that may be useful later
-    for extra in ("slope", "aspect", "sinasp", "cosasp", "northness", "clc_level2"):
+    for extra in ("slope", "aspect", "sinasp", "cosasp", "northness", "clc_level2",
+                  "basin_continuity", "elev_above_valley"):
         if extra in cache.columns and extra not in want:
             want.append(extra)
 
@@ -115,22 +116,35 @@ def compute_dem_features(stations: pd.DataFrame, cfg: dict) -> pd.DataFrame:
 
 
 def feature_columns(cfg: dict) -> List[str]:
-    feats = cfg.get("smacnp", {}).get("features", {})
+    """Columns used by SMACNP. Continuous core covariates follow the shared toggle."""
+    from shared.terrain import enabled_covariates
+    cov = set(enabled_covariates(cfg))
     cols = ["x", "y"]
-    if feats.get("elev", True):
-        cols.append("elev")
-    if feats.get("smooth_elev", False):
-        cols.append("smooth_elev")
-    if feats.get("tpi", False):
-        cols.append("tpi")
-    if feats.get("dist_to_coast", True):
-        cols.append("dist_to_coast")
-    if feats.get("signed_dist_to_ridge", True):
-        cols.append("signed_dist_to_ridge")
-    if feats.get("clc", True):
-        # Level-2 one-hot column names; filled by attach_clc_onehot
+    for c in ("elev", "smooth_elev", "slope", "northness", "tpi",
+              "dist_to_coast", "signed_dist_to_ridge",
+              "basin_continuity", "elev_above_valley"):
+        if c in cov:
+            cols.append(c)
+    if "clc_level2" in cov:
         cols.extend([f"clc_l2_{i}" for i in range(16)])
+    # 250 m elev-bin as a single smooth index (not free one-hot).
+    cols.append("elev_bin")
     return cols
+
+
+def attach_elev_bin(df: pd.DataFrame) -> pd.DataFrame:
+    """Add scaled 250 m elev-bin index (smooth ordered covariate)."""
+    from shared.terrain import elev_bin
+    if "elev" not in df.columns:
+        return df
+    b = elev_bin(df["elev"].to_numpy()).astype(np.float32)
+    out = df.copy()
+    mu = float(b.mean()) if b.size else 0.0
+    sd = float(b.std()) if b.size else 1.0
+    if sd < 1e-8:
+        sd = 1.0
+    out["elev_bin"] = (b - mu) / sd
+    return out
 
 
 def attach_clc_onehot(df: pd.DataFrame) -> pd.DataFrame:

@@ -29,6 +29,7 @@ from paths import get_cnn_model_path, get_master_grid_path, get_nested_llocv_pat
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
 from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_fz_points, idw_fz_raster, idw_raster, sample_at_points, station_to_raster, two_step_var
 from shared.splits.evaluation_sets import apply_evaluation_protocol
+from shared.metrics import compute_metrics as eval_metrics, print_eval
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, print_split_metrics, subset_times, attach_temperature, attach_station_tpi
 from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned, train_one
 
@@ -229,6 +230,9 @@ def main():
         print(f"{var} -> {out}")
         if not pred.empty:
             print_split_metrics(pred)
+            if "split" in pred.columns and (pred["split"] == "test").any():
+                part = pred[pred["split"] == "test"]
+                print_eval(eval_metrics(part["observed"], part["predicted"], var, time_res), prefix="  test ")
 
 
 if __name__ == "__main__":

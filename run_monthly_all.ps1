@@ -34,28 +34,28 @@ function Run-Step($label, $cmd) {
 #}
 
 # GAM
-foreach ($v in $vars) {
-    Run-Step "GAM tune $v"  "python GAM/tune_gam.py --time-resolution $res --max-times 0 --variable $v"
-    Run-Step "GAM llocv $v" "python GAM/llocv_gam.py --time-resolution $res --variable $v"
+#foreach ($v in $vars) {
+#    Run-Step "GAM tune $v"  "python GAM/tune_gam.py --time-resolution $res --max-times 0 --variable $v"
+#    Run-Step "GAM llocv $v" "python GAM/llocv_gam.py --time-resolution $res --variable $v"
     # Run-Step "GAM produce $v" "python GAM/produce_gam_maps.py --time-resolution $res --variable $v"
-}
+#}
 
 # RFSI
-Run-Step "RFSI tune"  "python RFSI/tune_pooled.py --time-resolution $res --max-times 0 --variables $($vars -join ' ')"
-Run-Step "RFSI llocv" "python RFSI/llocv_pooled.py --time-resolution $res --variables $($vars -join ' ')"
+#Run-Step "RFSI tune"  "python RFSI/tune_pooled.py --time-resolution $res --max-times 0 --variables $($vars -join ' ')"
+#Run-Step "RFSI llocv" "python RFSI/llocv_pooled.py --time-resolution $res --variables $($vars -join ' ')"
 # Run-Step "RFSI produce" "python RFSI/produce_rfsi_maps.py --time-resolution $res --variables $($vars -join ' ')"
 
-# CNN
-foreach ($v in $vars) {
-    Run-Step "CNN tune $v"  "python CNN/tune_cnn.py --time-resolution $res --variable $v"
-    Run-Step "CNN train $v" "python CNN/train_cnn.py --time-resolution $res --variable $v"
-    Run-Step "CNN llocv $v" "python CNN/llocv_cnn.py --time-resolution $res --variable $v"
-    # Run-Step "CNN produce $v" "python CNN/produce_cnn_maps.py --time-resolution $res --variable $v"
-}
+## CNN
+#foreach ($v in $vars) {
+#    Run-Step "CNN tune $v"  "python CNN/tune_cnn.py --time-resolution $res --variable $v"
+#    Run-Step "CNN train $v" "python CNN/train_cnn.py --time-resolution $res --variable $v"
+#    Run-Step "CNN llocv $v" "python CNN/llocv_cnn.py --time-resolution $res --variable $v"
+#    # Run-Step "CNN produce $v" "python CNN/produce_cnn_maps.py --time-resolution $res --variable $v"
+#}
 
 # RGI
-Run-Step "RGI tune"  "python RGI/tune_rgi.py --time-resolution $res --max-times 0 --variables $($vars -join ' ')"
-Run-Step "RGI llocv" "python RGI/llocv_rgi.py --time-resolution $res --variables $($vars -join ' ')"
+#Run-Step "RGI tune"  "python RGI/tune_rgi.py --time-resolution $res --max-times 0 --variables $($vars -join ' ')"
+#Run-Step "RGI llocv" "python RGI/llocv_rgi.py --time-resolution $res --variables $($vars -join ' ')"
 # Run-Step "RGI produce" "python RGI/produce_rgi_maps.py --time-resolution $res --variables $($vars -join ' ')"
 
 # SMACNP

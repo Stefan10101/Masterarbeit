@@ -196,6 +196,20 @@ def main():
                 grid.close()
                 continue
 
+            # Grid covariates so the map query matches the station fit.
+            from shared.terrain import enabled_covariates
+            grid_cov = {}
+            try:
+                from paths import get_grid_terrain_path
+                tds = xr.open_dataset(get_grid_terrain_path(int(res)))
+                for col in enabled_covariates(cfg):
+                    if col in ("elev", "clc_level2") or col not in tds:
+                        continue
+                    grid_cov[col] = np.nan_to_num(tds[col].values, nan=0.0).ravel().astype(np.float64)
+                tds.close()
+            except Exception as exc:
+                print(f"  grid covariates unavailable ({exc})", flush=True)
+
             times = sorted(panel["time"].unique())
             n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
 
@@ -217,6 +231,8 @@ def main():
                         var: np.zeros(len(sl), dtype=np.float32),
                     })
                     qry = attach_pack_terrain(qry, pack)
+                    for col, arr in grid_cov.items():
+                        qry[col] = arr[sl]
                     if t_model is not None:
                         qry["temp_mean"] = t_model.predict_frame(df_t, qry, "temp_mean")
                     pred_flat[sl] = model.predict_frame(df_t, qry, var)

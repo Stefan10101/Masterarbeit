@@ -583,7 +583,9 @@ def apply_evaluation_protocol(
     out = df.copy()
     out["is_heldout"] = out[station_col].astype(str).isin(held)
     out["is_tune_target"] = out[station_col].astype(str).isin(tune_targets)
-    out["quarter"] = out[time_col].map(quarter_of)
+    t = pd.to_datetime(out[time_col])
+    q = ((t.dt.month - 1) // 3 + 1).astype(str)
+    out["quarter"] = t.dt.year.astype(str) + "-Q" + q
     out["split"] = "outside"
     for name, qs in splits.items():
         out.loc[out["quarter"].isin(qs), "split"] = name

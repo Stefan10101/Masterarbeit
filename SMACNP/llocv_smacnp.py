@@ -33,6 +33,7 @@ from smacnp_data import (
 from smacnp_core import SMACNP
 from paths import get_smacnp_model_path, get_method_output_dir
 from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of
+from shared.metrics import compute_metrics as eval_metrics, print_eval
 
 
 def get_device(cfg: dict) -> torch.device:
@@ -123,8 +124,9 @@ def main():
             df[["station_name", "elev"]].drop_duplicates("station_name"), on="station_name", how="left"
         )
     stations = compute_dem_features(stations, cfg)
-    from smacnp_data import attach_clc_onehot
+    from smacnp_data import attach_clc_onehot, attach_elev_bin
     stations = attach_clc_onehot(stations)
+    stations = attach_elev_bin(stations)
     df = df.drop(columns=[c for c in feat_cols if c in df.columns and c not in ("x", "y")], errors="ignore")
     df = df.merge(
         stations[["station_name"] + [c for c in feat_cols if c not in ("x", "y")]],
@@ -212,7 +214,7 @@ def main():
             f"obs wet frac={float(wet.mean()):.3f}"
         )
     met = metrics(res["obs"].to_numpy(), res["pred"].to_numpy())
-    print(f"held-out  RMSE={met['rmse']:.3f}  MAE={met['mae']:.3f}  bias={met['bias']:.3f}  r={met['r']:.3f}  n={met['n']}")
+    print_eval(eval_metrics(res["obs"].to_numpy(), res["pred"].to_numpy(), args.variable, cfg["time_resolution"]), prefix="  held-out ")
 
     out_dir = get_method_output_dir("SMACNP") / "llocv" / cfg["time_resolution"]
     out_dir.mkdir(parents=True, exist_ok=True)

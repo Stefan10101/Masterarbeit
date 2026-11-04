@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 CODE_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_DIR))
 
+from shared.metrics import compute_metrics as shared_metrics, precip_scores, rmse_over_std
 from paths import (  # noqa: E402
     get_domain_stations_path,
     get_llocv_compare_dir,
@@ -50,33 +51,8 @@ COLORS = {
 
 
 def compute_metrics(obs, pred) -> dict:
-    o = np.asarray(obs, dtype=float)
-    p = np.asarray(pred, dtype=float)
-    m = np.isfinite(o) & np.isfinite(p)
-    o, p = o[m], p[m]
-    n = int(len(o))
-    empty = {k: np.nan for k in ("n", "me", "mae", "rmse", "nse", "kge", "ccc", "r")}
-    empty["n"] = n
-    if n < 2:
-        return empty
-    err = p - o
-    rmse = float(np.sqrt(np.mean(err ** 2)))
-    mae = float(np.mean(np.abs(err)))
-    me = float(np.mean(err))
-    ss_tot = float(np.sum((o - o.mean()) ** 2))
-    nse = float(1.0 - np.sum((o - p) ** 2) / ss_tot) if ss_tot > 0 else np.nan
-    r = float(np.corrcoef(o, p)[0, 1])
-    so, sp = float(np.std(o)), float(np.std(p))
-    alpha = float(sp / so) if so > 0 else np.nan
-    beta = float(np.mean(p) / np.mean(o)) if np.mean(o) != 0 else np.nan
-    kge = float(1.0 - np.sqrt((r - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2))
-    mx, my = float(o.mean()), float(p.mean())
-    sxx = float(np.mean((o - mx) ** 2))
-    syy = float(np.mean((p - my) ** 2))
-    sxy = float(np.mean((o - mx) * (p - my)))
-    den = sxx + syy + (mx - my) ** 2
-    ccc = float(2.0 * sxy / den) if den > 0 else np.nan
-    return {"n": n, "me": me, "mae": mae, "rmse": rmse, "nse": nse, "kge": kge, "ccc": ccc, "r": r}
+    """Delegate to the shared evaluation set (core scores only)."""
+    return shared_metrics(obs, pred)
 
 
 def precip_extra(obs, pred, trace: float) -> dict:
@@ -210,14 +186,12 @@ def metrics_table(df: pd.DataFrame, var: str, time_res: str) -> pd.DataFrame:
     is_p = var.lower().startswith("precip") or var.lower().startswith("snow")
     trace = TRACE_MM.get(time_res, 1.0)
     for (method, split), g in df.groupby(["method", "split"], sort=False):
-        row = {"method": method, "split": split, "subset": "all", **compute_metrics(g.observed, g.predicted)}
-        if is_p:
-            row.update(precip_extra(g.observed, g.predicted, trace))
+        row = {"method": method, "split": split, "subset": "all",
+               **shared_metrics(g.observed, g.predicted, var, time_res, trace=trace if is_p else None)}
         rows.append(row)
     for method, g0 in df.groupby("method", sort=False):
-        row = {"method": method, "split": "all", "subset": "all", **compute_metrics(g0.observed, g0.predicted)}
-        if is_p:
-            row.update(precip_extra(g0.observed, g0.predicted, trace))
+        row = {"method": method, "split": "all", "subset": "all",
+               **shared_metrics(g0.observed, g0.predicted, var, time_res, trace=trace if is_p else None)}
         rows.append(row)
         g0 = g0.copy()
         g0["season"] = season_of(g0["time"])
@@ -431,7 +405,7 @@ def print_table(tab: pd.DataFrame, split: str):
     if sub.empty:
         sub = tab[(tab["subset"] == "all") & (tab["split"] == "all")].drop_duplicates("method")
         split = "all"
-    cols = [c for c in ("method", "n", "me", "mae", "rmse", "nse", "kge", "ccc", "r",
+    cols = [c for c in ("method", "n", "me", "mae", "rmse", "rmse_std", "nse", "kge", "ccc", "r",
                         "rmse_wet", "freq_bias", "ets") if c in sub.columns]
     print(f"\n{split} scores")
     with pd.option_context("display.float_format", "{:.3f}".format, "display.max_columns", 20):

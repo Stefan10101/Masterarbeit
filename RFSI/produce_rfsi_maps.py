@@ -36,7 +36,7 @@ from paths import (
     get_master_grid_path,
     get_rfsi_model_path,
 )
-from rfsi_core import RFSI, build_covariates, extras_for_var, neighbor_width, two_step_var
+from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, extras_for_var, neighbor_width, two_step_var
 from rfsi_optimizer import compute_metrics
 from shared.time_res import add_time_res_arg, apply_time_res
 
@@ -178,12 +178,15 @@ def main():
         )
     print(f"  covariates: elev={use_elev}  landcover={use_lc}")
 
+    from shared.terrain import attach_enabled_terrain
+    stations = attach_enabled_terrain(stations, cfg)
     station_cols = ["station_name", "x", "y"]
-    if use_elev and "elev" in stations.columns:
-        station_cols.append("elev")
-    if use_lc and "clc_code" in stations.columns:
-        station_cols.append("clc_code")
+    for c in ("elev", "clc_code", "clc_level2", "slope", "northness", "tpi",
+              "smooth_elev", "dist_to_coast", "signed_dist_to_ridge"):
+        if c in stations.columns and (c != "elev" or use_elev) and (c != "clc_code" or use_lc):
+            station_cols.append(c)
     stations = stations[station_cols].drop_duplicates("station_name")
+    pack = build_region_pack(cfg, int(cfg.get("rfsi", {}).get("n_regions", 6)))
 
     wanted = args.variables or VARIABLES or ALL_VARS
     wanted = [v for v in wanted if v in station_data.columns]
@@ -223,6 +226,7 @@ def main():
         valid = station_data[["station_name", "time", var]].dropna()
         valid = valid.merge(stations, on="station_name", how="inner")
         valid = valid.dropna(subset=["x", "y", var])
+        valid = attach_region(valid, pack)
         if "elev" in valid.columns:
             valid = valid.dropna(subset=["elev"])
         rh_t_mode = str(rfsi_cfg.get("rh_t_mode", "none"))
@@ -299,6 +303,22 @@ def main():
                 grid_df["elev"] = grid_crop.elev.values.astype(np.float32).ravel()
             if use_lc:
                 grid_df["clc_code"] = grid_landcover_flat(grid_crop)
+            try:
+                from paths import get_grid_terrain_path
+                tds = xr.open_dataset(get_grid_terrain_path(int(res)))
+                for c in ("slope", "northness", "tpi", "smooth_elev",
+                          "dist_to_coast", "signed_dist_to_ridge"):
+                    if c in tds:
+                        grid_df[c] = np.nan_to_num(tds[c].values, nan=0.0).ravel().astype(np.float32)
+                tds.close()
+            except Exception as exc:
+                print(f"  grid terrain cache missing: {exc}")
+            if pack is not None:
+                from shared.watersheds import sample_region
+                grid_df["region"] = sample_region(
+                    pack["regions"], pack["xs"], pack["ys"],
+                    grid_points[:, 0], grid_points[:, 1],
+                ).astype(np.int32)
             if len(grid_df.columns):
                 X_grid, _ = prepare_covariates(
                     grid_df, encoder=encoder, use_elev=use_elev, use_lc=use_lc

@@ -12,7 +12,7 @@ paths:
 domain:
   preset: "full"
   custom_bbox: [-76229, 123066, 637216, 501366]
-  buffer_m: 15000
+  buffer_m: 100000
 
 predefined_bboxes:
   # Alpine Convention perimeter in EPSG:31287 (from process_new_dem.py run)
@@ -53,13 +53,17 @@ gam:
     tune_folds: 5
 
   search:
-    # 3 parameters, so the full product is scored.
+    # Additive formulas use the full n_splines list.
+    # Tensor formulas stop at 10: ns=14 on te_xyelev timed out past 3600 s.
+    # Logged ns always equals the fitted basis.
     formula:
       - "te_xy_s_elev"
       - "te_xy_ti_elev"
       - "te_xyelev"
       - "s_xy_s_elev"
     n_splines: [6, 8, 10, 14]
+    n_splines_tensor: [6, 8, 10]
+    tensor_formulas: ["te_xyelev", "te_xy_ti_elev"]
     tau_wet: [0.3, 0.5, 0.7]
 
 aggregation:
