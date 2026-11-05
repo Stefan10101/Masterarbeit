@@ -378,14 +378,19 @@ def process_one_station(args):
         out_path = output_dir / f"{safe_name}{output_suffix}"
 
         if not df_clean.empty:
-            cols = ["timestamp", "value", "is_missing", "station", "name", "hoehe", "lat", "lon", "parameter", "source_file"]
+            cols = ["timestamp", "value", "is_missing", "station", "name", "height", "lat", "lon", "parameter", "source_file"]
             existing = [c for c in cols if c in df_clean.columns]
             df_clean[existing].to_parquet(out_path.with_suffix(".parquet"), compression="snappy", index=False)
 
+            elev = None
+            if "height" in df_clean.columns and pd.notna(df_clean["height"].iloc[0]):
+                elev = float(df_clean["height"].iloc[0])
+            elif "hoehe" in df_clean.columns and pd.notna(df_clean["hoehe"].iloc[0]):
+                elev = float(df_clean["hoehe"].iloc[0])
             ts_col = df_clean.get("timestamp", df_clean.index)
             json_data = {
                 "name": str(df_clean["name"].iloc[0]) if "name" in df_clean.columns else station,
-                "hoehe": float(df_clean["hoehe"].iloc[0]) if "hoehe" in df_clean.columns and pd.notna(df_clean["hoehe"].iloc[0]) else None,
+                "height": elev,
                 "lat": float(df_clean["lat"].iloc[0]) if "lat" in df_clean.columns and pd.notna(df_clean["lat"].iloc[0]) else None,
                 "lon": float(df_clean["lon"].iloc[0]) if "lon" in df_clean.columns and pd.notna(df_clean["lon"].iloc[0]) else None,
                 "qc_version": "v2.38_pipeline3 (final stable)",

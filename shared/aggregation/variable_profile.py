@@ -415,8 +415,6 @@ def main():
 
     print("loading station and terrain table", flush=True)
     stations = load_station_table()
-    held, _ = load_holdout()
-    held_set = set(map(str, held))
     qmap = quarter_split_map()
 
     rows = []
@@ -424,6 +422,8 @@ def main():
         for var in args.variables:
             print(f"\n{time_res}  {var}", flush=True)
             try:
+                held, _ = load_holdout(variable=var)
+                held_set = set(map(str, held))
                 rows.extend(run_variable(time_res, var, stations, held_set, qmap))
             except Exception as exc:
                 print(f"  failed: {exc}")

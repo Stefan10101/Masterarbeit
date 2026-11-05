@@ -93,6 +93,15 @@ def load_alpine_perimeter() -> gpd.GeoDataFrame:
     return gdf.to_crs("EPSG:4326")
 
 
+def domain_extent(peri: gpd.GeoDataFrame, buffer_km: float = 100.0, pad_deg: float = 0.35) -> tuple:
+    """Alpine Convention + buffer, plus a small degree pad so the edges are visible."""
+    peri_m = peri.to_crs("EPSG:31287")
+    buffered = peri_m.buffer(buffer_km * 1000).union_all()
+    buf_wgs = gpd.GeoDataFrame(geometry=[buffered], crs="EPSG:31287").to_crs("EPSG:4326")
+    minx, miny, maxx, maxy = buf_wgs.total_bounds
+    return (minx - pad_deg, maxx + pad_deg, miny - pad_deg, maxy + pad_deg)
+
+
 def load_raster_reprojected(
     raster_path: Path,
     lonlat_extent: tuple,
@@ -371,8 +380,9 @@ def main(dpi: int = 400):
     minx, miny, maxx, maxy = peri.total_bounds
     print(f"Alpine Convention lon/lat bounds: ({minx:.2f}, {miny:.2f}, {maxx:.2f}, {maxy:.2f})")
 
-    pad = 0.45
-    main_extent = (minx - pad, maxx + pad, miny - pad, maxy + pad)
+    main_extent = domain_extent(peri, buffer_km=100.0, pad_deg=0.35)
+    print(f"Map extent (domain + pad): lon {main_extent[0]:.2f}–{main_extent[1]:.2f}, "
+          f"lat {main_extent[2]:.2f}–{main_extent[3]:.2f}")
 
     make_dem_figure(peri, main_extent, dpi)
     make_clc_figure(peri, main_extent, dpi)

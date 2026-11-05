@@ -311,8 +311,8 @@ def cluster_stations(df_meta, radius_m=RADIUS_M):
 # ==================== 2b. PROVIDER LOOKUP & MATCHING (now uses raw data tree) ====================
 def assign_providers_to_clusters(cluster_info, provider_df, max_dist_m=MAX_PROVIDER_MATCH_M):
     """Match each 10 m cluster center to the nearest provider station using
-    coordinate proximity (â‰¤ max_dist_m). Now fed with the much richer lookup
-    built from the raw data tree â†’ far fewer (ideally zero) 'Unknown' entries.
+    coordinate proximity (≤ max_dist_m). Now fed with the much richer lookup
+    built from the raw data tree → far fewer (ideally zero) 'Unknown' entries.
     """
     if provider_df.empty or cluster_info.empty:
         cluster_info = cluster_info.copy()

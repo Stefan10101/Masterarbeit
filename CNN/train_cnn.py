@@ -517,7 +517,8 @@ def _extract_tiles(chans, tgts, qmasks, wets, bases, fields, tile, rng, n_tiles,
 
 
 def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp=None, cosasp=None,
-              time_res: str | None = None, trace: float = 0.1, jobs: int = 1):
+              time_res: str | None = None, trace: float = 0.1, jobs: int = 1,
+              cfg: dict | None = None):
     subdaily = is_subdaily(panel, time_res)
     use_two = bool(ccfg.two_step) and two_step_var(var)
     if use_two:
@@ -535,7 +536,12 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
         print("  precip path: residual_idw off, target=log1p", flush=True)
     out_ch = 2 if use_two else 1
     from cnn_core import load_extra_covariates
-    cov_extras, n_cov = load_extra_covariates(cfg, int(cfg.get("resolutions_to_process", [1000])[0]))
+    if cfg is not None:
+        cov_extras, n_cov = load_extra_covariates(
+            cfg, int(cfg.get("resolutions_to_process", [1000])[0])
+        )
+    else:
+        cov_extras, n_cov = [], 0
     extra = n_cov
     if str(var).lower().startswith("rh"):
         extra += 1  # tmean (per-variable, not a terrain covariate)
@@ -758,6 +764,7 @@ def main():
             panel, var, ccfg, elev, clc, gx, gy,
             slope, sinasp, cosasp, time_res=time_res,
             trace=precip_trace(cfg, time_res, var),
+            cfg=cfg,
         )
         path = get_cnn_model_path(var, time_res)
         torch.save(model.state_dict(), path)

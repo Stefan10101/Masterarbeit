@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 process_alpine_dem.py
-Reproject the raw COP30 Alpine Convention mosaic to EPSG:31287 and write:
+Mosaic the four existing COP30 quarters, reproject to EPSG:31287, write:
   - unclipped full mosaic
-  - clipped to Alpine Convention perimeter (exact name expected by paths.get_dem_path)
+  - clipped to Alpine Convention perimeter
 """
 import tempfile
 import urllib.request
@@ -11,12 +11,19 @@ from pathlib import Path
 
 import geopandas as gpd
 import rasterio
+from rasterio.merge import merge
 from rasterio.mask import mask
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 
 # ===== CONFIG =====
-RAW_PATH = Path(r"C:\Users\stefa\Documents\UNI\Master\Masterarbeit\Daten\Source\DEM\COP30_alpine_convention_raw.tif")
-OUT_DIR  = Path(r"C:\Users\stefa\Documents\UNI\Master\Masterarbeit\Daten\Source\DEM")
+OUT_DIR = Path(r"C:\Users\stefa\Documents\UNI\Master\Masterarbeit\Daten\Source\DEM")
+QUARTERS = [
+    OUT_DIR / "cop30_sw.tif",
+    OUT_DIR / "cop30_se.tif",
+    OUT_DIR / "cop30_nw.tif",
+    OUT_DIR / "cop30_ne.tif",
+]
+RAW_PATH = OUT_DIR / "COP30_alpine_convention_raw.tif"
 CLIPPED_NAME   = "COP30_mosaic_EPSG31287.tif"
 UNCLIPPED_NAME = "COP30_mosaic_EPSG31287_unclipped.tif"
 
@@ -35,7 +42,31 @@ CLIPPED_PATH   = OUT_DIR / CLIPPED_NAME
 UNCLIPPED_PATH = OUT_DIR / UNCLIPPED_NAME
 
 
+def mosaic_quarters():
+    missing = [p for p in QUARTERS if not p.exists()]
+    if missing:
+        raise FileNotFoundError(f"missing quarters: {missing}")
+    print("Mosaicking existing quarters...")
+    srcs = [rasterio.open(p) for p in QUARTERS]
+    mosaic, out_trans = merge(srcs)
+    meta = srcs[0].meta.copy()
+    meta.update({
+        "height": mosaic.shape[1],
+        "width": mosaic.shape[2],
+        "transform": out_trans,
+        "compress": "lzw",
+        "BIGTIFF": "YES",
+    })
+    with rasterio.open(RAW_PATH, "w", **meta) as dst:
+        dst.write(mosaic)
+    for s in srcs:
+        s.close()
+    print(f"Raw mosaic: {RAW_PATH.name}")
+
+
 def main():
+    mosaic_quarters()
+
     # 1. Reproject full raw mosaic → unclipped
     print("Reprojecting full mosaic to EPSG:31287...")
     with rasterio.open(RAW_PATH) as src:
@@ -51,6 +82,7 @@ def main():
             "compress": "lzw",
             "predictor": 2,
             "nodata": src.nodata,
+            "BIGTIFF": "YES",
         })
         with rasterio.open(UNCLIPPED_PATH, "w", **kwargs) as dst:
             for i in range(1, src.count + 1):

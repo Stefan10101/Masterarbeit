@@ -108,6 +108,7 @@ def main():
             _, dev = train_one(
                 panel, var, ccfg, elev, clc, gx, gy,
                 slope, sinasp, cosasp, time_res=time_res, trace=trace, jobs=max(1, args.jobs),
+                cfg=cfg,
             )
             print(f"{var} levels={levels} ch={ch} dev={dev:.4f}", flush=True)
             trials.append({"n_levels": int(levels), "base_ch": int(ch), "dev": float(dev)})

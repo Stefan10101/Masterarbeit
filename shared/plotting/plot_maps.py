@@ -342,9 +342,11 @@ def process_one_timestep(args):
     # Perimeter
     peri.boundary.plot(ax=ax, edgecolor="black", linewidth=1.1, zorder=4)
 
-    # Crop to perimeter bounds with pad
-    minx, miny, maxx, maxy = peri.total_bounds
-    pad = 40000
+    # Crop to domain (perimeter + 100 km buffer) with a little extra room
+    peri_m = peri.to_crs("EPSG:31287")
+    buffered = peri_m.buffer(100000).union_all()
+    minx, miny, maxx, maxy = gpd.GeoSeries([buffered], crs="EPSG:31287").total_bounds
+    pad = 25000  # 25 km beyond the buffer so the edges stay visible
     ax.set_xlim(minx - pad, maxx + pad)
     ax.set_ylim(miny - pad, maxy + pad)
     ax.set_aspect("equal")

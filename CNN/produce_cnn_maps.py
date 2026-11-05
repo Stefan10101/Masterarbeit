@@ -121,6 +121,7 @@ def main():
                     panel, var, ccfg, elev, clc, gx, gy,
                     slope, sinasp, cosasp, time_res=time_res,
                     trace=precip_trace(cfg, time_res, var),
+                    cfg=cfg,
                 )
                 torch.save(model.state_dict(), wpath)
             fields, used = [], []

@@ -183,13 +183,16 @@ FIXED_MAP_EXTENT = None  # set once after the domain filter
 _BUFFER_GEOM = None
 
 
-def map_extent_from_perimeter(peri: gpd.GeoDataFrame, pad=2.0):
-    """Alpine Convention bounding box plus a small fixed pad. Same for every map."""
-    minx, miny, maxx, maxy = peri.total_bounds
-    extent = (minx - pad, maxx + pad, miny - pad, maxy + pad)
+def map_extent_from_perimeter(peri: gpd.GeoDataFrame, buffer_km: float = 100.0, pad_deg: float = 0.35):
+    """Alpine Convention + buffer, plus a small degree pad. Same for every map."""
+    peri_m = peri.to_crs("EPSG:31287")
+    buffered = peri_m.buffer(buffer_km * 1000).union_all()
+    buf_wgs = gpd.GeoDataFrame(geometry=[buffered], crs="EPSG:31287").to_crs("EPSG:4326")
+    minx, miny, maxx, maxy = buf_wgs.total_bounds
+    extent = (minx - pad_deg, maxx + pad_deg, miny - pad_deg, maxy + pad_deg)
     logger.info(
         f"Fixed map extent: lon {extent[0]:.2f}–{extent[1]:.2f}, "
-        f"lat {extent[2]:.2f}–{extent[3]:.2f} (pad {pad}°)"
+        f"lat {extent[2]:.2f}–{extent[3]:.2f} (buffer {buffer_km} km + pad {pad_deg}°)"
     )
     return extent
 
@@ -613,8 +616,7 @@ def main():
         logger.error("No stations inside the Alpine buffer")
         return
     global FIXED_MAP_EXTENT
-    FIXED_MAP_EXTENT = (4.0, 17.0, 43.0, 49.0)
-    logger.info(f"Fixed map extent: lon 4–17, lat 43–49")
+    FIXED_MAP_EXTENT = map_extent_from_perimeter(peri, buffer_km=BUFFER_KM, pad_deg=0.35)
 
     for name, pal in PALETTES.items():
         PAL = pal

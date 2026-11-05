@@ -196,6 +196,7 @@ def main():
                 model, _ = train_one(
                     don, var, ccfg, elev, clc, gx, gy,
                     slope, sinasp, cosasp, time_res=time_res, trace=trace,
+                    cfg=cfg,
                 )
                 q_score = q if score == {"all"} else q[q["split"].isin(score)]
                 for ts, qq in q_score.groupby("time"):

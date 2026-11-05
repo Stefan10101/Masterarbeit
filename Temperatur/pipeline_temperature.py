@@ -250,6 +250,7 @@ NETWORK_PARSERS: Dict[str, Callable[[Path], Optional[pd.DataFrame]]] = {
     "HydroVO": parse_hydro_generic,
     "Suedtirol": parse_suedtirol,
     "MeteoFrance": parse_meteofrance,
+    "Meteonetwork": parse_lwd,
 }
 # ==================== READ + LIGHT QC (Temperature specific) ====================
 
