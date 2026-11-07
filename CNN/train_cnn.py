@@ -365,6 +365,7 @@ def _attach_static(frames, elev, clc, model, slope, sinasp, cosasp, extra=None):
     """One shared terrain/CLC grid. Time is a constant channel, filled per frame.
 
     extra: one raster or a list of rasters appended after the base channels.
+    For RH the last extra is a zero placeholder for the per-frame tmean channel.
     """
     z = np.zeros_like(elev, dtype=np.float32)
     n_time = len(frames[0].get("time_ch") or [])
@@ -382,6 +383,14 @@ def _attach_static(frames, elev, clc, model, slope, sinasp, cosasp, extra=None):
     model._shared_static = shared
     model._n_time = n_time
     model._has_extra = bool(extras)
+    # Channels before the cyclic time block (value, mask, z, terrain, prox, CLC).
+    # Must match the order in CNNInterpolator.pack_channels.
+    n_before_time = 3
+    if model.cfg.use_terrain:
+        n_before_time += 3
+    n_before_time += 1 + 16  # proximity + CLC one-hot
+    model._time_start = n_before_time
+    model._n_cov_extras = 0 if extras is None else len(extras)
 
 
 def _pack_from_static(frames, idx, model, rng, mask_frac):
@@ -421,8 +430,11 @@ def _pack_from_static(frames, idx, model, rng, mask_frac):
                 pts[drop] = base_pts
         ch = model._shared_static.copy()
         tc = fr.get("time_ch") or []
+        # Time channels sit at a fixed offset (before extras / elev-bin).
+        t0 = int(getattr(model, "_time_start", 0))
         for j, tv in enumerate(tc):
-            ch[-(len(tc) - j)] = float(tv)
+            if t0 + j < ch.shape[0]:
+                ch[t0 + j] = float(tv)
         log_amt = bool(getattr(model, "log_amount", False))
         value = np.zeros((ny, nx), dtype=np.float32)
         mask_in = np.zeros((ny, nx), dtype=np.float32)
@@ -433,14 +445,13 @@ def _pack_from_static(frames, idx, model, rng, mask_frac):
         mask_in[r[keep], c[keep]] = 1.0
         ch[0] = np.where(mask_in > 0, (value - model.y_mean) / model.y_std, 0.0)
         ch[1] = mask_in
-        # Optional RH covariate: rasterize observed tmean from the kept stations
-        if fr.get("tmean") is not None and model._has_extra is False:
+        # RH tmean: last extra channel (placeholder was appended in _attach_static).
+        if getattr(model, "_is_rh", False) and fr.get("tmean") is not None:
             tm = np.asarray(fr["tmean"], dtype=np.float32)
             tfield = np.zeros((ny, nx), dtype=np.float32)
             tfield[r[keep], c[keep]] = tm[keep]
-            # Append or overwrite the last channel if the net expects it
-            if ch.shape[0] > model.in_ch - 1:
-                ch[-1] = tfield / 20.0  # rough scale
+            # tmean is the final extra; elev-bin (two-step only) is never present for RH.
+            ch[-1] = tfield / 20.0
         qmask = np.zeros((ny, nx), dtype=np.float32)
         if drop.any():
             qmask[r[drop], c[drop]] = 1.0
@@ -598,8 +609,15 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
     # Avoids full-grid backward (cuDNN) and epoch-wide materialization (UI freeze).
     print(f"  tile path  tile={tile}  tiles/batch={tiles_per}  accum={accum}", flush=True)
     # Enabled core covariates as extra channels (same list produce will use).
+    # RH tmean is a per-frame channel; supply a zero placeholder so the static
+    # pack has the correct channel count. It is overwritten below.
+    static_extras = list(cov_extras) if cov_extras else []
+    is_rh = str(var).lower().startswith("rh")
+    if is_rh:
+        static_extras.append(np.zeros_like(elev, dtype=np.float32))
     _attach_static(train_fr + dev_fr, elev, clc, model, slope, sinasp, cosasp,
-                   extra=cov_extras or None)
+                   extra=static_extras or None)
+    model._is_rh = is_rh
 
     def _loss_from(hat, y, m, wet):
         if two:
