@@ -36,6 +36,7 @@ CODE_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_DIR))
 
 from paths import DATA_ROOT, get_dem_path, get_metadata_path
+from shared.splits.evaluation_sets import stations_inside_domain
 
 # ---------------------------------------------------------------------------
 # Config
@@ -108,6 +109,10 @@ PROVIDER_LABELS = {
     "HYDRO_VORARLBERG": "Hydrological Service Vorarlberg",
     "Suedtirol": "Autonomous Province South Tyrol",
     "Suedtriol": "Autonomous Province South Tyrol",
+    "Meteonetwork": "MeteoNetwork",
+    "meteonetwork": "MeteoNetwork",
+    "SLF": "SLF",
+    "slf": "SLF",
 }
 
 
@@ -134,31 +139,19 @@ BUFFER_KM = 100
 
 def filter_to_alpine_buffer(stations: pd.DataFrame, peri: gpd.GeoDataFrame) -> pd.DataFrame:
     """Keep stations inside the Alpine Convention polygon buffered by BUFFER_KM.
-    Uses the actual perimeter geometry, not its bounding box.
+    Uses the shared stations_inside_domain (same definition as the data pool).
     """
-    if peri.crs is None:
-        peri = peri.set_crs("EPSG:4326")
-    peri = peri.to_crs("EPSG:4326")
-    # Repair invalid rings before buffering
-    peri = peri.copy()
-    peri["geometry"] = peri.geometry.buffer(0)
-
     valid = stations.dropna(subset=["lat", "lon"]).copy()
     n_bad = len(stations) - len(valid)
+    if valid.empty:
+        return valid
 
+    # Shared implementation (EPSG:31287 buffer of the true perimeter polygon)
+    out = stations_inside_domain(valid, lon_col="lon", lat_col="lat", buffer_km=BUFFER_KM)
+
+    # Store the buffer geometry for the redundant keep_inside_buffer check
     peri_m = peri.to_crs("EPSG:31287")
     buffered_m = peri_m.buffer(BUFFER_KM * 1000).union_all()
-    if buffered_m is None or buffered_m.is_empty:
-        logger.error("Alpine buffer geometry is empty — no stations kept")
-        return valid.iloc[0:0].copy()
-
-    gdf = gpd.GeoDataFrame(
-        valid,
-        geometry=gpd.points_from_xy(valid["lon"], valid["lat"]),
-        crs="EPSG:4326",
-    ).to_crs("EPSG:31287")
-    inside = gdf.intersects(buffered_m)
-    out = valid.loc[inside.to_numpy()].copy()
     global _BUFFER_GEOM
     _BUFFER_GEOM = buffered_m
 
@@ -171,7 +164,7 @@ def filter_to_alpine_buffer(stations: pd.DataFrame, peri: gpd.GeoDataFrame) -> p
         f"(dropped {len(valid) - len(out)} outside, {n_bad} missing coords)"
     )
     if len(out) < len(valid):
-        dropped = valid.loc[~inside.to_numpy(), "station_name"].head(8).tolist()
+        dropped = valid.loc[~valid["station_name"].isin(out["station_name"]), "station_name"].head(8).tolist()
         logger.info(f"  example dropped: {dropped}")
     if len(out) == len(valid) and len(valid) > 50:
         logger.warning("Filter kept every station — check that the perimeter loaded correctly")
@@ -319,6 +312,12 @@ def _base_map(ax, peri, main_extent):
             cmap="gray_r", vmin=0, vmax=3200,
             transform=ccrs.PlateCarree(), zorder=1, interpolation="nearest",
         )
+    # Domain = perimeter + 100 km buffer (light) and the perimeter itself (dark)
+    peri_m = peri.to_crs("EPSG:31287")
+    buf = peri_m.buffer(BUFFER_KM * 1000).union_all()
+    buf_gdf = gpd.GeoDataFrame(geometry=[buf], crs="EPSG:31287").to_crs("EPSG:4326")
+    buf_gdf.plot(ax=ax, facecolor="none", edgecolor="#7aa2d4", linewidth=0.6,
+                 linestyle="--", transform=ccrs.PlateCarree(), zorder=4)
     peri.plot(ax=ax, facecolor="none", edgecolor="#1a365d", linewidth=0.9,
               transform=ccrs.PlateCarree(), zorder=5)
     ax.add_feature(cfeature.COASTLINE.with_scale("10m"), linewidth=0.3, edgecolor="0.4", zorder=3)

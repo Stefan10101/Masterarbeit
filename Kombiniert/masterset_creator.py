@@ -56,7 +56,7 @@ RAW_VARIABLE_FOLDERS = ["Luftfeuchte", "Wind", "Niederschlag", "Schneehoehe", "T
 
 VALID_PROVIDER_FOLDERS = {
     "DWD", "HydroT", "HydroVO", "LWD", "Meteosuisse", "Suedtirol",
-    "zamg", "ZAMG", "ARSO", "MeteoFrance",
+    "zamg", "ZAMG", "ARSO", "MeteoFrance", "SLF", "slf",
 }
 PROVIDER_MAP = {
     "DWD": "DWD",
@@ -69,6 +69,8 @@ PROVIDER_MAP = {
     "ZAMG": "ZAMG",
     "ARSO": "ARSO",
     "MeteoFrance": "MeteoFrance",
+    "SLF": "SLF",
+    "slf": "SLF",
 }
 
 # Fallback (old central lists) - kept for compatibility but usually less complete

@@ -81,7 +81,7 @@ def ensure_utc(df: pd.DataFrame, network: str) -> pd.DataFrame:
         df["timestamp"] = df["timestamp"].dt.tz_convert("UTC")
         return df
 
-    if network in ["DWD", "ZAMG", "Meteosuisse"]:
+    if network in ["DWD", "ZAMG", "Meteosuisse", "SLF"]:
         df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
     elif network in ["HydroT", "HydroVO"]:
         df["timestamp"] = df["timestamp"].dt.tz_localize("Europe/Vienna", ambiguous="NaT", nonexistent="NaT")
@@ -183,6 +183,20 @@ def parse_meteosuisse(path: Path) -> Optional[pd.DataFrame]:
     df["lon"] = pd.to_numeric(data.get("lon"), errors="coerce")
     return df
 
+
+def parse_slf(path: Path) -> Optional[pd.DataFrame]:
+    """SLF / IMIS 30-min JSON (same layout as MeteoSuisse, time already YYYY-MM-DD HH:MM, UTC)."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    df = pd.DataFrame(data.get("data", []))
+    if df.empty:
+        return None
+    df["timestamp"] = pd.to_datetime(df["time"], errors="coerce")
+    df["name"] = data.get("name")
+    df["height"] = pd.to_numeric(data.get("hoehe"), errors="coerce")
+    df["lat"] = pd.to_numeric(data.get("lat"), errors="coerce")
+    df["lon"] = pd.to_numeric(data.get("lon"), errors="coerce")
+    return df
 def parse_lwd(path: Path) -> Optional[pd.DataFrame]:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
@@ -244,6 +258,7 @@ NETWORK_PARSERS: Dict[str, Callable[[Path], Optional[pd.DataFrame]]] = {
     "DWD": parse_dwd,
     "ZAMG": parse_zamg,
     "Meteosuisse": parse_meteosuisse,
+    "SLF": parse_slf,
     "LWD": parse_lwd,
     "ARSO": parse_lwd,          # same layout as LWD
     "HydroT": parse_hydro_generic,

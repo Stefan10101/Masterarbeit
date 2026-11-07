@@ -151,13 +151,17 @@ class GAMInterpolator:
         if elev_bin is not None:
             df["elev_bin"] = np.asarray(elev_bin, dtype=np.int32)
         if extra:
+            stats = getattr(self, "_extra_stats", {}) or {}
             for name, arr in extra.items():
                 if arr is None:
                     continue
                 v = np.asarray(arr, dtype=np.float64)
-                mu = np.nanmean(v) if np.isfinite(v).any() else 0.0
-                sd = np.nanstd(v) if np.isfinite(v).any() else 1.0
-                sd = sd if np.isfinite(sd) and sd > 1e-8 else 1.0
+                if name in stats:
+                    mu, sd = stats[name]
+                else:
+                    mu = np.nanmean(v) if np.isfinite(v).any() else 0.0
+                    sd = np.nanstd(v) if np.isfinite(v).any() else 1.0
+                    sd = sd if np.isfinite(sd) and sd > 1e-8 else 1.0
                 df[name] = np.where(np.isfinite(v), (v - mu) / sd, 0.0)
         return df
 
@@ -336,6 +340,18 @@ class GAMInterpolator:
         )
         if extra is None:
             extra = getattr(self, "_pending_extra", None)
+        n = len(np.asarray(x))
+        if extra:
+            # Drop any extra array that does not match the current donor length
+            # (two-step amount and per-region fits subset the main arrays).
+            matched = {}
+            for name, arr in extra.items():
+                if arr is None:
+                    continue
+                v = np.asarray(arr, dtype=np.float64)
+                if v.shape[0] == n:
+                    matched[name] = v
+            extra = matched or None
         if extra:
             self._extra_stats = {}
             cleaned = []
@@ -367,6 +383,7 @@ class GAMInterpolator:
             df = self._frame(
                 x, y, elev, None, clc, slope, sinasp, cosasp,
                 tmean=tmean, tpi=tpi, ridge=ridge, region=region, elev_bin=elev_bin,
+                extra=qextra,
             )
             hat = self._predict_r(df)
             if hat is None:
@@ -424,6 +441,19 @@ class GAMInterpolator:
             if int(dmask.sum()) < max(self.cfg.min_stations, 5):
                 dmask = np.ones(x.size, dtype=bool)
             try:
+                # Temporarily subset pending extras to this region's donors/queries.
+                saved_extra = getattr(self, "_pending_extra", None)
+                saved_q = getattr(self, "_pending_extra_q", None)
+                if saved_extra:
+                    self._pending_extra = {
+                        k: np.asarray(v)[dmask] for k, v in saved_extra.items()
+                        if v is not None and np.asarray(v).shape[0] == dmask.shape[0]
+                    }
+                if saved_q:
+                    self._pending_extra_q = {
+                        k: np.asarray(v)[qmask] for k, v in saved_q.items()
+                        if v is not None and np.asarray(v).shape[0] == qmask.shape[0]
+                    }
                 out[qmask] = self._predict_one(
                     x[dmask], y[dmask], elev[dmask], values[dmask],
                     np.asarray(xq)[qmask], np.asarray(yq)[qmask], np.asarray(zq)[qmask],
@@ -446,6 +476,8 @@ class GAMInterpolator:
                     np.asarray(region_q)[qmask],
                 )
             finally:
+                self._pending_extra = saved_extra
+                self._pending_extra_q = saved_q
                 self.close()
         return out
 
@@ -480,6 +512,12 @@ class GAMInterpolator:
                 cap = max(cap, 1.0)
                 log_cap = np.log1p(cap)
                 amt_in = np.log1p(wet_vals)
+                # Subset pending extras to the wet donors so frame lengths match.
+                extra_wet = None
+                pending = getattr(self, "_pending_extra", None)
+                if pending:
+                    extra_wet = {k: np.asarray(v)[wet_m] for k, v in pending.items()
+                                 if v is not None and np.asarray(v).shape[0] == len(wet_m)}
                 self.fit_gaussian(
                     np.asarray(x)[wet_m], np.asarray(y)[wet_m], np.asarray(elev)[wet_m],
                     amt_in,
@@ -493,6 +531,7 @@ class GAMInterpolator:
                     ridge=None if ridge is None else np.asarray(ridge)[wet_m],
                     region=None if region is None else np.asarray(region)[wet_m],
                     elev_bin=eb[wet_m],
+                    extra=extra_wet,
                 )
                 raw = self.predict_raw(
                     xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q,

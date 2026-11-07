@@ -34,7 +34,8 @@ except ImportError:
 def main():
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--variable", default=None)
+    p.add_argument("--variable", default=None, help="single variable (prefer --variables)")
+    p.add_argument("--variables", nargs="+", default=None, help="list of variables")
     p.add_argument("--quick", action="store_true")
     p.add_argument("--jobs", type=int, default=None,
                    help="parallel CPU prep over timestamps (default: half the logical cores)")
@@ -54,7 +55,12 @@ def main():
     domain = cfg["domain"]["preset"]
     time_res = cfg["time_resolution"]
     _, _, grid_method = data_sources(cfg)
-    variables = [args.variable] if args.variable else (cfg["cnn"].get("variables_to_process") or ["temp_mean"])
+    if args.variables:
+        variables = args.variables
+    elif args.variable:
+        variables = [args.variable]
+    else:
+        variables = (cfg["cnn"].get("variables_to_process") or ["temp_mean"])
     min_stations = int(cfg.get("min_stations_per_field", 10))
     print(f"domain={domain} time_res={time_res} vars={variables}", flush=True)
 

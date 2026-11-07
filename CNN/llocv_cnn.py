@@ -134,7 +134,8 @@ def load_frozen(ccfg, var, time_res):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--variable", default=None)
+    p.add_argument("--variable", default=None, help="single variable (prefer --variables)")
+    p.add_argument("--variables", nargs="+", default=None, help="list of variables")
     p.add_argument("--nested", action="store_true")
     p.add_argument("--loo", action="store_true")
     p.add_argument("--folds", type=int, default=None)
@@ -160,7 +161,12 @@ def main():
             clc = clc_group(np.nan_to_num(grid[name].values, nan=0).astype(np.int32)).astype(np.float64)
             break
     slope, sinasp, cosasp = grid_terrain(elev, gx, gy)
-    variables = [args.variable] if args.variable else cfg["cnn"].get("variables_to_process", ["temp_mean"])
+    if args.variables:
+        variables = args.variables
+    elif args.variable:
+        variables = [args.variable]
+    else:
+        variables = cfg["cnn"].get("variables_to_process", ["temp_mean"])
     n_folds = args.folds or int(cfg["cnn"].get("n_folds", 5))
     if args.quick:
         n_folds = args.folds or 2

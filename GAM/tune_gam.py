@@ -92,7 +92,8 @@ def _eval_cell(form, ns, tau):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--variable", default=None)
+    p.add_argument("--variable", default=None, help="single variable (prefer --variables)")
+    p.add_argument("--variables", nargs="+", default=None, help="list of variables")
     p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4) - 1))
     p.add_argument("--months", default=None)
     p.add_argument("--folds", type=int, default=None)
@@ -108,7 +109,12 @@ def main():
     time_res = apply_time_res(cfg, args)
     block = cfg["gam"]
     comp = compute_block(cfg)
-    variables = [args.variable] if args.variable else block.get("variables_to_process", ["temp_mean"])
+    if args.variables:
+        variables = args.variables
+    elif args.variable:
+        variables = [args.variable]
+    else:
+        variables = block.get("variables_to_process", ["temp_mean"])
     search = block.get("search", {})
     n_folds = args.folds or (2 if args.quick else int(comp.get("tune_folds", block.get("n_folds", 5))))
     months = args.months or ("seasonal4" if args.quick else comp.get("tune_months", "seasonal4"))

@@ -43,7 +43,8 @@ except ImportError:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--variable", default=None)
+    p.add_argument("--variable", default=None, help="single variable (prefer --variables)")
+    p.add_argument("--variables", nargs="+", default=None, help="list of variables")
     p.add_argument("--years", default=None, help="e.g. 2024,2025")
     p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
     p.add_argument("--split", default=None, help="all | test | dev,test")
@@ -61,7 +62,12 @@ def main():
         raise RuntimeError("xarray required")
     domain = cfg["domain"]["preset"]
     _, _, grid_method = data_sources(cfg)
-    variables = [args.variable] if args.variable else (cfg["frei"].get("variables_to_process") or ["temp_mean"])
+    if args.variables:
+        variables = args.variables
+    elif args.variable:
+        variables = [args.variable]
+    else:
+        variables = (cfg["frei"].get("variables_to_process") or ["temp_mean"])
     min_stations = int(cfg.get("min_stations_per_field", 10))
     comp = compute_block(cfg)
     months = args.months or ("seasonal4" if args.quick else None)

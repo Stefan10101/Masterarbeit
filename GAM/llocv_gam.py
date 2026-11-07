@@ -257,7 +257,8 @@ def run_llocv(panel, var, gcfg: GAMConfig, n_folds, fit_splits, score_splits, pr
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--variable", default=None)
+    p.add_argument("--variable", default=None, help="single variable (prefer --variables)")
+    p.add_argument("--variables", nargs="+", default=None, help="list of variables")
     p.add_argument("--fit", default="train")
     p.add_argument("--score", default="dev,test")
     p.add_argument("--folds", type=int, default=None)
@@ -270,7 +271,12 @@ def main():
     args = p.parse_args()
     cfg = load_gam_config()
     time_res = apply_time_res(cfg, args)
-    variables = [args.variable] if args.variable else cfg["gam"].get("variables_to_process", ["temp_mean"])
+    if args.variables:
+        variables = args.variables
+    elif args.variable:
+        variables = [args.variable]
+    else:
+        variables = cfg["gam"].get("variables_to_process", ["temp_mean"])
     n_folds = args.folds or int(cfg["gam"].get("n_folds", 5))
     months = args.months
     if args.quick:

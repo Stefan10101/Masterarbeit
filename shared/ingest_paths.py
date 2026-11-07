@@ -31,6 +31,7 @@ NETWORK_ALIASES = {
     "suedtirol": "Suedtirol",
     "meteofrance": "MeteoFrance",
     "meteonetwork": "Meteonetwork",
+    "slf": "SLF",
 }
 
 def _first_existing(*candidates: Path) -> Path:

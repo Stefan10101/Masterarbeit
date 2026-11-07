@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """Compare nested / produce LLOCV parquet files across interpolation methods.
 
-Metrics follow the usual climate-interpolation set
-(Hofstra et al. 2008, Haylock et al. 2008, Frei 2014, Sekulić et al. 2020):
-  ME, MAE, RMSE, NSE, KGE, CCC, Pearson r
-plus skill vs a reference (IDW if present), meteorological seasons,
-elevation bands, and precip wet-day / frequency scores.
+Metrics from shared.metrics (core + precip/snow extras).
+Writes bars, Taylor, skill, station box, scatter grid, and monthly RMSE
+to Plots/llocv_compare/{time_resolution}/{variable}/.
 
 Usage (from CODE/):
-  python shared/plotting/compare_llocv.py --variable temp_mean
-  python shared/plotting/compare_llocv.py --variable precip_sum --split test
+  python shared/plotting/compare_llocv.py --variable all --time-resolution weekly
+  python shared/plotting/compare_llocv.py --variable temp_mean --split test
 """
 
 from __future__ import annotations
@@ -27,26 +25,32 @@ import matplotlib.pyplot as plt
 CODE_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_DIR))
 
-from shared.metrics import compute_metrics as shared_metrics, precip_scores, rmse_over_std
+from shared.metrics import (
+    compute_metrics as shared_metrics,
+    get_trace,
+    precip_scores,
+    rmse_over_std,
+)
 from paths import (  # noqa: E402
-    get_domain_stations_path,
     get_llocv_compare_dir,
     get_llocv_path,
     get_method_output_dir,
     get_nested_llocv_path,
+    get_station_terrain_path,
+    get_metadata_path,
 )
 
+# Active thesis suite. BSS and TPS dropped 2026-10-20 / 2026-11-04.
 DEFAULT_METHODS = [
-    "IDW", "BSS", "RFSI", "RGI", "Kriging", "GAM", "TPS", "CNN", "Frei",
+    "IDW", "Kriging", "Frei", "GAM", "RFSI", "CNN", "SMACNP", "RGI",
 ]
 SEASONS = {"DJF": (12, 1, 2), "MAM": (3, 4, 5), "JJA": (6, 7, 8), "SON": (9, 10, 11)}
 ELEV_BINS = [0, 500, 1000, 1500, 2000, 10_000]
 ELEV_LABELS = ["<500", "500-1000", "1000-1500", "1500-2000", ">2000"]
-TRACE_MM = {"half_hourly": 0.05, "daily": 0.1, "weekly": 0.7, "monthly": 1.0, "seasonal": 3.0}
 COLORS = {
-    "IDW": "#7f7f7f", "BSS": "#8c564b", "RFSI": "#1f77b4", "RGI": "#17becf",
+    "IDW": "#7f7f7f", "RFSI": "#1f77b4", "RGI": "#17becf",
     "Kriging": "#2ca02c", "Kriging-OK": "#98df8a", "Kriging-RK": "#2ca02c",
-    "GAM": "#d62728", "TPS": "#ff7f0e", "CNN": "#9467bd", "Frei": "#e377c2",
+    "GAM": "#d62728", "CNN": "#9467bd", "Frei": "#e377c2", "SMACNP": "#bcbd22",
 }
 
 
@@ -134,16 +138,31 @@ def find_parquets(method: str, var: str, time_res: str, domain: str, resolution:
 
 
 def attach_elev(df: pd.DataFrame) -> pd.DataFrame:
+    """Attach station elevation from the shared terrain cache (fallback: overview)."""
     if "elev" in df.columns and df["elev"].notna().any():
         return df
-    try:
-        sta = pd.read_parquet(get_domain_stations_path("RFSI", "full"))
-    except Exception:
+    if "station_name" not in df.columns:
         return df
-    col = next((c for c in ("elev", "elevation", "z") if c in sta.columns), None)
-    if col is None or "station_name" not in sta.columns:
+    meta = None
+    terrain = get_station_terrain_path()
+    if terrain.exists():
+        try:
+            sta = pd.read_parquet(terrain, columns=["station_name", "elev"])
+            meta = sta.drop_duplicates("station_name")
+        except Exception:
+            meta = None
+    if meta is None:
+        overview = get_metadata_path()
+        if overview.exists():
+            try:
+                sta = pd.read_csv(overview, usecols=lambda c: c in ("station_name", "elev", "elevation"))
+                col = "elev" if "elev" in sta.columns else "elevation"
+                if col in sta.columns and "station_name" in sta.columns:
+                    meta = sta[["station_name", col]].drop_duplicates("station_name").rename(columns={col: "elev"})
+            except Exception:
+                meta = None
+    if meta is None:
         return df
-    meta = sta[["station_name", col]].drop_duplicates("station_name").rename(columns={col: "elev"})
     return df.merge(meta, on="station_name", how="left")
 
 
@@ -184,26 +203,26 @@ def season_of(ts: pd.Series) -> pd.Series:
 def metrics_table(df: pd.DataFrame, var: str, time_res: str) -> pd.DataFrame:
     rows = []
     is_p = var.lower().startswith("precip") or var.lower().startswith("snow")
-    trace = TRACE_MM.get(time_res, 1.0)
+    trace = get_trace(var, time_res) if is_p else None
     for (method, split), g in df.groupby(["method", "split"], sort=False):
         row = {"method": method, "split": split, "subset": "all",
-               **shared_metrics(g.observed, g.predicted, var, time_res, trace=trace if is_p else None)}
+               **shared_metrics(g.observed, g.predicted, var, time_res, trace=trace)}
         rows.append(row)
     for method, g0 in df.groupby("method", sort=False):
         row = {"method": method, "split": "all", "subset": "all",
-               **shared_metrics(g0.observed, g0.predicted, var, time_res, trace=trace if is_p else None)}
+               **shared_metrics(g0.observed, g0.predicted, var, time_res, trace=trace)}
         rows.append(row)
         g0 = g0.copy()
         g0["season"] = season_of(g0["time"])
         for season, gs in g0.groupby("season"):
             row = {"method": method, "split": "all", "subset": str(season),
-                   **compute_metrics(gs.observed, gs.predicted)}
+                   **shared_metrics(gs.observed, gs.predicted, var, time_res, trace=trace)}
             rows.append(row)
         if "elev" in g0.columns and g0["elev"].notna().any():
             g0["eband"] = pd.cut(g0["elev"], ELEV_BINS, labels=ELEV_LABELS, include_lowest=True)
             for band, gb in g0.groupby("eband", observed=True):
                 row = {"method": method, "split": "all", "subset": f"elev:{band}",
-                       **compute_metrics(gb.observed, gb.predicted)}
+                       **shared_metrics(gb.observed, gb.predicted, var, time_res, trace=trace)}
                 rows.append(row)
     return pd.DataFrame(rows)
 
@@ -414,7 +433,7 @@ def print_table(tab: pd.DataFrame, split: str):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--variable", required=True)
+    p.add_argument("--variable", default="all", help="variable code or 'all' for the five core variables")
     p.add_argument("--time-resolution", default="monthly")
     p.add_argument("--domain", default="full")
     p.add_argument("--resolution", type=int, default=1000)
@@ -425,30 +444,38 @@ def main():
     p.add_argument("--ref", default="IDW")
     args = p.parse_args()
 
+    CORE = ("temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean")
+    variables = list(CORE) if args.variable.lower() == "all" else [args.variable]
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
-    var, time_res, split = args.variable, args.time_resolution, args.split
-    print(f"LLOCV compare {var} {time_res} split={split}", flush=True)
-    df = load_all(methods, var, time_res, args.domain, args.resolution, args.start, args.end)
-    tab = metrics_table(df, var, time_res)
-    out = get_llocv_compare_dir(time_res, var)
-    tab.to_csv(out / "metrics.csv", index=False)
-    print_table(tab, split)
-    print_table(tab, "all")
 
-    plot_bars(tab, "all", split, ["rmse", "mae", "me"],
-              f"{var} {time_res} | {split} | error", out / f"{split}_error_bars.png")
-    plot_bars(tab, "all", split, ["nse", "kge", "ccc"],
-              f"{var} {time_res} | {split} | skill", out / f"{split}_skill_bars.png")
-    plot_grouped(tab, "season", "rmse", f"{var} RMSE by season", out / "season_rmse.png")
-    plot_grouped(tab, "season", "mae", f"{var} MAE by season", out / "season_mae.png")
-    plot_grouped(tab, "elev:", "rmse", f"{var} RMSE by elevation", out / "elev_rmse.png")
-    plot_taylor(df, split, f"Taylor | {var} | {split}", out / f"{split}_taylor.png")
-    ref = args.ref if args.ref in set(df["method"]) else df["method"].iloc[0]
-    plot_skill(tab, ref, split, f"Skill vs {ref} | {var} | {split}", out / f"{split}_skill_vs_{ref}.png")
-    plot_station_box(df, split, f"Station RMSE | {var} | {split}", out / f"{split}_station_rmse_box.png")
-    plot_scatter_grid(df, split, f"Obs vs pred | {var} | {split}", out / f"{split}_scatter.png")
-    plot_monthly_rmse(df, split, f"Monthly RMSE | {var} | {split}", out / f"{split}_monthly_rmse.png")
-    print(f"wrote {out}", flush=True)
+    for var in variables:
+        time_res, split = args.time_resolution, args.split
+        print(f"LLOCV compare {var} {time_res} split={split}", flush=True)
+        try:
+            df = load_all(methods, var, time_res, args.domain, args.resolution, args.start, args.end)
+        except FileNotFoundError as e:
+            print(f"  skip {var}: {e}", flush=True)
+            continue
+        tab = metrics_table(df, var, time_res)
+        out = get_llocv_compare_dir(time_res, var)
+        tab.to_csv(out / "metrics.csv", index=False)
+        print_table(tab, split)
+        print_table(tab, "all")
+
+        plot_bars(tab, "all", split, ["rmse", "mae", "me"],
+                  f"{var} {time_res} | {split} | error", out / f"{split}_error_bars.png")
+        plot_bars(tab, "all", split, ["nse", "kge", "ccc"],
+                  f"{var} {time_res} | {split} | skill", out / f"{split}_skill_bars.png")
+        plot_grouped(tab, "season", "rmse", f"{var} RMSE by season", out / "season_rmse.png")
+        plot_grouped(tab, "season", "mae", f"{var} MAE by season", out / "season_mae.png")
+        plot_grouped(tab, "elev:", "rmse", f"{var} RMSE by elevation", out / "elev_rmse.png")
+        plot_taylor(df, split, f"Taylor | {var} | {split}", out / f"{split}_taylor.png")
+        ref = args.ref if args.ref in set(df["method"]) else df["method"].iloc[0]
+        plot_skill(tab, ref, split, f"Skill vs {ref} | {var} | {split}", out / f"{split}_skill_vs_{ref}.png")
+        plot_station_box(df, split, f"Station RMSE | {var} | {split}", out / f"{split}_station_rmse_box.png")
+        plot_scatter_grid(df, split, f"Obs vs pred | {var} | {split}", out / f"{split}_scatter.png")
+        plot_monthly_rmse(df, split, f"Monthly RMSE | {var} | {split}", out / f"{split}_monthly_rmse.png")
+        print(f"wrote {out}", flush=True)
 
 
 if __name__ == "__main__":

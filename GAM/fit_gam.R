@@ -76,7 +76,15 @@ if (has("region")) {
     rhs <- paste(rhs, "+ region")
   }
 }
-# Elevation bins (250 m) as a smooth ordered index, not a free factor.
+# Enabled continuous core covariates as linear terms (already standardized in Python).
+# Skip near-constant or elev-collinear columns; they trigger NaN edf in mgcv.
+for (col in c("smooth_elev", "northness", "dist_to_coast",
+              "basin_continuity", "elev_above_valley")) {
+  if (!has(col) || nuniq(df[[col]]) < 6L) next
+  ok <- is.finite(df$elev) & is.finite(df[[col]])
+  if (sum(ok) > 20L && abs(cor(df$elev[ok], df[[col]][ok])) > 0.95) next
+  rhs <- paste(rhs, "+", col)
+}
 # s(elev_bin) keeps the elevation effect smooth; ti(x, elev_bin) and
 # ti(yc, elev_bin) let location override the bin. Continuous elev is
 # already in the formula, so the bin is an additional stratified signal.
@@ -104,16 +112,47 @@ fam <- switch(tolower(family_name),
 form <- as.formula(paste("y ~", rhs))
 
 # bam + discrete is the scalable path for tensor smooths at station density.
-# Falls back to gam only if bam is unavailable or fails to start.
+# Falls back to gam, then to a stripped formula, then to a pure spatial+elev
+# model. A single degenerate timestamp must not abort the whole tune.
 ctrl <- mgcv::gam.control(maxit = 40)
-model <- tryCatch(
-  mgcv::bam(form, data = df, family = fam, method = "fREML",
-            discrete = TRUE, control = ctrl),
-  error = function(e) {
-    message("bam failed, falling back to gam: ", conditionMessage(e))
-    mgcv::gam(form, data = df, family = fam, method = "REML", control = ctrl)
-  }
-)
+
+fit_try <- function(fml, discrete = TRUE) {
+  tryCatch(
+    mgcv::bam(fml, data = df, family = fam, method = "fREML",
+              discrete = discrete, control = ctrl),
+    error = function(e) {
+      message("bam failed (", conditionMessage(e), "), trying gam")
+      tryCatch(
+        mgcv::gam(fml, data = df, family = fam, method = "REML", control = ctrl),
+        error = function(e2) {
+          message("gam failed (", conditionMessage(e2), ")")
+          NULL
+        }
+      )
+    }
+  )
+}
+
+model <- fit_try(form, discrete = TRUE)
+if (is.null(model)) {
+  # Drop linear extras and ti terms; keep the core spatial + elev smooths.
+  simple_rhs <- switch(formula_id,
+    te_xy_s_elev = sprintf("te(x, yc, k=c(%d,%d)) + s(elev, k=%d)", kx, ky, ke),
+    te_xy_ti_elev = sprintf("te(x, yc, k=c(%d,%d)) + s(elev, k=%d)", kx, ky, ke),
+    te_xyelev = sprintf("te(x, yc, elev, k=c(%d,%d,%d))", kx, ky, ke),
+    s_xy_s_elev = sprintf("s(x, k=%d) + s(yc, k=%d) + s(elev, k=%d)", kx, ky, ke),
+    sprintf("s(x, k=%d) + s(yc, k=%d) + s(elev, k=%d)", kx, ky, ke)
+  )
+  message("retrying with simplified formula")
+  model <- fit_try(as.formula(paste("y ~", simple_rhs)), discrete = FALSE)
+}
+if (is.null(model)) {
+  message("retrying with pure s(x)+s(yc)+s(elev)")
+  model <- fit_try(as.formula("y ~ s(x, k=6) + s(yc, k=6) + s(elev, k=6)"), discrete = FALSE)
+}
+if (is.null(model)) {
+  stop("all mgcv attempts failed")
+}
 
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 saveRDS(model, file.path(out_dir, "model.rds"))

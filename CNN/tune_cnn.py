@@ -38,7 +38,8 @@ except ImportError:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--variable", default=None)
+    p.add_argument("--variable", default=None, help="single variable (prefer --variables)")
+    p.add_argument("--variables", nargs="+", default=None, help="list of variables")
     p.add_argument("--quick", action="store_true")
     p.add_argument("--jobs", type=int, default=4)
     add_hours_arg(p)
@@ -73,7 +74,12 @@ def main():
             clc = clc_group(np.nan_to_num(grid[name].values, nan=0).astype(np.int32)).astype(np.float64)
             break
     slope, sinasp, cosasp = grid_terrain(elev, gx, gy)
-    variables = [args.variable] if args.variable else block.get("variables_to_process", ["temp_mean"])
+    if args.variables:
+        variables = args.variables
+    elif args.variable:
+        variables = [args.variable]
+    else:
+        variables = block.get("variables_to_process", ["temp_mean"])
     for var in variables:
         panel = load_panel(cfg, var)
         # Fit on full pool × train. Score fixed tune-targets on tune.

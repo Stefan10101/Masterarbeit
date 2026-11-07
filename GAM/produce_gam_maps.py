@@ -55,7 +55,8 @@ def grid_terrain(elev, gx, gy):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--variable", default=None)
+    p.add_argument("--variable", default=None, help="single variable (prefer --variables)")
+    p.add_argument("--variables", nargs="+", default=None, help="list of variables")
     p.add_argument("--years", default=None)
     p.add_argument("--months", default=None)
     p.add_argument("--split", default=None)
@@ -77,7 +78,12 @@ def main():
     time_res = apply_time_res(cfg, args)
     domain = cfg["domain"]["preset"]
     _, _, grid_method = data_sources(cfg)
-    variables = [args.variable] if args.variable else (cfg["gam"].get("variables_to_process") or ["temp_mean"])
+    if args.variables:
+        variables = args.variables
+    elif args.variable:
+        variables = [args.variable]
+    else:
+        variables = (cfg["gam"].get("variables_to_process") or ["temp_mean"])
     months = args.months or ("seasonal4" if args.quick else None)
     splits = args.split or ("test" if args.quick else "all")
     pack = pack_from_master(cfg, int(cfg.get("gam", {}).get("n_regions", 6)))
