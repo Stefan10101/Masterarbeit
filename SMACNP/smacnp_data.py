@@ -300,9 +300,14 @@ class PaperScaler:
     def inverse(self, y_norm: np.ndarray) -> np.ndarray:
         y_norm = np.asarray(y_norm, dtype=np.float64)
         if self.two_step:
+            # Amount head is unbounded; a few large outputs explode expm1.
+            y_norm = np.clip(y_norm, -0.05, 1.05)
             log_y = y_norm * (self.log_max_ - self.log_min_) + self.log_min_
             return np.expm1(log_y)
         else:
+            # Mean head is unbounded. 10% extrapolation is enough; beyond
+            # that one station dominates the RMSE (the 1.5↔5 °C spikes).
+            y_norm = np.clip(y_norm, -0.1, 1.1)
             return y_norm * (self.max_ - self.min_) + self.min_
 
     def inverse_mean(self, mu_norm: np.ndarray, var_norm: np.ndarray) -> np.ndarray:
@@ -315,6 +320,7 @@ class PaperScaler:
         var_norm = np.asarray(var_norm, dtype=np.float64)
         if not self.two_step:
             return self.inverse(mu_norm)
+        mu_norm = np.clip(np.asarray(mu_norm, dtype=np.float64), -0.05, 1.05)
         scale = self.log_max_ - self.log_min_
         mu_s = mu_norm * scale + self.log_min_
         var_s = np.maximum(var_norm, 0.0) * (scale ** 2)
