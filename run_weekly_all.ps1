@@ -44,29 +44,29 @@ function Run-Step($label, $cmd) {
 # GAM  — not started
 # =============================================================================
 #Run-Step "GAM tune"    "python GAM/tune_gam.py --time-resolution weekly --max-times 0 --variables $vars"
-Run-Step "GAM llocv"   "python GAM/llocv_gam.py --time-resolution weekly --variables $vars"
+#Run-Step "GAM llocv"   "python GAM/llocv_gam.py --time-resolution weekly --variables $vars"
 # Run-Step "GAM produce" "python GAM/produce_gam_maps.py --time-resolution weekly --variables $vars"
 
 # =============================================================================
 # RFSI  — tune + nested LLOCV finished for all 5 (30 Oct); maps missing
 # =============================================================================
- Run-Step "RFSI tune"    "python RFSI/tune_pooled.py --time-resolution weekly --max-times 0 --variables $vars"
- Run-Step "RFSI llocv"   "python RFSI/llocv_pooled.py --time-resolution weekly --variables $vars"
+# Run-Step "RFSI tune"    "python RFSI/tune_pooled.py --time-resolution weekly --max-times 0 --variables $vars"
+# Run-Step "RFSI llocv"   "python RFSI/llocv_pooled.py --time-resolution weekly --variables $vars"
 # Run-Step "RFSI produce" "python RFSI/produce_rfsi_maps.py --time-resolution weekly --variables $vars"
 
 # =============================================================================
 # CNN  — only temp_mean params + IDW cache exist; rest unfinished
 # =============================================================================
-Run-Step "CNN tune"    "python CNN/tune_cnn.py --time-resolution weekly"
-Run-Step "CNN train"   "python CNN/train_cnn.py --time-resolution weekly"
-Run-Step "CNN llocv"   "python CNN/llocv_cnn.py --time-resolution weekly"
+#Run-Step "CNN tune"    "python CNN/tune_cnn.py --time-resolution weekly"
+#Run-Step "CNN train"   "python CNN/train_cnn.py --time-resolution weekly"
+#Run-Step "CNN llocv"   "python CNN/llocv_cnn.py --time-resolution weekly"
 # Run-Step "CNN produce" "python CNN/produce_cnn_maps.py --time-resolution weekly"
 
 # =============================================================================
 # RGI  — not started
 # =============================================================================
-Run-Step "RGI tune"    "python RGI/tune_rgi.py --time-resolution weekly --max-times 0 --variables $vars"
-Run-Step "RGI llocv"   "python RGI/llocv_rgi.py --time-resolution weekly --variables $vars"
+#Run-Step "RGI tune"    "python RGI/tune_rgi.py --time-resolution weekly --max-times 0 --variables $vars"
+#Run-Step "RGI llocv"   "python RGI/llocv_rgi.py --time-resolution weekly --variables $vars"
 # Run-Step "RGI produce" "python RGI/produce_rgi_maps.py --time-resolution weekly --variables $vars"
 
 # =============================================================================

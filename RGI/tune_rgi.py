@@ -80,6 +80,8 @@ def _write_tuned(var, time_res, payload: dict) -> Path:
 
 
 def run_variable(cfg, var, phase: str):
+    # Fresh trial log per variable (was previously accumulating across variables).
+    cfg["_trials"] = []
     panel = attach_extras(load_panel(cfg, var), cfg, var)
     tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
     # Full pool on train+tune; held-out dropped. Fixed tune-targets used for scoring.
@@ -110,8 +112,17 @@ def run_variable(cfg, var, phase: str):
             rcfg = cfg_to_rgi(cfg, {"k": k, "n_layers": L, "alpha": 0.2, "alpha_z": 10.0})
             t0 = time.perf_counter()
             rmse = score_combo(panel, var, rcfg, n_folds)
-            print(f"  k={k:2d} L={L}  DEV RMSE={rmse:.4f}  ({time.perf_counter()-t0:.0f}s)")
-            cfg.setdefault("_trials", []).append({"k": int(k), "n_layers": int(L), "rmse": rmse})
+            wall = time.perf_counter() - t0
+            print(f"  k={k:2d} L={L}  DEV RMSE={rmse:.4f}  ({wall:.0f}s)")
+            cfg["_trials"].append({
+                "phase": 1,
+                "k": int(k),
+                "n_layers": int(L),
+                "alpha": 0.2,
+                "alpha_z": 10.0,
+                "rmse": float(rmse),
+                "wall_s": round(wall, 1),
+            })
             if rmse < best[0]:
                 best = (rmse, {"k": int(k), "n_layers": int(L)})
         phase1 = best
@@ -136,8 +147,18 @@ def run_variable(cfg, var, phase: str):
             rcfg = cfg_to_rgi(cfg, over)
             t0 = time.perf_counter()
             rmse = score_combo(panel, var, rcfg, n_folds)
+            wall = time.perf_counter() - t0
             print(f"  alpha={a:.2f} az={az:4.0f}  DEV RMSE={rmse:.4f}  "
-                  f"({time.perf_counter()-t0:.0f}s)")
+                  f"({wall:.0f}s)")
+            cfg["_trials"].append({
+                "phase": 2,
+                "k": int(over["k"]),
+                "n_layers": int(over["n_layers"]),
+                "alpha": float(a),
+                "alpha_z": float(az),
+                "rmse": float(rmse),
+                "wall_s": round(wall, 1),
+            })
             if rmse < best[0]:
                 best = (rmse, over)
     else:

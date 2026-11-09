@@ -118,20 +118,24 @@ def main():
     print("Loading panel and features...")
     df = load_panel(cfg, var)
     df = df.rename(columns={var: "value"})
+    df["station_name"] = df["station_name"].astype(str)
     stations = df[["station_name", "x", "y"]].drop_duplicates("station_name")
     if "elev" in df.columns:
         stations = stations.merge(
             df[["station_name", "elev"]].drop_duplicates("station_name"), on="station_name", how="left"
         )
     stations = compute_dem_features(stations, cfg)
-    from smacnp_data import attach_clc_onehot, attach_elev_bin
+    from smacnp_data import attach_clc_onehot, attach_elev_bin, fill_feature_nans
     stations = attach_clc_onehot(stations)
     stations = attach_elev_bin(stations)
     df = df.drop(columns=[c for c in feat_cols if c in df.columns and c not in ("x", "y")], errors="ignore")
     df = df.merge(
-        stations[["station_name"] + [c for c in feat_cols if c not in ("x", "y")]],
+        stations[["station_name"] + [c for c in feat_cols if c not in ("x", "y") and c in stations.columns]],
         on="station_name", how="left",
     )
+    # Impute with the training means stored in the scaler, then scale.
+    means = dict(zip(feat_scaler.columns_, feat_scaler.mean_))
+    df = fill_feature_nans(df, feat_cols, means=means)
     df = feat_scaler.transform(df)
 
     station_names = df["station_name"].unique()

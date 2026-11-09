@@ -277,10 +277,17 @@ class VarianceDecoder(nn.Module):
         super().__init__()
         # Predict log-variance; exp is more stable than raw softplus under NLL.
         self.mlp = _create_mlp(v_dim + spatial_dim + attr_dim, out_dim, hidden_size, num_layers, dropout)
+        # Bias the final layer so initial variance is ~e^1 ≈ 2.7, not ~1.
+        # A small initial variance makes the NLL gradient (1/var) huge as soon
+        # as the mean is slightly off, which is the weekly-temp divergence.
+        last = self.mlp[-1] if not isinstance(self.mlp[-1], nn.ReLU) else self.mlp[-2]
+        if isinstance(last, nn.Linear):
+            nn.init.zeros_(last.weight)
+            nn.init.constant_(last.bias, 1.0)
 
     def forward(self, v: torch.Tensor, s: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         log_var = self.mlp(torch.cat([v, s, x], dim=-1))
-        return torch.exp(log_var.clamp(-8.0, 8.0))
+        return torch.exp(log_var.clamp(-6.0, 4.0))
 
 
 class SMACNP(nn.Module):
@@ -351,11 +358,21 @@ class SMACNP(nn.Module):
         }
 
 
-def gaussian_nll(mu: torch.Tensor, var: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    var = var.clamp(min=1e-4, max=1e4)
-    mu = torch.nan_to_num(mu, nan=0.0, posinf=1e4, neginf=-1e4)
-    nll = 0.5 * (torch.log(2 * math.pi * var) + (target - mu) ** 2 / var)
-    return torch.nan_to_num(nll, nan=0.0, posinf=1e4, neginf=1e4).mean()
+def gaussian_nll(mu: torch.Tensor, var: torch.Tensor, target: torch.Tensor,
+                beta: float = 0.5) -> torch.Tensor:
+    """Beta-NLL (Seitzer et al.).
+
+    Plain NLL lets a shrinking variance amplify the mean gradient through
+    (y-mu)^2/var, which is the oscillation seen on weekly temp. Weighting
+    by detached var^beta bounds that feedback while still training both heads.
+    """
+    var = var.clamp(min=2.5e-3, max=50.0)
+    mu = torch.nan_to_num(mu, nan=0.0, posinf=10.0, neginf=-10.0)
+    se = (target - mu) ** 2
+    nll = 0.5 * (torch.log(2 * math.pi * var) + se / var)
+    if beta > 0:
+        nll = nll * var.detach().clamp(min=2.5e-3).pow(beta)
+    return torch.nan_to_num(nll, nan=0.0, posinf=100.0, neginf=100.0).mean()
 
 
 def two_step_loss(

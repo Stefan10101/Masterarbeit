@@ -148,6 +148,10 @@ def process_station_parquet(
             enough = (count / expected.replace(0, np.nan)) >= min_coverage
             if resolution == "half_hourly":
                 enough[:] = True
+            # Snow is often one observation per day (06:00). Do not require
+            # 80 % of the 48 half-hour slots; one real observation is enough.
+            if "snow" in raw_col.lower():
+                enough = count >= 1
 
             if stat == "sum":
                 resampled = src.resample(resample_rule).sum(min_count=1)

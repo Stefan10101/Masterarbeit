@@ -211,16 +211,17 @@ class RGI:
             b = elev_bin(elev).astype(np.float32)
             b_s = ((b - b.mean()) / max(b.std(), 1.0)).reshape(-1, 1)
             extra = b_s if extra is None else np.hstack([extra, b_s])
+        nb = self.device.type == "cuda"
         t = {
-            "value": torch.from_numpy(value).to(self.device),
-            "mask": torch.from_numpy(mask).to(self.device),
-            "xyz": torch.from_numpy(xyz).to(self.device),
-            "clc": torch.from_numpy(clc).to(self.device),
-            "extra": None if extra is None else torch.from_numpy(extra).to(self.device),
-            "edge_index": torch.from_numpy(ei).to(self.device),
-            "edge_attr": torch.from_numpy(ea).to(self.device),
+            "value": torch.from_numpy(value).to(self.device, non_blocking=nb),
+            "mask": torch.from_numpy(mask).to(self.device, non_blocking=nb),
+            "xyz": torch.from_numpy(xyz).to(self.device, non_blocking=nb),
+            "clc": torch.from_numpy(clc).to(self.device, non_blocking=nb),
+            "extra": None if extra is None else torch.from_numpy(extra).to(self.device, non_blocking=nb),
+            "edge_index": torch.from_numpy(ei).to(self.device, non_blocking=nb),
+            "edge_attr": torch.from_numpy(ea).to(self.device, non_blocking=nb),
         }
-        y = torch.from_numpy(self.scaler.transform_value(raw_v)).to(self.device)
+        y = torch.from_numpy(self.scaler.transform_value(raw_v)).to(self.device, non_blocking=nb)
         return t, y
 
     def fit(
@@ -289,6 +290,12 @@ class RGI:
             groups = list(df.groupby("time", sort=False))
             if train_mode:
                 rng.shuffle(groups)
+            # Gradient accumulation over batch_times timestamps (config already had the key unused).
+            # Reduces optimizer overhead and keeps the GPU busier, matching the SMACNP pattern.
+            accum = max(1, int(self.cfg.batch_times))
+            step_count = 0
+            if train_mode:
+                opt.zero_grad(set_to_none=True)
             for _t, g in groups:
                 g = g.reset_index(drop=True)
                 if len(g) < self.cfg.min_stations:
@@ -307,7 +314,7 @@ class RGI:
                         batch["value"], batch["mask"], batch["xyz"], batch["clc"],
                         batch["edge_index"], batch["edge_attr"], extra=batch["extra"],
                     )
-                    q_t = torch.from_numpy(q.astype(np.int64)).to(self.device)
+                    q_t = torch.from_numpy(q.astype(np.int64)).to(self.device, non_blocking=(self.device.type == "cuda"))
                     # When two-step, amount loss only on wet queries (raw > trace).
                     if use_two and self.log_amount:
                         raw_q = np.asarray(g[var].to_numpy()[q], dtype=np.float64)
@@ -315,17 +322,26 @@ class RGI:
                         wet_q = raw_q > np.log1p(self.cfg.trace)
                         if wet_q.sum() == 0:
                             continue
-                        q_t = q_t[torch.from_numpy(wet_q).to(self.device)]
+                        q_t = q_t[torch.from_numpy(wet_q).to(self.device, non_blocking=(self.device.type == "cuda"))]
                     loss = F.mse_loss(pred[q_t], y[q_t])
                 if train_mode:
-                    opt.zero_grad(set_to_none=True)
-                    scaler_amp.scale(loss).backward()
-                    scaler_amp.unscale_(opt)
-                    nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)
-                    scaler_amp.step(opt)
-                    scaler_amp.update()
+                    scaler_amp.scale(loss / accum).backward()
+                    step_count += 1
+                    if step_count % accum == 0:
+                        scaler_amp.unscale_(opt)
+                        nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)
+                        scaler_amp.step(opt)
+                        scaler_amp.update()
+                        opt.zero_grad(set_to_none=True)
                 total += float(loss.item()) * n_q
                 n_tok += n_q
+            # Final partial accumulation step
+            if train_mode and step_count % accum != 0:
+                scaler_amp.unscale_(opt)
+                nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)
+                scaler_amp.step(opt)
+                scaler_amp.update()
+                opt.zero_grad(set_to_none=True)
             return total / max(n_tok, 1)
 
         for epoch in range(1, self.cfg.epochs + 1):

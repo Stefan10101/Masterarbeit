@@ -66,14 +66,19 @@ ALPINE = {
     "max_lat": 48.8,
 }
 
-# Common MeteoHub / BUFR-derived variable name mappings (extend as needed)
+# BUFR codes observed in MeteoHub NDJSON → thesis variables
 VAR_MAP = {
-    "temperature": ["temp", "temperature", "air_temperature", "T", "temp_mean"],
-    "precipitation": ["precip", "precipitation", "rainfall", "P", "precip_sum"],
-    "wind": ["wind", "wind_speed", "ff", "wind_velocity"],
-    "relative_humidity": ["humidity", "relative_humidity", "RH", "rh", "luftfeuchte"],
-    "snow_height": ["snow", "snow_height", "snow_depth", "HS", "schnee"],
+    "temperature": ["B12101"],
+    "precipitation": ["B13011"],
+    "wind": ["B11002"],
+    "relative_humidity": ["B13003"],
+    "snow_height": ["B13013"],
 }
+# metadata codes
+META_NAME = "B01019"
+META_LAT = "B05001"
+META_LON = "B06001"
+META_ALT = "B07030"
 
 
 def in_alpine(lon, lat) -> bool:
@@ -105,66 +110,71 @@ def to_float(val):
 def normalize_var(raw_name: str) -> str | None:
     if not raw_name:
         return None
-    low = str(raw_name).lower()
     for target, aliases in VAR_MAP.items():
-        if any(a in low for a in aliases):
+        if raw_name in aliases:
             return target
     return None
 
 
 def collect() -> dict:
-    """Collect {sid: {var: [(iso, val), ...], _meta: {...}}} from raw files."""
+    """Collect {sid: {var: [(iso, val), ...], _meta: {...}}} from NDJSON raw files."""
     series = defaultdict(lambda: defaultdict(list))
     if not RAW_BASE.exists():
         log.warning(f"No raw dir: {RAW_BASE}")
         return series
 
     for path in sorted(RAW_BASE.glob("*.json")):
-        try:
-            obj = json.loads(path.read_text(encoding="utf-8"))
-        except Exception as e:
-            log.error(f"Cannot read {path}: {e}")
+        if path.name.startswith("probe"):
             continue
+        log.info(f"reading {path.name}")
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
 
-        # Flexible parsing: support both list-of-records and nested structures
-        records = obj if isinstance(obj, list) else obj.get("data") or obj.get("observations") or []
-        if isinstance(records, dict):
-            records = records.get("features") or records.get("stations") or []
+                ts = obj.get("date")
+                if not ts:
+                    continue
 
-        for rec in records:
-            if not isinstance(rec, dict):
-                continue
-            # Station identity
-            props = rec.get("properties") or rec
-            sid = str(props.get("id") or props.get("station_id") or props.get("scode") or "")
-            if not sid:
-                continue
-            lon = props.get("lon") or props.get("longitude") or props.get("LONG")
-            lat = props.get("lat") or props.get("latitude") or props.get("LAT")
-            if not in_alpine(lon, lat):
-                continue
+                # metadata + values live inside data[].vars
+                name = lat = lon = alt = None
+                values = {}
+                for item in obj.get("data") or []:
+                    vars_ = item.get("vars") or {}
+                    for code, payload in vars_.items():
+                        v = payload.get("v") if isinstance(payload, dict) else payload
+                        if code == META_NAME:
+                            name = v
+                        elif code == META_LAT:
+                            lat = v
+                        elif code == META_LON:
+                            lon = v
+                        elif code == META_ALT:
+                            alt = v
+                        else:
+                            var = normalize_var(code)
+                            if var is not None:
+                                values[var] = to_float(v)
 
-            name = props.get("name") or props.get("NAME") or sid
-            series[sid]["_meta"] = {
-                "id": sid,
-                "name": name,
-                "clean": sanitize(name),
-                "lon": lon,
-                "lat": lat,
-                "alt": props.get("alt") or props.get("elevation") or props.get("ALT"),
-            }
+                if not name or not in_alpine(lon, lat):
+                    continue
 
-            # Values
-            ts = rec.get("timestamp") or rec.get("time") or rec.get("date") or props.get("timestamp")
-            for k, v in rec.items():
-                var = normalize_var(k)
-                if var and ts:
-                    series[sid][var].append((ts, to_float(v)))
-            # Nested value dicts
-            for k, v in (rec.get("values") or {}).items():
-                var = normalize_var(k)
-                if var and ts:
-                    series[sid][var].append((ts, to_float(v)))
+                sid = str(name)
+                series[sid]["_meta"] = {
+                    "id": sid,
+                    "name": name,
+                    "clean": sanitize(name),
+                    "lon": lon,
+                    "lat": lat,
+                    "alt": alt,
+                }
+                for var, val in values.items():
+                    series[sid][var].append((ts, val))
 
     return series
 

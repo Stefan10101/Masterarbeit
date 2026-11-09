@@ -58,15 +58,16 @@ rgi:
 
   # DEV search (two-phase in tune_rgi.py)
   search:
-    # 4 parameters, so the search stays phased (k x layers, then alpha x alpha_z).
-    k: [4, 8, 16, 32]
+    # Reduced 2026-11-09 from weekly search: drop k=8, alpha=0.4/0.6, alpha_z=1/500.
+    # Phase 1: 3x4=12 combos; phase 2: 2x3=6 combos.
+    k: [4, 16, 32]
     n_layers: [2, 3, 4, 5]
-    alpha: [0.1, 0.2, 0.4, 0.6]
-    alpha_z: [1.0, 10.0, 50.0, 200.0, 500.0]
+    alpha: [0.1, 0.2]
+    alpha_z: [10.0, 50.0, 200.0]
   search_expand:
-    k: [4, 8, 16, 32, 64]
-    alpha: [0.2, 0.4, 0.6, 0.8]
-    alpha_z: [50.0, 200.0, 500.0, 1000.0]
+    k: [4, 16, 32, 64]
+    alpha: [0.1, 0.2]
+    alpha_z: [50.0, 200.0]
   n_folds: 5
 
 aggregation:

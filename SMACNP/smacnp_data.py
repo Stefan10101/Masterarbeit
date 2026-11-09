@@ -79,6 +79,8 @@ def load_panel(cfg: dict, var: str) -> pd.DataFrame:
         if extra in stations.columns:
             keep.append(extra)
     stations = stations[keep].drop_duplicates("station_name")
+    df["station_name"] = df["station_name"].astype(str)
+    stations["station_name"] = stations["station_name"].astype(str)
     df = df.merge(stations, on="station_name", how="left")
     return df
 
@@ -111,8 +113,20 @@ def compute_dem_features(stations: pd.DataFrame, cfg: dict) -> pd.DataFrame:
             want.append(extra)
 
     keep = [c for c in want if c in cache.columns]
+    # Cast both sides so a str/int mismatch does not produce an all-NaN merge.
+    stations = stations.copy()
+    stations["station_name"] = stations["station_name"].astype(str)
+    cache = cache.copy()
+    cache["station_name"] = cache["station_name"].astype(str)
     merged = stations.drop(columns=[c for c in keep if c != "station_name" and c in stations.columns], errors="ignore")
-    return merged.merge(cache[keep], on="station_name", how="left")
+    out = merged.merge(cache[keep], on="station_name", how="left")
+    # Match rate on a core column (elev if present, else the first non-name column).
+    check = "elev" if "elev" in out.columns else next((c for c in keep if c != "station_name"), None)
+    if check is not None and len(out):
+        n_ok = int(out[check].notna().sum())
+        if n_ok < len(out):
+            print(f"  terrain cache match: {n_ok}/{len(out)} stations have {check}")
+    return out
 
 
 def feature_columns(cfg: dict) -> List[str]:
@@ -130,6 +144,50 @@ def feature_columns(cfg: dict) -> List[str]:
     # 250 m elev-bin as a single smooth index (not free one-hot).
     cols.append("elev_bin")
     return cols
+
+
+def usable_feature_columns(df: pd.DataFrame, feat_cols: List[str],
+                           train_mask: pd.Series) -> List[str]:
+    """Keep only feature columns that exist and are not all-NaN on the training pool.
+
+    A single all-NaN column (e.g. basin_continuity when the grid sample failed,
+    or a cache merge that matched nothing) makes dropna remove every row and
+    produces zero day tensors.
+    """
+    keep, dropped = [], []
+    for c in feat_cols:
+        if c not in df.columns:
+            dropped.append(c)
+            continue
+        if df.loc[train_mask, c].notna().any():
+            keep.append(c)
+        else:
+            dropped.append(c)
+    if dropped:
+        print(f"  dropped missing/all-NaN features: {dropped}")
+    if not keep:
+        raise RuntimeError("no usable feature columns after NaN filter")
+    return keep
+
+
+def fill_feature_nans(df: pd.DataFrame, feat_cols: List[str],
+                      train_mask: pd.Series | None = None,
+                      means: dict | None = None) -> pd.DataFrame:
+    """Impute remaining NaNs with the training-pool mean (or a provided mean)."""
+    out = df.copy()
+    for c in feat_cols:
+        if c not in out.columns:
+            continue
+        if means is not None and c in means and np.isfinite(means[c]):
+            mu = float(means[c])
+        elif train_mask is not None:
+            mu = float(out.loc[train_mask, c].mean(skipna=True))
+            if not np.isfinite(mu):
+                mu = 0.0
+        else:
+            mu = 0.0
+        out[c] = out[c].fillna(mu)
+    return out
 
 
 def attach_elev_bin(df: pd.DataFrame) -> pd.DataFrame:
@@ -179,9 +237,11 @@ class FeatureScaler:
     def fit(self, df: pd.DataFrame, columns: List[str]) -> "FeatureScaler":
         self.columns_ = list(columns)
         vals = df[columns].to_numpy(dtype=np.float64)
-        self.mean_ = np.nanmean(vals, axis=0)
-        self.std_ = np.nanstd(vals, axis=0)
-        self.std_[self.std_ < 1e-8] = 1.0
+        with np.errstate(all="ignore"):
+            self.mean_ = np.nanmean(vals, axis=0)
+            self.std_ = np.nanstd(vals, axis=0)
+        self.mean_ = np.where(np.isfinite(self.mean_), self.mean_, 0.0)
+        self.std_ = np.where(np.isfinite(self.std_) & (self.std_ >= 1e-8), self.std_, 1.0)
         return self
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
