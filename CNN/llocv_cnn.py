@@ -26,7 +26,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_model_path, get_master_grid_path, get_nested_llocv_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_fz_points, idw_fz_raster, idw_raster, sample_at_points, station_to_raster, two_step_var
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from shared.metrics import compute_metrics as eval_metrics, print_eval
@@ -166,7 +166,7 @@ def main():
     elif args.variable:
         variables = [args.variable]
     else:
-        variables = cfg["cnn"].get("variables_to_process", ["temp_mean"])
+        variables = variables_from_cfg(cfg)
     n_folds = args.folds or int(cfg["cnn"].get("n_folds", 5))
     if args.quick:
         n_folds = args.folds or 2

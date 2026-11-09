@@ -34,7 +34,7 @@ from shared.splits.evaluation_sets import (
     load_quarter_splits,
     quarter_of,
 )
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res, variables_from_cfg
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 
 
@@ -81,7 +81,7 @@ def main():
     cfg = load_config()
     time_res = apply_time_res(cfg, args)
     domain = cfg.get("domain", {}).get("preset", "full")
-    variables = args.variables or ["temp_mean", "precip_sum"]
+    variables = variables_from_cfg(cfg, args.variables)
     test_quarters = set(load_quarter_splits()["test"])
 
     print("=" * 72)

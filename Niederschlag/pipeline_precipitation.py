@@ -265,6 +265,7 @@ NETWORK_PARSERS: Dict[str, Callable[[Path], Optional[pd.DataFrame]]] = {
     "HydroVO": parse_hydro_generic,
     "Suedtirol": parse_suedtirol,
     "MeteoFrance": parse_meteofrance,
+    "Meteohub": parse_lwd,
     "Meteonetwork": parse_lwd,
 }
 # ==================== READ + LIGHT QC (Precipitation specific) ====================
@@ -363,6 +364,18 @@ def process_station(json_path: Path) -> Dict:
 
     stats["total_rows"] = len(df)
     stats["valid_rows"] = int(df["value"].notna().sum())
+
+    # MeteoFrance precip is hourly. Split each amount into the two half-hours
+    # that make up that hour so the sum is unchanged and both slots carry data.
+    # Other networks keep the existing sum regrid.
+    if network == "MeteoFrance" and not df.empty:
+        df = df.copy()
+        half = df["value"] / 2.0
+        prev = df.copy()
+        prev["timestamp"] = prev["timestamp"] - pd.Timedelta(minutes=30)
+        prev["value"] = half.values
+        df["value"] = half.values
+        df = pd.concat([prev, df], ignore_index=True)
 
     # Precipitation always uses sum aggregation (captures all sub-interval data from HydroT/HydroVO)
     df_full = regrid_to_30min_strict(df, FULL_PERIOD_START, FULL_PERIOD_END, agg="sum")

@@ -31,6 +31,7 @@ NETWORK_ALIASES = {
     "suedtirol": "Suedtirol",
     "meteofrance": "MeteoFrance",
     "meteonetwork": "Meteonetwork",
+    "meteohub": "Meteohub",
     "slf": "SLF",
 }
 

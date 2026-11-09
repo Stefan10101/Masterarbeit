@@ -91,7 +91,7 @@ def metrics(obs: np.ndarray, pred: np.ndarray) -> dict:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--variable", default="temp_mean")
+    parser.add_argument("--variable", default=None)
     parser.add_argument("--time-resolution", default=None)
     parser.add_argument("--jobs", type=int, default=None,
                         help="parallel test days (default: half the logical cores). "
@@ -101,6 +101,19 @@ def main():
     cfg = load_config()
     if args.time_resolution:
         cfg["time_resolution"] = args.time_resolution
+    if args.variable is None:
+        import subprocess
+        import sys
+        vs = list(cfg.get("variables_to_process") or ["temp_mean"])
+        print(f"no --variable; running {vs}", flush=True)
+        for v in vs:
+            cmd = [sys.executable, str(Path(__file__).resolve()), "--variable", v]
+            if args.time_resolution:
+                cmd += ["--time-resolution", args.time_resolution]
+            if args.jobs is not None:
+                cmd += ["--jobs", str(args.jobs)]
+            subprocess.check_call(cmd)
+        return
     var = args.variable
     device = get_device(cfg)
     ckpt_path = get_smacnp_model_path(var, cfg["time_resolution"])
@@ -175,16 +188,26 @@ def main():
             p_occ = torch.sigmoid(pred["occurrence_logits"]).cpu().numpy().squeeze()
             mu_n = pred["amount_mu"].cpu().numpy().squeeze()
             var_n = pred["amount_variance"].cpu().numpy().squeeze()
-            amt = scaler.inverse_mean(mu_n, var_n)
-            y_hat = np.where(p_occ >= 0.5, np.maximum(amt, 0.0), 0.0)
-            diag = (np.atleast_1d(p_occ), np.atleast_1d(amt),
-                    df_tgt["value"].to_numpy(dtype=np.float64) > 1e-6)
+            amt = np.maximum(scaler.inverse_mean(mu_n, var_n), 0.0)
+            p_occ = np.atleast_1d(np.clip(p_occ, 0.0, 1.0))
+            amt = np.atleast_1d(amt)
+            y_hat = p_occ * amt
+            y_hard = np.where(p_occ >= 0.5, amt, 0.0)
+            diag = (p_occ, amt, df_tgt["value"].to_numpy(dtype=np.float64) > 1e-6)
         else:
             y_hat = scaler.inverse(pred["mu"].cpu().numpy().squeeze())
             diag = None
         y_true = df_tgt["value"].to_numpy(dtype=np.float64)
-        out = [{"time": day, "station_name": name, "obs": yt, "pred": yp}
-               for name, yt, yp in zip(df_tgt["station_name"], y_true, y_hat)]
+        if ckpt["two_step"]:
+            out = [
+                {"time": day, "station_name": name, "obs": float(yt),
+                 "pred": float(yp), "pred_hard": float(yh)}
+                for name, yt, yp, yh in zip(
+                    df_tgt["station_name"], y_true, y_hat, y_hard)
+            ]
+        else:
+            out = [{"time": day, "station_name": name, "obs": yt, "pred": yp}
+                   for name, yt, yp in zip(df_tgt["station_name"], y_true, y_hat)]
         return out, diag
 
     if jobs == 1:

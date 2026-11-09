@@ -36,9 +36,9 @@ from paths import (
     get_master_grid_path,
     get_rfsi_model_path,
 )
-from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, extras_for_var, neighbor_width, two_step_var
+from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, cov_switches, extras_for_var, neighbor_width, two_step_var
 from rfsi_optimizer import compute_metrics
-from shared.time_res import add_time_res_arg, apply_time_res
+from shared.time_res import add_time_res_arg, apply_time_res, variables_from_cfg
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
@@ -58,10 +58,9 @@ N_OBS = int(rfsi_cfg.get("n_obs", 10))
 CHUNK_SIZE = int(rfsi_cfg.get("predict_chunk_size", 250_000))
 SAVE_LLOCV = bool(rfsi_cfg.get("save_llocv", True))
 SAVE_MODEL = bool(rfsi_cfg.get("save_model", True))
-USE_ELEV = bool(rfsi_cfg.get("use_elevation", True))
-USE_LC = bool(rfsi_cfg.get("use_landcover", True))
+USE_ELEV, USE_LC = cov_switches(cfg)
 MIN_STATIONS = cfg.get("min_stations_per_field", 10)
-VARIABLES = rfsi_cfg.get("variables_to_process")  # None = all present columns
+VARIABLES = None  # set in main from variables_to_process
 
 ALL_VARS = [
     "precip_sum", "temp_mean", "temp_min", "temp_max",
@@ -158,8 +157,10 @@ def main():
     p.add_argument("--months", default=None)
     add_time_res_arg(p)
     args = p.parse_args()
-    global TIME_RES
+    global TIME_RES, USE_ELEV, USE_LC, VARIABLES
     TIME_RES = apply_time_res(cfg, args)
+    USE_ELEV, USE_LC = cov_switches(cfg)
+    VARIABLES = variables_from_cfg(cfg, args.variables)
 
     print("=" * 80)
     print(f"RFSI pooled production | {DOMAIN} | {TIME_RES}")
@@ -169,27 +170,27 @@ def main():
 
     station_data = load_aggregated_data()
     stations = get_all_stations()
-    use_elev = USE_ELEV
-    use_lc = USE_LC and ("clc_code" in stations.columns)
+    from shared.terrain import attach_enabled_terrain, enabled_covariates
+    stations = attach_enabled_terrain(stations, cfg)
+    if "clc_level2" in stations.columns and "clc_code" not in stations.columns:
+        stations["clc_code"] = stations["clc_level2"]
+    use_elev = USE_ELEV and "elev" in stations.columns
+    use_lc = USE_LC and "clc_code" in stations.columns
     if USE_LC and not use_lc:
         raise RuntimeError(
-            "use_landcover=true but stations_projected.parquet has no clc_code. "
+            "covariates.clc is on but stations have no clc_code or clc_level2. "
             "Re-run create_grids.py --method RFSI --master so stations get CLC."
         )
-    print(f"  covariates: elev={use_elev}  landcover={use_lc}")
+    print(f"  covariates: {enabled_covariates(cfg)}")
 
-    from shared.terrain import attach_enabled_terrain
-    stations = attach_enabled_terrain(stations, cfg)
     station_cols = ["station_name", "x", "y"]
-    for c in ("elev", "clc_code", "clc_level2", "slope", "northness", "tpi",
-              "smooth_elev", "dist_to_coast", "signed_dist_to_ridge"):
-        if c in stations.columns and (c != "elev" or use_elev) and (c != "clc_code" or use_lc):
+    for c in ("elev", "clc_code", *enabled_covariates(cfg)):
+        if c in stations.columns and c not in station_cols and (c != "elev" or use_elev) and (c != "clc_code" or use_lc):
             station_cols.append(c)
     stations = stations[station_cols].drop_duplicates("station_name")
     pack = build_region_pack(cfg, int(cfg.get("rfsi", {}).get("n_regions", 6)))
 
-    wanted = args.variables or VARIABLES or ALL_VARS
-    wanted = [v for v in wanted if v in station_data.columns]
+    wanted = [v for v in VARIABLES if v in station_data.columns]
     if not wanted:
         raise RuntimeError(f"None of {VARIABLES} found in aggregated data.")
 
@@ -250,7 +251,7 @@ def main():
 
         X_cov, encoder = prepare_covariates(
             valid, fit_encoder=True, use_elev=use_elev, use_lc=use_lc,
-            extras=extras_for_var(valid, var, rh_t_mode),
+            extras=extras_for_var(valid, var, rh_t_mode, cfg),
         )
         model = RFSI(
             n_obs=n_obs, rf_params=var_params,
@@ -306,8 +307,9 @@ def main():
             try:
                 from paths import get_grid_terrain_path
                 tds = xr.open_dataset(get_grid_terrain_path(int(res)))
-                for c in ("slope", "northness", "tpi", "smooth_elev",
-                          "dist_to_coast", "signed_dist_to_ridge"):
+                for c in enabled_covariates(cfg):
+                    if c in ("elev", "clc_level2"):
+                        continue
                     if c in tds:
                         grid_df[c] = np.nan_to_num(tds[c].values, nan=0.0).ravel().astype(np.float32)
                 tds.close()
@@ -321,7 +323,8 @@ def main():
                 ).astype(np.int32)
             if len(grid_df.columns):
                 X_grid, _ = prepare_covariates(
-                    grid_df, encoder=encoder, use_elev=use_elev, use_lc=use_lc
+                    grid_df, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+                    extras=extras_for_var(grid_df, var, "none", cfg),
                 )
             else:
                 X_grid = None
@@ -360,6 +363,9 @@ def main():
                 end_date=str(END_DATE.date()),
                 time_resolution=TIME_RES,
             )
+            if out_file.exists() and not cfg.get("overwrite_maps", True):
+                print(f"  exists, skip {out_file.name}")
+                continue
 
             time_steps = sorted(valid["time"].unique())
             data_3d = np.full((len(time_steps), ny, nx), np.nan, dtype=np.float32)
@@ -374,7 +380,7 @@ def main():
                 z = df_t[var].to_numpy()
                 X_t, _ = prepare_covariates(
                     df_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-                    extras=extras_for_var(df_t, var, rh_t_mode),
+                    extras=extras_for_var(df_t, var, rh_t_mode, cfg),
                 )
                 X_grid_t = X_grid
                 if t_model is not None and X_grid is not None:
@@ -385,7 +391,7 @@ def main():
                     grid_df_t["temp_mean"] = t_hat
                     X_grid_t, _ = prepare_covariates(
                         grid_df_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-                        extras=extras_for_var(grid_df_t, var, rh_t_mode),
+                        extras=extras_for_var(grid_df_t, var, rh_t_mode, cfg),
                     )
                     expect = model.n_features_
                     got = neighbor_width(n_obs) + X_grid_t.shape[1]

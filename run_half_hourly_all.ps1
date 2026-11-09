@@ -3,6 +3,9 @@
 # Produce left commented. Stops on first non-zero exit.
 
 $ErrorActionPreference = "Stop"
+$env:WEEKLY_HOLDOUT_STAMP = Join-Path $PSScriptRoot "Output\_run_stamp\holdout_stamp.json"
+python (Join-Path $PSScriptRoot "shared\splits\stamp_holdout.py")
+if ($LASTEXITCODE -ne 0) { throw "holdout stamp failed" }
 $vars = @("temp_mean","precip_sum","wind_mean","rh_mean","snow_mean")
 $res  = "half_hourly"
 $hrs  = "--hours all"

@@ -19,7 +19,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_interpolated_map_path, get_master_grid_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from frei_core import FreiInterpolator, two_step_var
 from frei_data import (
@@ -67,7 +67,7 @@ def main():
     elif args.variable:
         variables = [args.variable]
     else:
-        variables = (cfg["frei"].get("variables_to_process") or ["temp_mean"])
+        variables = variables_from_cfg(cfg)
     min_stations = int(cfg.get("min_stations_per_field", 10))
     comp = compute_block(cfg)
     months = args.months or ("seasonal4" if args.quick else None)
@@ -84,6 +84,10 @@ def main():
         xq, yq, zq = xx.ravel(), yy.ravel(), zz.ravel()
 
         for var in variables:
+            out = get_interpolated_map_path("Frei", domain, var, res, cfg["start_date"], cfg["end_date"], time_res)
+            if out.exists() and not cfg.get("overwrite_maps", True):
+                print(f"exists, skip {out.name}", flush=True)
+                continue
             panel = load_panel(cfg, var)
             # Tag with shared quarter splits so subset_splits can select train/tune/test.
             # Produce keeps all stations (including held-out) as donors; only time is filtered.

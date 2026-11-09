@@ -31,7 +31,7 @@ from cnn_core import (
     two_step_var,
 )
 from cnn_data import data_sources, load_cnn_config, load_panel, precip_trace
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.splits.evaluation_sets import prepare_for_tuning
 
 try:
@@ -761,7 +761,7 @@ def main():
             clc = clc_group(np.nan_to_num(grid[name].values, nan=0).astype(np.int32)).astype(np.float64)
             break
     slope, sinasp, cosasp = grid_terrain(elev, gx, gy)
-    variables = [args.variable] if args.variable else cfg["cnn"].get("variables_to_process", ["temp_mean"])
+    variables = [args.variable] if args.variable else variables_from_cfg(cfg)
     for var in variables:
         panel = load_panel(cfg, var)
         panel = prepare_for_tuning(panel, variable=var)

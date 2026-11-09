@@ -31,7 +31,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from idw_core import get_valid_targets, interpolate_idw
 from idw_data import load_config, load_global_params, load_panel
 from paths import get_interpolated_map_path, get_master_grid_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res, variables_from_cfg
 
 
 TRACE = {
@@ -83,7 +83,7 @@ def main():
         n_jobs = max(1, (os.cpu_count() or 1) // 2)
     use_process = platform.system() != "Windows" and n_jobs > 1
     backend = "loky" if use_process else "threading"
-    variables = args.variables or ["temp_mean", "precip_sum"]
+    variables = variables_from_cfg(cfg, args.variables)
 
     print("=" * 72)
     print(f"IDW maps | {domain} | {time_res} | {cfg['start_date']} → {cfg['end_date']}")
@@ -113,9 +113,12 @@ def main():
                 end_date=str(cfg["end_date"]),
                 time_resolution=time_res,
             )
+            if out_file.exists() and not cfg.get("overwrite_maps", True):
+                print(f"  exists, skip {out_file.name}")
+                continue
             times = sorted(panel["time"].unique())
             if args.max_times and len(times) > args.max_times:
-                rng = np.random.default_rng(int(cfg.get("random_seed", 31)))
+                rng = np.random.default_rng(int(cfg.get("idw", {}).get("seed", 31)))
                 times = sorted(rng.choice(times, size=args.max_times, replace=False))
             trace = TRACE.get(var, {}).get(time_res, 1.0)
             tasks = [

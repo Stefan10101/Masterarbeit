@@ -288,6 +288,7 @@ NETWORK_PARSERS: Dict[str, Callable[[Path], Optional[pd.DataFrame]]] = {
     "HydroVO": parse_hydro_generic,
     "Suedtirol": parse_suedtirol,
     "MeteoFrance": parse_meteofrance,
+    "Meteohub": parse_lwd,          # same layout as LWD (timestamp + value, hoehe/lon/lat)
 }
 # ==================== READ + LIGHT QC (Snowheight specific) ====================
 
@@ -395,8 +396,23 @@ def process_station(json_path: Path) -> Dict:
 
     safe_station = re.sub(r'[^a-zA-Z0-9_.-]', '_', station)
 
-    # DWD daily snow special case: exact 06:00 UTC only, no ffill, coverage filter OFF
-    exact_only = (network == "DWD")
+    # DWD daily, MeteoFrance, and Meteohub snow: one representative value per day
+    # at 06:00 UTC (or already 30-min from the unpacker). No forward-fill,
+    # coverage filter off so sparse stations are kept.
+    exact_only = (network in ("DWD", "MeteoFrance", "Meteohub"))
+    if network == "MeteoFrance" and not df.empty:
+        df = df.copy()
+        df["date"] = df["timestamp"].dt.floor("D")
+        daily = (
+            df.groupby("date", as_index=False)["value"]
+            .mean()
+        )
+        daily["timestamp"] = daily["date"] + pd.Timedelta(hours=6)
+        # carry station metadata from the first row
+        for col in ["station", "name", "height", "lat", "lon", "parameter", "source_file"]:
+            if col in df.columns:
+                daily[col] = df[col].iloc[0]
+        df = daily.drop(columns=["date"])
 
     df_full = regrid_to_30min_snow(df, FULL_PERIOD_START, FULL_PERIOD_END, exact_only=exact_only)
     stats["full_coverage_pct"] = coverage_percent(df_full)

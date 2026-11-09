@@ -1,34 +1,25 @@
-# config.yaml - raster U-Net interpolator
-# Station and grid files are reused from RFSI.
-
-paths:
-  input_root: "Kombiniert"
-  dem: "DEM_Source/COP30_mosaic_EPSG31287.tif"
-  output_root: "CNN/Output"
-  aggregated_from: "RFSI"
-  stations_from: "RFSI"
-  grids_from: "RFSI"
+# Raster U-Net interpolator.
 domain:
-  preset: "full"
-  custom_bbox: [-76229, 123066, 637216, 501366]
-  buffer_m: 100000
-
-predefined_bboxes:
-  # Alpine Convention perimeter in EPSG:31287 (from process_new_dem.py run)
-  full: [-76229, 123066, 637216, 501366]
-
-time_resolution: "monthly"
+  preset: full
+time_resolution: monthly
 start_date: "2020-01-01"
-end_date:   "2025-12-31"
+end_date: "2025-12-31"
 resolutions_to_process: [1000]
+variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
+min_stations_per_field: 10
+overwrite_maps: true
+aggregation:
+  weekly:
+    time_col: year_week
+  daily:
+    time_col: date
+  monthly:
+    time_col: year_month
+  half_hourly:
+    time_col: timestamp
 
 cnn:
-  variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
-  rh_t_mode: "none"
-  save_model: true
-  save_llocv: true
-  primary_metric: "rmse"
-
+  rh_t_mode: none
   n_levels: 4
   base_ch: 32
   residual_idw: true
@@ -43,65 +34,17 @@ cnn:
   patience: 8
   lr: 0.001
   weight_decay: 0.0001
-  batch_times: 2          # leave headroom so the desktop GPU is not starved
+  batch_times: 2
   tile_size: 128
   tiles_per_batch: 8
   accum_steps: 4
   seed: 22
-  device: "auto"
+  device: auto
   use_amp: false
   n_folds: 5
-
   search:
-    # 2 parameters, so the full product is scored.
     n_levels: [2, 3, 4, 5]
     base_ch: [16, 32, 64]
-
-aggregation:
-  weekly:
-    freq: "W"
-    time_col: "year_week"
-  daily:
-    freq: "D"
-    time_col: "date"
-  monthly:
-    freq: "ME"
-    time_col: "year_month"
-  half_hourly:
-    freq: "30min"
-    time_col: "timestamp"
-    add_is_daylight: true
-
-targets:
-  precipitation:
-    raw_col: "precipitation"
-    stats: ["sum"]
-    output_names: ["precip_sum"]
-  temperature:
-    raw_col: "temperature"
-    stats: ["mean", "min", "max"]
-    output_names: ["temp_mean", "temp_min", "temp_max"]
-  wind_speed:
-    raw_col: "wind_speed"
-    stats: ["mean", "max"]
-    output_names: ["wind_mean", "wind_max"]
-  relative_humidity:
-    raw_col: "relative_humidity"
-    stats: ["mean"]
-    output_names: ["rh_mean"]
-  snow_height:
-    raw_col: "snow_height"
-    stats: ["mean", "max", "min"]
-    output_names: ["snow_mean", "snow_max", "snow_min"]
-
-min_stations_per_field: 10
-random_seed: 31
-verbose: true
-n_jobs: -1
-overwrite_maps: true
-
-# Shared core covariates (toggle per method).
-# Station train/LLOCV uses finest; maps use cell-mean from Source/terrain/grid_<res>m.nc.
 covariates:
   elev: true
   smooth_elev: true
@@ -111,4 +54,5 @@ covariates:
   clc: true
   dist_to_coast: true
   signed_dist_to_ridge: true
-
+  basin_continuity: true
+  elev_above_valley: true

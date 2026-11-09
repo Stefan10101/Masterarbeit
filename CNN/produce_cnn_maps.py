@@ -23,7 +23,7 @@ from paths import get_cnn_model_path, get_interpolated_map_path, get_master_grid
 from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_fz_raster, idw_raster, station_to_raster, two_step_var
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, attach_temperature, attach_station_tpi
 from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned, train_one
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 
 try:
     import xarray as xr
@@ -60,7 +60,7 @@ def main():
     elif args.variable:
         variables = [args.variable]
     else:
-        variables = (cfg["cnn"].get("variables_to_process") or ["temp_mean"])
+        variables = variables_from_cfg(cfg)
     min_stations = int(cfg.get("min_stations_per_field", 10))
     print(f"domain={domain} time_res={time_res} vars={variables}", flush=True)
 
@@ -92,6 +92,10 @@ def main():
         ny, nx = elev.shape
 
         for var in variables:
+            out = get_interpolated_map_path("CNN", domain, var, res, cfg["start_date"], cfg["end_date"], time_res)
+            if out.exists() and not cfg.get("overwrite_maps", True):
+                print(f"exists, skip {out.name}", flush=True)
+                continue
             t_var = time.time()
             print(f"{var} load panel…", flush=True)
             panel = load_panel(cfg, var)

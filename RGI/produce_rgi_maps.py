@@ -44,7 +44,7 @@ from rgi_data import (
     subset_times,
 )
 from llocv_rgi import cfg_to_rgi
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 
 try:
     import xarray as xr
@@ -95,9 +95,7 @@ def main():
     end = pd.Timestamp(cfg["end_date"])
     resolutions = cfg.get("resolutions_to_process", [1000])
     rgi_cfg = cfg.get("rgi", {})
-    variables = args.variables or rgi_cfg.get("variables_to_process") or [
-        "temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean",
-    ]
+    variables = variables_from_cfg(cfg, args.variables)
     save_llocv = bool(rgi_cfg.get("save_llocv", True))
     save_model = bool(rgi_cfg.get("save_model", True))
     tile = int(rgi_cfg.get("predict_tile", 120000))

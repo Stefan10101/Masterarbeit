@@ -35,9 +35,9 @@ from paths import (
     get_domain_stations_path,
     get_nested_llocv_path,
 )
-from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, extras_for_var, neighbor_width, two_step_var
+from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, cov_switches, extras_for_var, neighbor_width, two_step_var
 from rfsi_optimizer import compute_metrics
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of, apply_evaluation_protocol
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 
@@ -96,17 +96,18 @@ def load_panel(cfg, var):
     df = df[(df["time"] >= start) & (df["time"] <= end)]
 
     stations = pd.read_parquet(get_domain_stations_path("RFSI", "full"))
-    from shared.terrain import attach_enabled_terrain
+    from shared.terrain import attach_enabled_terrain, enabled_covariates
     stations = attach_enabled_terrain(stations, cfg)
     if "elev" not in stations.columns:
         if "elev_dem" in stations.columns:
             stations = stations.rename(columns={"elev_dem": "elev"})
         elif "hoehe" in stations.columns:
             stations = stations.rename(columns={"hoehe": "elev"})
+    if "clc_code" not in stations.columns and "clc_level2" in stations.columns:
+        stations["clc_code"] = stations["clc_level2"]
     keep = ["station_name", "x", "y"]
-    for extra in ("elev", "clc_code", "clc_level2", "slope", "northness", "tpi",
-                  "smooth_elev", "dist_to_coast", "signed_dist_to_ridge"):
-        if extra in stations.columns:
+    for extra in ("elev", "clc_code", *enabled_covariates(cfg)):
+        if extra in stations.columns and extra not in keep:
             keep.append(extra)
     stations = stations[keep].drop_duplicates("station_name")
 
@@ -144,8 +145,7 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
         "n_jobs": -1,
     }
     rf_params = {k: v for k, v in rf_params.items() if v is not None}
-    use_elev = bool(rfsi_cfg.get("use_elevation", True))
-    use_lc = bool(rfsi_cfg.get("use_landcover", True))
+    use_elev, use_lc = cov_switches(cfg)
     min_stations = int(cfg.get("min_stations_per_field", 10))
     rh_t_mode = str(rfsi_cfg.get("rh_t_mode", "none"))
     two_step = bool(rfsi_cfg.get("two_step", True)) and two_step_var(var)
@@ -174,7 +174,7 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
     fit_df = valid[(~valid["is_heldout"]) & (valid["split"] == "train")].copy()
     score_df = valid[(valid["is_heldout"]) & (valid["split"] == "test")].copy()
     if use_lc and "clc_code" not in fit_df.columns:
-        raise RuntimeError("use_landcover=true but stations have no clc_code")
+        raise RuntimeError("covariates.clc is on but stations have no clc_code")
 
     print(f"\n{'=' * 60}\nVARIABLE {var}")
     print(f"  fit rows {len(fit_df):,}  (pool stations × train quarters)")
@@ -183,7 +183,7 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
 
     _, encoder = prepare_covariates(
         fit_df, fit_encoder=True, use_elev=use_elev, use_lc=use_lc,
-        extras=extras_for_var(fit_df, var, rh_t_mode),
+        extras=extras_for_var(fit_df, var, rh_t_mode, cfg),
     )
     out_path = get_nested_llocv_path("RFSI", var, cfg["time_resolution"], "full")
     records = []
@@ -195,7 +195,7 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
         return
     X_train, _ = prepare_covariates(
         fit_df, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-        extras=extras_for_var(fit_df, var, rh_t_mode),
+        extras=extras_for_var(fit_df, var, rh_t_mode, cfg),
     )
     model = RFSI(
         n_obs=n_obs, rf_params=rf_params,
@@ -221,7 +221,7 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
             return None
         X_hold, _ = prepare_covariates(
             hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-            extras=extras_for_var(hold_t, var, rh_t_mode),
+            extras=extras_for_var(hold_t, var, rh_t_mode, cfg),
         )
         pred = model.predict_field(
             others[["x", "y"]].to_numpy(),
@@ -285,7 +285,7 @@ def parse_args():
         "--variables",
         nargs="*",
         default=None,
-        help="Default: rfsi.variables_to_process in config.yaml",
+        help="Default: variables_to_process in config.yaml",
     )
     p.add_argument(
         "--fit",
@@ -328,9 +328,7 @@ def main():
     apply_time_res(cfg, args)
     cfg["_hours"] = args.hours
     cfg["_jobs"] = int(args.jobs) if args.jobs is not None else 1
-    wanted = args.variables or cfg.get("rfsi", {}).get("variables_to_process") or [
-        "temp_mean", "precip_sum",
-    ]
+    wanted = variables_from_cfg(cfg, args.variables)
     fit_splits = parse_split_arg(args.fit)
     score_splits = parse_split_arg(args.score)
     print("=" * 72)

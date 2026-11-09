@@ -25,7 +25,7 @@ OUTPUT_CSV = DATA_ROOT / "station.csv"
 
 VARIABLE_FOLDERS = ["Luftfeuchte", "Wind", "Niederschlag", "Schneehoehe", "Temperatur"]
 
-VALID_PROVIDER_FOLDERS = {"DWD", "HydroT", "HydroVO", "LWD", "Meteosuisse", "Suedtirol", "Zamg", "ZAMG", "SLF", "slf"}
+VALID_PROVIDER_FOLDERS = {"DWD", "HydroT", "HydroVO", "LWD", "Meteosuisse", "Suedtirol", "Zamg", "ZAMG", "SLF", "slf", "Meteohub", "meteohub"}
 
 PROVIDER_MAP = {
     "DWD": "DWD",
@@ -38,6 +38,8 @@ PROVIDER_MAP = {
     "ZAMG": "ZAMG",
     "SLF": "SLF",
     "slf": "SLF",
+    "Meteohub": "Meteohub",
+    "meteohub": "Meteohub",
 }
 
 # =============================================

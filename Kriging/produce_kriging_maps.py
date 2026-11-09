@@ -51,7 +51,7 @@ from kriging_data import (
     subset_years,
 )
 from llocv_kriging import cfg_to_kriging
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 
 try:
     import xarray as xr
@@ -102,7 +102,7 @@ def main():
     end = pd.Timestamp(cfg["end_date"])
     resolutions = cfg.get("resolutions_to_process", [1000])
     kblock = cfg.get("kriging", {})
-    variables = args.variables or kblock.get("variables_to_process") or ["temp_mean", "precip_sum"]
+    variables = variables_from_cfg(cfg, args.variables)
     comp = compute_block(cfg)
     months = args.months or ("seasonal4" if args.quick else None)
     splits = args.split or ("test" if args.quick else comp.get("produce_splits", "all"))

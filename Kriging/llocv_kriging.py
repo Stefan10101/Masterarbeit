@@ -30,7 +30,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_kriging_tuned_params_path, get_nested_llocv_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 from kriging_core import KrigingConfig, KrigingInterpolator
 from shared.splits.evaluation_sets import apply_evaluation_protocol
@@ -237,9 +237,7 @@ def main():
     cfg = load_config()
     apply_time_res(cfg, args)
     cfg["_hours"] = args.hours
-    wanted = args.variables or cfg.get("kriging", {}).get("variables_to_process") or [
-        "temp_mean", "precip_sum",
-    ]
+    wanted = variables_from_cfg(cfg, args.variables)
     n_folds = args.folds or int(cfg.get("kriging", {}).get("n_folds", 5))
     months = args.months
     if args.quick:

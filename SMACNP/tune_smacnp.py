@@ -167,8 +167,10 @@ def val_rmse_original(model, day_tensors, scaler, device) -> float:
             p = torch.sigmoid(pred["occurrence_logits"]).cpu().numpy().reshape(-1)
             mu_n = pred["amount_mu"].cpu().numpy().reshape(-1)
             var_n = pred["amount_variance"].cpu().numpy().reshape(-1)
-            amt = scaler.inverse_mean(mu_n, var_n)
-            y_hat = np.where(p >= 0.5, np.maximum(amt, 0.0), 0.0)
+            amt = np.maximum(scaler.inverse_mean(mu_n, var_n), 0.0)
+            # Expectation, not the hard gate. The gate turned the largest
+            # precip weeks into exact zeros and those weeks dominated RMSE.
+            y_hat = np.clip(p, 0.0, 1.0) * amt
         else:
             mu_n = pred["mu"].cpu().numpy().reshape(-1)
             y_hat = scaler.inverse(mu_n)
@@ -236,7 +238,7 @@ def train_one(cfg, feat_cols, two_step, device, y_scaler,
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--variable", default="temp_mean")
+    parser.add_argument("--variable", default=None)
     parser.add_argument("--time-resolution", default=None)
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--max-times", type=int, default=400,
@@ -254,6 +256,21 @@ def main():
     # Cap LR. 4e-4 diverged on plain NLL. Beta-NLL holds at 1e-4; 2e-5
     # undertrained (best epoch ~34, loss barely off init, RMSE 2.16).
     cfg["smacnp"]["lr"] = min(float(cfg["smacnp"].get("lr", 4e-4)), 1e-4)
+    if args.variable is None:
+        import subprocess
+        import sys
+        vs = list(cfg.get("variables_to_process") or ["temp_mean"])
+        print(f"no --variable; running {vs}", flush=True)
+        for v in vs:
+            cmd = [sys.executable, str(Path(__file__).resolve()), "--variable", v]
+            if args.time_resolution:
+                cmd += ["--time-resolution", args.time_resolution]
+            if args.quick:
+                cmd.append("--quick")
+            if args.max_times is not None:
+                cmd += ["--max-times", str(args.max_times)]
+            subprocess.check_call(cmd)
+        return
     var = args.variable
     two_step = var in cfg["smacnp"].get("two_step_vars", [])
     set_seed(cfg["smacnp"]["seed"])

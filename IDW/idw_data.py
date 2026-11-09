@@ -31,7 +31,11 @@ def load_config(path: Optional[Path] = None) -> dict:
         return yaml.safe_load(f)
 
 
-def _time_col(df: pd.DataFrame, time_res: str) -> str:
+def _time_col(df: pd.DataFrame, time_res: str, cfg: dict | None = None) -> str:
+    if cfg is not None:
+        name = (cfg.get("aggregation") or {}).get(time_res, {}).get("time_col")
+        if name and name in df.columns:
+            return name
     candidates = {
         "monthly": ["year_month", "time", "date"],
         "weekly": ["year_week", "time", "date"],
@@ -92,7 +96,7 @@ def load_panel(cfg: dict, var: str, hours=None) -> pd.DataFrame:
     if var not in df.columns:
         raise KeyError(f"column {var} not in {path.name}")
 
-    tcol = _time_col(df, time_res)
+    tcol = _time_col(df, time_res, cfg)
     df["time"] = _parse_time(df[tcol], time_res)
     start = pd.Timestamp(cfg["start_date"])
     end = pd.Timestamp(cfg["end_date"])

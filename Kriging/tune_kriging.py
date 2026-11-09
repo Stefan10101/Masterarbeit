@@ -30,7 +30,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_kriging_tuned_params_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from kriging_core import KrigingConfig, KrigingInterpolator
 from shared.splits.evaluation_sets import apply_evaluation_protocol, load_tune_targets
 from kriging_data import (
@@ -209,12 +209,19 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
     if phase in ("1", "all"):
         grid = [{"k": int(k), "k_indicator": int(k)} for k in search.get("k", [base.k])]
         locked = _take("phase 1a  k", grid)
-        if is_precip(var) and cfg["time_resolution"] != "monthly":
-            grid = [{"k_indicator": int(k)} for k in search.get("k", [base.k])]
+        # Snow stays continuous. Phase 1b used to pass only k_indicator, which
+        # stored k as NaN and spent ~47 min a trial without changing the score.
+        if str(var) == "precip_sum" and cfg["time_resolution"] != "monthly":
+            if locked.get("k") is None:
+                raise RuntimeError("phase 1b needs the k locked in phase 1a")
+            grid = [
+                {"k": int(locked["k"]), "k_indicator": int(k)}
+                for k in search.get("k", [base.k])
+            ]
             locked = _take("phase 1b  k_indicator", grid)
         elif is_precip(var):
-            print(f"{var} phase 1b skipped: monthly fields are almost always wet, "
-                  f"k_indicator does not change the score", flush=True)
+            print(f"{var} phase 1b skipped: indicator neighbourhood is only "
+                  f"searched for precip_sum", flush=True)
 
     if phase in ("2", "all"):
         grid = [{"family": str(f)} for f in search.get("family", [base.family])]
@@ -244,8 +251,13 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
         locked = _take("phase 5a  alpha_z expand", [{"alpha_z": az} for az in az_grid])
         k_grid = [int(v) for v in expand.get("k", search.get("k", [locked["k"]]))]
         locked = _take("phase 5b  k re-search", [{"k": k, "k_indicator": k} for k in k_grid])
-        if is_precip(var):
-            locked = _take("phase 5c  k_indicator", [{"k_indicator": k} for k in k_grid])
+        if str(var) == "precip_sum":
+            if locked.get("k") is None:
+                raise RuntimeError("phase 5c needs the k locked by the earlier phases")
+            locked = _take(
+                "phase 5c  k_indicator",
+                [{"k": int(locked["k"]), "k_indicator": int(k)} for k in k_grid],
+            )
 
     out = {
         **locked,
@@ -289,11 +301,9 @@ def main():
     cfg = load_config()
     apply_time_res(cfg, args)
     cfg["_hours"] = args.hours
-    wanted = args.variables or cfg.get("kriging", {}).get("variables_to_process") or [
-        "temp_mean",
-    ]
+    wanted = variables_from_cfg(cfg, args.variables)
     comp = compute_block(cfg)
-    phase = args.phase or ("1" if args.quick else comp.get("tune_phase", "1"))
+    phase = args.phase or ("1" if args.quick else comp.get("tune_phase", "all"))
     months = args.months or ("seasonal4" if args.quick else comp.get("tune_months", "seasonal4"))
     n_folds = args.folds or (2 if args.quick else int(comp.get("tune_folds", 5)))
     jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)

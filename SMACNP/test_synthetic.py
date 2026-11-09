@@ -101,7 +101,7 @@ def run_one(var: str):
             if two_step:
                 p = torch.sigmoid(pred["occurrence_logits"]).numpy()[0, :, 0]
                 amt = pred["amount_mu"].numpy()[0, :, 0]
-                hat = np.where(p >= 0.5, np.maximum(amt, 0.0), 0.0)
+                hat = np.clip(p, 0.0, 1.0) * np.maximum(amt, 0.0)
             else:
                 hat = pred["mu"].numpy()[0, :, 0]
                 p = None

@@ -127,9 +127,9 @@ def grid_features(grid: xr.Dataset, feat_cols: list[str], cfg: dict) -> tuple[np
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--variable", default="temp_mean")
+    parser.add_argument("--variable", default=None)
     parser.add_argument("--time-resolution", default=None)
-    parser.add_argument("--resolution", type=int, default=1000)
+    parser.add_argument("--resolution", type=int, default=None)
     parser.add_argument("--max-days", type=int, default=None, help="Produce N randomly sampled days")
     parser.add_argument("--zero-ridge", action="store_true", help="Test: zero signed_dist_to_ridge on the grid")
     parser.add_argument("--zero-coast", action="store_true", help="Test: zero dist_to_coast on the grid")
@@ -143,7 +143,37 @@ def main():
     cfg = load_config()
     if args.time_resolution:
         cfg["time_resolution"] = args.time_resolution
+    if args.variable is None:
+        import subprocess
+        import sys
+        vs = list(cfg.get("variables_to_process") or ["temp_mean"])
+        print(f"no --variable; running {vs}", flush=True)
+        for v in vs:
+            cmd = [sys.executable, str(Path(__file__).resolve()), "--variable", v]
+            if args.time_resolution:
+                cmd += ["--time-resolution", args.time_resolution]
+            if args.resolution is not None:
+                cmd += ["--resolution", str(args.resolution)]
+            if args.max_days is not None:
+                cmd += ["--max-days", str(args.max_days)]
+            if args.zero_ridge:
+                cmd.append("--zero-ridge")
+            if args.zero_coast:
+                cmd.append("--zero-coast")
+            if args.no_tile:
+                cmd.append("--no-tile")
+            if args.rows_per_tile is not None:
+                cmd += ["--rows-per-tile", str(args.rows_per_tile)]
+            subprocess.check_call(cmd)
+        return
     var = args.variable
+    res = args.resolution if args.resolution is not None else int((cfg.get("resolutions_to_process") or [1000])[0])
+    from paths import get_method_output_dir
+    out_dir = get_method_output_dir("SMACNP") / "interpolated_maps" / cfg["time_resolution"]
+    out_path = out_dir / f"{var}_{cfg['time_resolution']}_{res}m.nc"
+    if out_path.exists() and not cfg.get("overwrite_maps", True):
+        print(f"exists, skip {out_path}")
+        return
     device = get_device(cfg)
 
     ckpt_path = get_smacnp_model_path(var, cfg["time_resolution"])
@@ -159,11 +189,11 @@ def main():
 
     # Grid
     _, _, grid_method = (
-        cfg["paths"].get("aggregated_from", "RFSI"),
-        cfg["paths"].get("stations_from", "RFSI"),
-        cfg["paths"].get("grids_from", "RFSI"),
+        (cfg.get("paths") or {}).get("aggregated_from", "RFSI"),
+        (cfg.get("paths") or {}).get("stations_from", "RFSI"),
+        (cfg.get("paths") or {}).get("grids_from", "RFSI"),
     )
-    grid_path = get_master_grid_path(grid_method, args.resolution)
+    grid_path = get_master_grid_path(grid_method, res)
     grid = xr.open_dataset(grid_path)
     print(f"grid {grid_path}  shape=({grid.y.size}, {grid.x.size})")
 
@@ -240,8 +270,9 @@ def main():
                 p_occ = torch.sigmoid(pred["occurrence_logits"]).cpu().numpy().squeeze()
                 mu_n = pred["amount_mu"].cpu().numpy().squeeze()
                 var_n = pred["amount_variance"].cpu().numpy().squeeze()
-                amt = scaler.inverse_mean(mu_n, var_n)
-                mu_full[r0:r1] = np.where(p_occ >= 0.5, np.maximum(amt, 0.0), 0.0).reshape(r1 - r0, nx).astype(np.float32)
+                amt = np.maximum(scaler.inverse_mean(mu_n, var_n), 0.0)
+                p_occ = np.clip(p_occ, 0.0, 1.0)
+                mu_full[r0:r1] = (p_occ * amt).reshape(r1 - r0, nx).astype(np.float32)
                 var_full[r0:r1] = var_n.reshape(r1 - r0, nx).astype(np.float32)
             else:
                 mu_full[r0:r1] = scaler.inverse(pred["mu"].cpu().numpy().squeeze()).reshape(r1 - r0, nx).astype(np.float32)
@@ -267,7 +298,6 @@ def main():
 
     out_dir = get_method_output_dir("SMACNP") / "interpolated_maps" / cfg["time_resolution"]
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{var}_{cfg['time_resolution']}_{args.resolution}m.nc"
     ds.to_netcdf(out_path)
     print(f"wrote {out_path}")
     grid.close()

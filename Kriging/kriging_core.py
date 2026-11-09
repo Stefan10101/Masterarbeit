@@ -443,7 +443,10 @@ class KrigingInterpolator:
 
     def fit(self, train: pd.DataFrame, var: str, time_res: str, cfg_yaml: dict) -> dict:
         self.var_name = var
-        self.two_step = is_precip(var)
+        # Snow occurrence at a 0.5 threshold predicted snow about twice as
+        # often as it occurred (ETS 0.20). Depth stays a continuous field.
+        snow = str(var).lower().startswith("snow")
+        self.two_step = is_precip(var) and not snow
         self.log_amount = self.two_step
         self.trace = precip_trace(cfg_yaml, time_res, var) if self.two_step else 0.0
         z = train[var].to_numpy(dtype=np.float64)

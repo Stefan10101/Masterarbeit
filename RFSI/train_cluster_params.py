@@ -260,11 +260,11 @@ def main():
     n_obs_list = rfsi_cfg.get("n_obs_list", [5, 10, 20, 30])
     rf_fixed = dict(rfsi_cfg.get("rf_fixed", {"n_estimators": 400, "random_state": 22}))
     rf_tunable = dict(rfsi_cfg.get("rf_tunable", {}))
-    primary_metric = rfsi_cfg.get("primary_metric", "rmse")
+    primary_metric = "rmse"
     n_opt_stations = int(rfsi_cfg.get("n_opt_stations", 50))
     n_estimators_search = int(rfsi_cfg.get("n_estimators_search", 100))
 
-    n_jobs = args.n_jobs if args.n_jobs is not None else cfg.get("n_jobs", -1)
+    n_jobs = args.n_jobs if args.n_jobs is not None else -1
     min_stations = (
         args.min_stations
         if args.min_stations is not None

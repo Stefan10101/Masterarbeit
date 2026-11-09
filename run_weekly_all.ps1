@@ -5,6 +5,9 @@
 # Stops on the first non-zero exit code.
 
 $ErrorActionPreference = "Stop"
+$env:WEEKLY_HOLDOUT_STAMP = Join-Path $PSScriptRoot "Output\_run_stamp\holdout_stamp.json"
+python (Join-Path $PSScriptRoot "shared\splits\stamp_holdout.py")
+if ($LASTEXITCODE -ne 0) { throw "holdout stamp failed" }
 $vars = "temp_mean precip_sum wind_mean rh_mean snow_mean"
 
 function Run-Step($label, $cmd) {

@@ -24,7 +24,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_tuned_params_path, get_master_grid_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from cnn_core import grid_terrain, two_step_var
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, attach_temperature, attach_station_tpi
@@ -79,7 +79,7 @@ def main():
     elif args.variable:
         variables = [args.variable]
     else:
-        variables = block.get("variables_to_process", ["temp_mean"])
+        variables = variables_from_cfg(cfg)
     for var in variables:
         panel = load_panel(cfg, var)
         # Fit on full pool × train. Score fixed tune-targets on tune.
@@ -117,9 +117,16 @@ def main():
                 cfg=cfg,
             )
             print(f"{var} levels={levels} ch={ch} dev={dev:.4f}", flush=True)
-            trials.append({"n_levels": int(levels), "base_ch": int(ch), "dev": float(dev)})
+            trial = {
+                "n_levels": int(levels),
+                "base_ch": int(ch),
+                "dev_mse": float(dev),
+                "dev_rmse": float(dev) ** 0.5,
+                "dev": float(dev),
+            }
+            trials.append(trial)
             if best is None or dev < best["dev"]:
-                best = {"n_levels": int(levels), "base_ch": int(ch), "dev": float(dev)}
+                best = dict(trial)
         path = get_cnn_tuned_params_path(var, time_res)
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(best, f)

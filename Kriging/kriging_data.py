@@ -295,7 +295,7 @@ def compute_block(cfg: dict) -> dict:
     block = dict(cfg.get("kriging", {}).get("compute", {}) or {})
     block.setdefault("tune_months", "seasonal4")
     block.setdefault("tune_folds", 5)
-    block.setdefault("tune_phase", "1")
+    block.setdefault("tune_phase", "all")
     block.setdefault("produce_splits", "all")
     return block
 

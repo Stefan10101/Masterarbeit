@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-MeteoHub systematic download (2020-2025) — storage-aware, variable-first draft
-------------------------------------------------------------------------------
+MeteoHub systematic download (2020-2025)
+----------------------------------------
 Official API flow:
   1. POST /auth/login → token
   2. POST /api/data → 202 + request_id
@@ -9,12 +9,12 @@ Official API flow:
   4. GET  /api/data/{filename} → download
   5. DELETE /api/requests/{id} → free storage
 
-Upgrades (5 GB online storage, no request rate limit):
-- Storage-aware concurrency (check /api/usage before submitting).
-- Variable-first extraction with Alpine bounding-box + quantity/product filters.
-- Probe mode to discover filter syntax and build a station catalog.
-- Immediate download + delete so the 5 GB acts as a circulating buffer.
-- Resumable. Logs under code/logs/meteohub/download/.
+- 2-month windows, four variables (temperature, precipitation, wind, RH).
+- Storage-aware concurrency (5 GB quota).
+- Startup sweep of already-SUCCESS requests.
+- Every poll also recovers orphan SUCCESS results not in the current pending set.
+- Resumable: skips local files that already exist.
+- Logs under code/logs/meteohub/download/.
 
 Set METEOHUB_USER and METEOHUB_PASS.
 """
@@ -41,7 +41,6 @@ DATA_ROOT = PROJECT_ROOT
 RAW_BASE = DATA_ROOT / "Network_providers" / "meteohub"
 RAW_BASE.mkdir(parents=True, exist_ok=True)
 
-CATALOG_PATH = RAW_BASE / "station_catalog.json"
 PROBE_DIR = RAW_BASE / "probe"
 PROBE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -70,18 +69,8 @@ DATASETS = [
     "dpcn-bolzanoboze",
     "dpcn-piemonte",
     "dpcn-veneto",
-    # add more northern OBS ids after probing if useful (mnw, agrmet, ...)
 ]
 YEARS = list(range(2020, 2026))
-MONTHS = [f"{m:02d}" for m in range(1, 13)]
-
-# Thesis variables → BUFR codes (snow excluded)
-VARIABLES = {
-    "temperature": ["B12101"],
-    "precipitation": ["B13011"],
-    "wind": ["B11002"],
-    "relative_humidity": ["B13003"],
-}
 
 # 2-month windows
 PERIODS = [
@@ -92,9 +81,15 @@ PERIODS = [
     ("09", "10"),
     ("11", "12"),
 ]
-# auxiliary codes we may also want: B11001 (wind dir), B13215 (unknown, appeared in sample)
 
-# Alpine Convention box (same as unpacker)
+# Four variables (snow excluded)
+VARIABLES = {
+    "temperature": ["B12101"],
+    "precipitation": ["B13011"],
+    "wind": ["B11002"],
+    "relative_humidity": ["B13003"],
+}
+
 ALPINE_BBOX = {
     "lonmin": 6.0,
     "latmin": 43.5,
@@ -102,9 +97,8 @@ ALPINE_BBOX = {
     "latmax": 48.8,
 }
 
-# Concurrency / storage
-MAX_CONCURRENT = 8           # monthly is smaller; keep headroom under 5 GB
-STORAGE_SOFT_LIMIT_GB = 3.5  # leave room for in-flight results
+MAX_CONCURRENT = 8
+STORAGE_SOFT_LIMIT_GB = 3.5
 POLL_INTERVAL = 20
 BATCH_WAIT_MAX = 3 * 60 * 60
 SLEEP_BETWEEN = 0.5
@@ -155,13 +149,11 @@ def auth_headers(token: str) -> dict:
 
 
 def get_usage_gb(token: str) -> float:
-    """Return current storage usage in GB, or 0 on failure."""
     url = f"{BASE}/api/usage"
     try:
         r = requests.get(url, timeout=TIMEOUT, headers=auth_headers(token))
         r.raise_for_status()
         data = r.json()
-        # guide says values in bytes; handle common shapes
         if isinstance(data, dict):
             used = data.get("used") or data.get("storage_used") or data.get("bytes") or 0
         else:
@@ -173,7 +165,6 @@ def get_usage_gb(token: str) -> float:
 
 
 def submit_extraction(token: str, body: dict) -> int | None:
-    """POST /api/data. Returns request_id or None."""
     url = f"{BASE}/api/data"
     try:
         r = requests.post(url, json=body, timeout=TIMEOUT, headers=auth_headers(token))
@@ -190,17 +181,38 @@ def submit_extraction(token: str, body: dict) -> int | None:
 
 
 def get_all_requests(token: str) -> list:
+    """Fetch every page of /api/requests. API returns 20 items per page."""
     url = f"{BASE}/api/requests"
-    try:
-        r = requests.get(url, timeout=TIMEOUT, headers=auth_headers(token))
-        r.raise_for_status()
-        data = r.json()
-        if isinstance(data, dict):
-            data = data.get("requests") or data.get("items") or []
-        return data if isinstance(data, list) else []
-    except Exception as e:
-        log.warning(f"list requests failed: {e}")
-        return []
+    all_items = []
+    seen = set()
+    for page in range(1, 100):
+        try:
+            r = requests.get(
+                url,
+                params={"page": page},
+                timeout=TIMEOUT,
+                headers=auth_headers(token),
+            )
+            r.raise_for_status()
+            data = r.json()
+            if not isinstance(data, list) or not data:
+                break
+            new = 0
+            for item in data:
+                rid = item.get("id") or item.get("request_id")
+                if rid and rid not in seen:
+                    seen.add(rid)
+                    all_items.append(item)
+                    new += 1
+            if new == 0:
+                break
+            # API page size is 20; stop when a page is short
+            if len(data) < 20:
+                break
+        except Exception as e:
+            log.warning(f"list requests page {page} failed: {e}")
+            break
+    return all_items
 
 
 def delete_request(token: str, request_id: int) -> bool:
@@ -248,98 +260,7 @@ def download_and_delete(token: str, rid: int, req: dict, out_path: Path) -> bool
     return ok
 
 
-# ---------------------------------------------------------------------------
-# Probe & catalog
-# ---------------------------------------------------------------------------
-def probe_filters_and_stations(token: str) -> None:
-    """
-    One-time probe:
-    - tiny extraction (1 day) → NDJSON
-    - extract station names + BUFR codes present
-    - write a small catalog summary
-    """
-    log.info("=== Probe start ===")
-    body = {
-        "request_name": "probe_tiny_1d",
-        "reftime": {
-            "from": "2024-07-01T00:00:00Z",
-            "to": "2024-07-01T23:59:59Z",
-        },
-        "dataset_names": ["dpcn-lombardia"],
-        "output_format": "json",
-        "only_reliable": True,
-    }
-    rid = submit_extraction(token, body)
-    if not rid:
-        log.warning("Probe submit failed")
-        return
-
-    for _ in range(60):
-        time.sleep(10)
-        reqs = get_all_requests(token)
-        by_id = {str(r.get("id") or r.get("request_id")): r for r in reqs}
-        req = by_id.get(str(rid))
-        if not req:
-            continue
-        status = (req.get("status") or "").upper()
-        log.info(f"  probe status: {status}")
-        if status in ("SUCCESS", "FAILED", "ERROR"):
-            out = PROBE_DIR / "probe_tiny.json"
-            download_and_delete(token, rid, req, out)
-            if out.exists():
-                _summarize_ndjson(out)
-            break
-    log.info("=== Probe finished ===")
-
-
-def _summarize_ndjson(path: Path) -> None:
-    """Walk NDJSON probe file and write a short station/code summary."""
-    from collections import Counter, defaultdict
-    codes = Counter()
-    stations = {}
-    n = 0
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except Exception:
-                continue
-            n += 1
-            name = None
-            lat = lon = alt = None
-            for item in obj.get("data") or []:
-                vars_ = item.get("vars") or {}
-                for code, payload in vars_.items():
-                    codes[code] += 1
-                    if code == "B01019":
-                        name = payload.get("v")
-                    elif code == "B05001":
-                        lat = payload.get("v")
-                    elif code == "B06001":
-                        lon = payload.get("v")
-                    elif code == "B07030":
-                        alt = payload.get("v")
-            if name:
-                stations[name] = {"lat": lat, "lon": lon, "alt": alt, "network": obj.get("network")}
-    summary = {
-        "lines": n,
-        "stations": len(stations),
-        "top_codes": codes.most_common(40),
-        "sample_stations": dict(list(stations.items())[:5]),
-    }
-    out = path.with_suffix(".summary.json")
-    out.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
-    log.info(f"  probe summary → {out.name} ({len(stations)} stations, {len(codes)} codes)")
-
-
 def build_filter(var_key: str) -> dict:
-    """
-    Filters for a single variable.
-    BUFR datasets accept: bounding_box, level, network, product, timerange.
-    """
     codes = VARIABLES.get(var_key, [var_key])
     return {
         "bounding_box": ALPINE_BBOX,
@@ -390,17 +311,21 @@ def iter_jobs(variable_first: bool = True):
 
 
 def sweep_existing(token: str) -> None:
-    """Download + delete any already-SUCCESS requests so quota is free at start."""
+    """Download + delete any already-SUCCESS requests. Repeat until none remain."""
     log.info("sweeping existing SUCCESS requests")
-    reqs = get_all_requests(token)
-    for req in reqs:
-        if (req.get("status") or "").upper() != "SUCCESS":
-            continue
-        rid = req.get("id")
-        name = req.get("name") or str(rid)
-        out_path = RAW_BASE / f"{name}.json"
-        log.info(f"  recovering {name}")
-        download_and_delete(token, rid, req, out_path)
+    while True:
+        reqs = get_all_requests(token)
+        success = [r for r in reqs if (r.get("status") or "").upper() == "SUCCESS"]
+        if not success:
+            log.info("  no more SUCCESS requests")
+            break
+        for req in success:
+            rid = req.get("id")
+            name = req.get("name") or str(rid)
+            out_path = RAW_BASE / f"{name}.json"
+            log.info(f"  recovering {name}")
+            download_and_delete(token, rid, req, out_path)
+        time.sleep(1)
 
 
 def main(probe: bool = False, variable_first: bool = True):
@@ -410,10 +335,10 @@ def main(probe: bool = False, variable_first: bool = True):
         return
 
     if probe:
-        probe_filters_and_stations(token)
+        # placeholder; probe logic can be re-added if needed
+        log.info("probe mode not implemented in this version")
         return
 
-    # free quota from any leftover SUCCESS results
     sweep_existing(token)
 
     jobs = iter(iter_jobs(variable_first=variable_first))
@@ -449,6 +374,17 @@ def main(probe: bool = False, variable_first: bool = True):
         all_reqs = get_all_requests(token)
         by_id = {str(r.get("id") or r.get("request_id")): r for r in all_reqs}
 
+        # recover any SUCCESS that is not in the current pending set
+        for req in all_reqs:
+            rid = req.get("id")
+            if not rid or str(rid) in pending:
+                continue
+            if (req.get("status") or "").upper() == "SUCCESS":
+                name = req.get("name") or str(rid)
+                out_path = RAW_BASE / f"{name}.json"
+                log.info(f"  recovering orphan SUCCESS {name}")
+                download_and_delete(token, rid, req, out_path)
+
         finished = []
         for rid, (out_path, submitted_at, meta) in list(pending.items()):
             req = by_id.get(str(rid))
@@ -482,7 +418,7 @@ def main(probe: bool = False, variable_first: bool = True):
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--probe", action="store_true", help="Run one-time probe + catalog only")
-    p.add_argument("--full-dump", action="store_true", help="Fall back to unfiltered quarterly dumps")
+    p.add_argument("--probe", action="store_true", help="Run one-time probe only")
+    p.add_argument("--full-dump", action="store_true", help="Fall back to unfiltered dumps")
     args = p.parse_args()
     main(probe=args.probe, variable_first=not args.full_dump)

@@ -65,7 +65,7 @@ def load_panel(cfg: dict, var: str) -> pd.DataFrame:
     df["time"] = as_naive_utc(df[col], time_res)
     df = df[(df["time"] >= start) & (df["time"] <= end)]
 
-    stations = pd.read_parquet(get_domain_stations_path(sta_method, "full"))
+    stations = pd.read_parquet(get_domain_stations_path(sta_method, cfg.get("domain", {}).get("preset", "full")))
     from shared.terrain import attach_enabled_terrain
     stations = attach_enabled_terrain(stations, cfg)
     if "elev" not in stations.columns:
@@ -92,25 +92,10 @@ def compute_dem_features(stations: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     requested by the config. No DEM sampling at runtime.
     """
     from paths import get_station_terrain_path
+    from shared.terrain import enabled_covariates
 
     cache = pd.read_parquet(get_station_terrain_path())
-    feats = cfg.get("smacnp", {}).get("features", {})
-    want = ["station_name"]
-    if feats.get("elev", True):
-        want.append("elev")
-    if feats.get("smooth_elev", False):
-        want.append("smooth_elev")
-    if feats.get("tpi", False):
-        want.append("tpi")
-    if feats.get("dist_to_coast", True):
-        want.append("dist_to_coast")
-    if feats.get("signed_dist_to_ridge", True):
-        want.append("signed_dist_to_ridge")
-    # Optional extras that may be useful later
-    for extra in ("slope", "aspect", "sinasp", "cosasp", "northness", "clc_level2",
-                  "basin_continuity", "elev_above_valley"):
-        if extra in cache.columns and extra not in want:
-            want.append(extra)
+    want = ["station_name"] + [c for c in enabled_covariates(cfg) if c != "station_name"]
 
     keep = [c for c in want if c in cache.columns]
     # Cast both sides so a str/int mismatch does not produce an all-NaN merge.

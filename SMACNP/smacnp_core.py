@@ -358,8 +358,25 @@ class SMACNP(nn.Module):
         }
 
 
+def mean_mse_loss(mu: torch.Tensor, var: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """MSE on the mean, detached NLL on the variance.
+
+    The thesis score is RMSE. Beta-NLL can improve by shrinking variance on
+    easy stations while a few stay degrees off, which is the 4 °C plateau
+    before the epoch-29 cliff. MSE charges for every degree, so those jumps
+    are what the optimizer seeks. The variance head still learns, but it
+    cannot pull the mean (var is detached in the residual term).
+    """
+    mu = torch.nan_to_num(mu, nan=0.0, posinf=10.0, neginf=-10.0)
+    se = (target - mu) ** 2
+    mse = se.mean()
+    var = var.clamp(min=2.5e-3, max=50.0)
+    nll = 0.5 * (torch.log(2 * math.pi * var) + se.detach() / var)
+    return mse + 0.1 * torch.nan_to_num(nll, nan=0.0, posinf=100.0).mean()
+
+
 def gaussian_nll(mu: torch.Tensor, var: torch.Tensor, target: torch.Tensor,
-                beta: float = 0.5) -> torch.Tensor:
+                 beta: float = 0.5) -> torch.Tensor:
     """Beta-NLL (Seitzer et al.).
 
     Plain NLL lets a shrinking variance amplify the mean gradient through

@@ -32,9 +32,9 @@ from paths import (
     get_medoids_path,
     get_rfsi_tuned_params_path,
 )
-from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, extras_for_var, two_step_var
+from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, cov_switches, extras_for_var, two_step_var
 from rfsi_optimizer import compute_metrics
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.splits.evaluation_sets import prepare_for_tuning
 
 _splits_path = CODE_DIR / "shared" / "splits" / "splits.py"
@@ -102,17 +102,18 @@ def load_panel(cfg, var):
     df["time"] = as_naive_utc(df[time_col], time_res)
 
     stations = pd.read_parquet(get_domain_stations_path("RFSI", "full"))
-    from shared.terrain import attach_enabled_terrain
+    from shared.terrain import attach_enabled_terrain, enabled_covariates
     stations = attach_enabled_terrain(stations, cfg)
     if "elev" not in stations.columns:
         if "elev_dem" in stations.columns:
             stations = stations.rename(columns={"elev_dem": "elev"})
         elif "hoehe" in stations.columns:
             stations = stations.rename(columns={"hoehe": "elev"})
+    if "clc_code" not in stations.columns and "clc_level2" in stations.columns:
+        stations["clc_code"] = stations["clc_level2"]
     keep = ["station_name", "x", "y"]
-    for extra in ("elev", "clc_code", "clc_level2", "slope", "northness", "tpi",
-                  "smooth_elev", "dist_to_coast", "signed_dist_to_ridge"):
-        if extra in stations.columns:
+    for extra in ("elev", "clc_code", *enabled_covariates(cfg)):
+        if extra in stations.columns and extra not in keep:
             keep.append(extra)
     stations = stations[keep].drop_duplicates("station_name")
 
@@ -157,7 +158,8 @@ def load_medoid_times(cfg, var, cluster_method: str):
 
 
 def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
-                min_stations, n_splits, primary, rh_t_mode="none", two_step=False, tau_wet=0.5):
+                min_stations, n_splits, primary, rh_t_mode="none", two_step=False, tau_wet=0.5,
+                cfg=None):
     """Fit on full pool × train; score fixed tune-targets on tune quarters.
     Donors exclude tune-targets only at prediction time."""
     if "is_tune_target" not in panel.columns or not panel["is_tune_target"].any():
@@ -170,7 +172,7 @@ def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
         return None
     X_train, _ = prepare_covariates(
         train, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-        extras=extras_for_var(train, var, rh_t_mode),
+        extras=extras_for_var(train, var, rh_t_mode, cfg),
     )
     model = RFSI(
         n_obs=n_obs, rf_params=rf_params,
@@ -195,7 +197,7 @@ def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
             continue
         X_hold, _ = prepare_covariates(
             hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-            extras=extras_for_var(hold_t, var, rh_t_mode),
+            extras=extras_for_var(hold_t, var, rh_t_mode, cfg),
         )
         pred = model.predict_field(
             others[["x", "y"]].to_numpy(),
@@ -226,10 +228,11 @@ def param_grid(cfg):
 
 def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, max_times=400):
     rfsi = cfg.get("rfsi", {})
-    use_elev = bool(rfsi.get("use_elevation", True))
-    use_lc = bool(rfsi.get("use_landcover", True))
+    use_elev, use_lc = cov_switches(cfg)
+    from shared.terrain import enabled_covariates
+    print(f"  covariates: {enabled_covariates(cfg)}")
     min_stations = int(cfg.get("min_stations_per_field", 10))
-    primary = rfsi.get("primary_metric", "rmse")
+    primary = "rmse"
     n_est_search = int(rfsi.get("n_estimators_search", 100))
     n_est_final = int(rfsi.get("rf_fixed", {}).get("n_estimators", 250))
     seed = int(rfsi.get("rf_fixed", {}).get("random_state", 22))
@@ -247,7 +250,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
     if months or quick:
         panel = _subset_times(panel, months or "seasonal4")
     if max_times and panel["time"].nunique() > max_times:
-        rng = np.random.default_rng(int(cfg.get("random_seed", 22)))
+        rng = np.random.default_rng(int(rfsi.get("seed", 31)))
         keep = []
         for sp in ("train", "tune"):
             ts = panel.loc[panel["split"] == sp, "time"].drop_duplicates().to_numpy()
@@ -264,7 +267,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
 
     X_all, encoder = prepare_covariates(
         panel, fit_encoder=True, use_elev=use_elev, use_lc=use_lc,
-        extras=extras_for_var(panel, var, rh_t_mode),
+        extras=extras_for_var(panel, var, rh_t_mode, cfg),
     )
     del X_all
 
@@ -320,7 +323,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
         met = score_combo(
             panel, var, int(n_obs), rf_params, encoder,
             use_elev, use_lc, min_stations, n_splits, primary,
-            rh_t_mode=rh_t_mode, two_step=two_step, tau_wet=tau_wet,
+            rh_t_mode=rh_t_mode, two_step=two_step, tau_wet=tau_wet, cfg=cfg,
         )
         if met is None:
             print(f"    [{i}/{n_grid}] no score", flush=True)
@@ -347,6 +350,50 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
     ascending = primary in {"rmse", "mae"}
     table = table.sort_values(primary, ascending=ascending)
     best = table.iloc[0].to_dict()
+    boundary = False
+
+    # November winners for temperature, precip and humidity sat on n_obs=4,
+    # the bottom of the grid, and the test RMSE did not match the tune RMSE.
+    # Score one step past that edge. Do not loop if the new end wins too.
+    if not quick:
+        n_now = int(best["n_obs"])
+        grid_n = sorted({int(x) for x in n_obs_list})
+        step = None
+        if n_now == grid_n[0] and n_now > 1:
+            step = max(1, n_now // 2)
+        elif n_now == grid_n[-1]:
+            step = n_now * 2
+        already = set(table["n_obs"].astype(int))
+        if step is not None and step not in already:
+            depth = best["max_depth"]
+            depth = None if pd.isna(depth) else depth
+            leaf = int(best["min_samples_leaf"])
+            feat = best["max_features"]
+            print(f"  boundary: n_obs={n_now} is an endpoint. scoring n_obs={step}", flush=True)
+            rf_params = {
+                "n_estimators": n_est_search,
+                "max_depth": depth,
+                "min_samples_leaf": leaf,
+                "max_features": feat,
+                "random_state": seed,
+                "n_jobs": -1,
+            }
+            met = score_combo(
+                panel, var, int(step), rf_params, encoder,
+                use_elev, use_lc, min_stations, n_splits, primary,
+                rh_t_mode=rh_t_mode, two_step=two_step, tau_wet=tau_wet, cfg=cfg,
+            )
+            if met is not None:
+                rows.append({
+                    "n_obs": int(step),
+                    "max_depth": depth,
+                    "min_samples_leaf": leaf,
+                    "max_features": feat,
+                    **met,
+                })
+                table = pd.DataFrame(rows).sort_values(primary, ascending=ascending)
+                best = table.iloc[0].to_dict()
+        boundary = step is not None
     elapsed = time.perf_counter() - t0
 
     payload = {
@@ -363,6 +410,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
         "n_estimators": n_est_final,
         "n_estimators_search": n_est_search,
         "primary_metric": primary,
+        "boundary": bool(boundary),
         "dev_rmse": float(best["rmse"]),
         "dev_mae": float(best["mae"]),
         "dev_nse": float(best["nse"]),
@@ -401,9 +449,7 @@ def main():
     cfg = load_config()
     apply_time_res(cfg, args)
     cfg["_hours"] = args.hours
-    wanted = args.variables or cfg.get("rfsi", {}).get("variables_to_process") or [
-        "temp_mean", "precip_sum",
-    ]
+    wanted = variables_from_cfg(cfg, args.variables)
     print("=" * 72)
     print("RFSI pooled hyperparameter search (global, no regimes)")
     print(f"  variables {wanted}")

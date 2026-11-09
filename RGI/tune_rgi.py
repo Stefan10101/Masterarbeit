@@ -28,7 +28,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_rgi_tuned_params_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from rgi_core import RGI, RGIConfig
 from rgi_data import attach_extras, compute_metrics, extra_cols_for_var, load_config, load_panel, subset_times
@@ -236,9 +236,7 @@ def main():
     cfg["_hours"] = args.hours
     cfg["_max_times"] = args.max_times
     cfg["_trials"] = []
-    wanted = args.variables or cfg.get("rgi", {}).get("variables_to_process") or [
-        "temp_mean",
-    ]
+    wanted = variables_from_cfg(cfg, args.variables)
     from rgi_core import describe_device, resolve_device
     print("=" * 72)
     print("RGI hyperparameter search")

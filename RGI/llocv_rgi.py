@@ -25,7 +25,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_nested_llocv_path, get_rgi_tuned_params_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 from rgi_core import RGI, RGIConfig
 from rgi_data import attach_extras, extra_cols_for_var, load_config, load_panel, print_split_metrics, subset_times
@@ -60,6 +60,7 @@ def cfg_to_rgi(cfg, overrides: dict | None = None) -> RGIConfig:
         lr=float(r.get("lr", 1e-3)),
         weight_decay=float(r.get("weight_decay", 1e-4)),
         train_mask_frac=float(r.get("train_mask_frac", 0.25)),
+        batch_times=int(r.get("batch_times", 8)),
         seed=int(r.get("seed", 22)),
         min_stations=int(cfg.get("min_stations_per_field", 10)),
         device=str(r.get("device", "auto")),
@@ -177,9 +178,7 @@ def main():
     cfg = load_config()
     apply_time_res(cfg, args)
     cfg["_hours"] = args.hours
-    wanted = args.variables or cfg.get("rgi", {}).get("variables_to_process") or [
-        "temp_mean", "precip_sum",
-    ]
+    wanted = variables_from_cfg(cfg, args.variables)
     n_folds = args.folds or int(cfg.get("rgi", {}).get("n_folds", 5))
     if args.quick:
         n_folds = args.folds or 2

@@ -113,6 +113,9 @@ def regrid_to_30min_strict(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timest
     else:
         common = df.index.intersection(target_idx)
         regridded.loc[common, "value"] = df.loc[common, "value"].values
+        # Hourly -> half-hourly: fill a single missing :30 slot by linear
+        # interpolation between the surrounding hourly values.
+        regridded["value"] = regridded["value"].interpolate(method="linear", limit=1)
 
     regridded = regridded.reset_index()
     regridded["is_missing"] = regridded["value"].isna()
@@ -265,6 +268,7 @@ NETWORK_PARSERS: Dict[str, Callable[[Path], Optional[pd.DataFrame]]] = {
     "HydroVO": parse_hydro_generic,
     "Suedtirol": parse_suedtirol,
     "MeteoFrance": parse_meteofrance,
+    "Meteohub": parse_lwd,
     "Meteonetwork": parse_lwd,
 }
 # ==================== READ + LIGHT QC (Wind specific) ====================

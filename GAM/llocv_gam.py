@@ -18,7 +18,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path, get_nested_llocv_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 from gam_core import GAMConfig, GAMInterpolator
 from shared.splits.evaluation_sets import apply_evaluation_protocol
@@ -276,7 +276,7 @@ def main():
     elif args.variable:
         variables = [args.variable]
     else:
-        variables = cfg["gam"].get("variables_to_process", ["temp_mean"])
+        variables = variables_from_cfg(cfg)
     n_folds = args.folds or int(cfg["gam"].get("n_folds", 5))
     months = args.months
     if args.quick:

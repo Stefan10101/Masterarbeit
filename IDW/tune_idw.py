@@ -44,7 +44,7 @@ from shared.splits.evaluation_sets import (
     load_tune_targets,
     protocol_masks,
 )
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res, variables_from_cfg
 
 
 TRACE = {
@@ -164,12 +164,10 @@ def main():
     cfg = load_config()
     time_res = apply_time_res(cfg, args)
     param_grid = cfg["param_grid"]["power"]
-    primary = cfg.get("primary_metric", "rmse")
+    primary = "rmse"
     min_stations = int(cfg.get("min_stations_per_field", 10))
     n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
-    variables = args.variables or [
-        "temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean",
-    ]
+    variables = variables_from_cfg(cfg, args.variables)
 
     print("=" * 72)
     print(f"IDW global tune | {time_res} | vars={variables}")
@@ -205,7 +203,7 @@ def main():
 
         times = sorted(panel["time"].unique())
         if args.max_times and len(times) > args.max_times:
-            rng = np.random.default_rng(int(cfg.get("random_seed", 31)))
+            rng = np.random.default_rng(int(cfg.get("idw", {}).get("seed", 31)))
             times = sorted(rng.choice(times, size=args.max_times, replace=False))
         print(f"\n----- {var}  {len(times)} timestamps  "
               f"{panel['station_name'].nunique()} stations -----")

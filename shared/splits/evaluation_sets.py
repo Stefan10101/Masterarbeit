@@ -29,7 +29,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import hashlib
 import json
+import os
 import urllib.request
 import tempfile
 
@@ -495,19 +497,108 @@ def write_tune_targets(
         yaml.safe_dump(payload, f, sort_keys=False, allow_unicode=True)
 
 
+def _holdout_stamp_path() -> Optional[Path]:
+    raw = os.environ.get("WEEKLY_HOLDOUT_STAMP")
+    return Path(raw) if raw else None
+
+
+def write_run_stamp() -> Path:
+    """Hash the station lists once, at the start of a weekly/daily run.
+
+    The November weekly run mixed two hold-out sizes because the lists were
+    edited between methods. load_holdout aborts if a hashed file changes.
+    """
+    dest = _holdout_stamp_path()
+    if dest is None:
+        dest = _HERE.parents[1] / "Output" / "_run_stamp" / "holdout_stamp.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    files = {}
+    for path in sorted(_HERE.glob("*.yaml")):
+        name = path.name
+        if name.startswith("holdout_") or name.startswith("tune_targets") or name == "quarter_splits.yaml":
+            files[name] = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    payload = {"files": files}
+    dest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"holdout stamp: {len(files)} files -> {dest}", flush=True)
+    return dest
+
+
+def _assert_holdout_unchanged(path: Path) -> None:
+    dest = _holdout_stamp_path()
+    if dest is None:
+        return
+    if not dest.is_file():
+        raise SystemExit(
+            f"WEEKLY_HOLDOUT_STAMP={dest} does not exist. "
+            f"The run script should have written it before the first method."
+        )
+    payload = json.loads(dest.read_text(encoding="utf-8"))
+    stamped = (payload.get("files") or {}).get(path.name)
+    if stamped is None:
+        raise SystemExit(
+            f"{path.name} is not in the run stamp {dest}. "
+            f"Restart the run instead of adding station lists halfway through."
+        )
+    current = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    if current != stamped:
+        raise SystemExit(
+            f"Hold-out file changed during the run: {path.name} "
+            f"({stamped} -> {current}). Put it back or start the run again."
+        )
+
+
+def _collapse_station_time(df: pd.DataFrame, station_col: str, time_col: str) -> pd.DataFrame:
+    """One row per station-time. Drop pairs whose measurements disagree."""
+    if station_col not in df.columns or time_col not in df.columns or df.empty:
+        return df
+    keys = [station_col, time_col]
+    if "variable" in df.columns:
+        keys = ["variable", *keys]
+    skip = set(keys) | {
+        "x", "y", "lat", "lon", "latitude", "longitude",
+        "elev", "elevation", "z", "split", "fold", "quarter",
+    }
+    meas = [
+        c for c in df.columns
+        if c not in skip and pd.api.types.is_numeric_dtype(df[c])
+    ]
+    out = df
+    if meas:
+        nunq = out.groupby(keys, dropna=False)[meas].nunique(dropna=False)
+        bad = nunq.index[(nunq > 1).any(axis=1)]
+        if len(bad):
+            print(
+                f"dropped {len(bad)} station-times with conflicting observations",
+                flush=True,
+            )
+            tagged = out.set_index(keys).index
+            out = out.loc[~tagged.isin(bad)].copy()
+    before = len(out)
+    out = out.drop_duplicates(keys)
+    removed = before - len(out)
+    if removed:
+        print(f"removed {removed} exact duplicate station-times", flush=True)
+    return out
+
+
 def load_holdout(path: Optional[Path] = None, variable: Optional[str] = None) -> Tuple[List[str], List[str]]:
     """Return (held_out_ids, pool_ids). Pass variable for the per-variable file."""
     if path is None:
         path = holdout_path(variable)
+    _assert_holdout_unchanged(path)
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
-    return list(raw["held_out"]), list(raw["pool"])
+    held, pool = list(raw["held_out"]), list(raw["pool"])
+    digest = hashlib.sha256("\n".join(sorted(map(str, held))).encode()).hexdigest()[:12]
+    print(f"holdout n={len(held)} sha={digest} file={path.name}", flush=True)
+    return held, pool
 
 
 def load_tune_targets(path: Optional[Path] = None, variable: Optional[str] = None) -> Tuple[List[str], List[str]]:
     """Return (tune_target_ids, donors_during_tune_ids)."""
     if path is None:
         path = tune_targets_path(variable)
+    _assert_holdout_unchanged(path)
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     return list(raw["tune_targets"]), list(raw["donors_during_tune"])
@@ -520,6 +611,7 @@ def load_donors(path: Optional[Path] = None, variable: Optional[str] = None) -> 
 
 
 def load_quarter_splits(path: Path = QUARTER_SPLITS_PATH) -> Dict[str, List[str]]:
+    _assert_holdout_unchanged(path)
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     return raw["splits"]
@@ -580,7 +672,7 @@ def apply_evaluation_protocol(
     except FileNotFoundError:
         tune_targets = []
     splits = load_quarter_splits()
-    out = df.copy()
+    out = _collapse_station_time(df, station_col, time_col)
     out["is_heldout"] = out[station_col].astype(str).isin(held)
     out["is_tune_target"] = out[station_col].astype(str).isin(tune_targets)
     t = pd.to_datetime(out[time_col])

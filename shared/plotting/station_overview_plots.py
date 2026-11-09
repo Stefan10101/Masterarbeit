@@ -113,6 +113,8 @@ PROVIDER_LABELS = {
     "meteonetwork": "MeteoNetwork",
     "SLF": "SLF",
     "slf": "SLF",
+    "Meteohub": "MeteoHub",
+    "meteohub": "MeteoHub",
 }
 
 

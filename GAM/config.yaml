@@ -1,36 +1,25 @@
-# config.yaml - additive / tensor GAM
-# Station and grid files are reused from RFSI.
-
-paths:
-  input_root: "Kombiniert"
-  dem: "DEM_Source/COP30_mosaic_EPSG31287.tif"
-  output_root: "GAM/Output"
-  aggregated_from: "RFSI"
-  stations_from: "RFSI"
-  grids_from: "RFSI"
-
+# Additive / tensor GAM.
 domain:
-  preset: "full"
-  custom_bbox: [-76229, 123066, 637216, 501366]
-  buffer_m: 100000
-
-predefined_bboxes:
-  # Alpine Convention perimeter in EPSG:31287 (from process_new_dem.py run)
-  full: [-76229, 123066, 637216, 501366]
-
-time_resolution: "monthly"
+  preset: full
+time_resolution: monthly
 start_date: "2020-01-01"
-end_date:   "2025-12-31"
+end_date: "2025-12-31"
 resolutions_to_process: [1000]
+variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
+min_stations_per_field: 10
+overwrite_maps: true
+aggregation:
+  weekly:
+    time_col: year_week
+  daily:
+    time_col: date
+  monthly:
+    time_col: year_month
+  half_hourly:
+    time_col: timestamp
 
 gam:
-  variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
-  save_model: true
-  save_llocv: true
-  primary_metric: "rmse"
-
-  # mode A: refit every timestamp. solver: mgcv via R, numpy fallback
-  formula: "te_xy_s_elev"
+  formula: te_xy_s_elev
   n_splines: 10
   spline_order: 3
   use_clc: true
@@ -38,79 +27,28 @@ gam:
   min_clc_count: 15
   two_step: true
   tau_wet: 0.5
-  rscript: "Rscript"
-  fit_r: "fit_gam.R"
-
+  rscript: Rscript
+  fit_r: fit_gam.R
   seed: 22
   n_folds: 5
   predict_tile: 50000
   r_timeout: 3600
-  rh_t_mode: "predicted"
+  rh_t_mode: predicted
   wind_watershed: true
   n_regions: 6
   compute:
-    tune_months: "seasonal4"
+    tune_months: seasonal4
     tune_folds: 5
-
   search:
-    # Additive formulas use the full n_splines list.
-    # Tensor formulas stop at 10: ns=14 on te_xyelev timed out past 3600 s.
-    # Logged ns always equals the fitted basis.
     formula:
-      - "te_xy_s_elev"
-      - "te_xy_ti_elev"
-      - "te_xyelev"
-      - "s_xy_s_elev"
+      - te_xy_s_elev
+      - te_xy_ti_elev
+      - te_xyelev
+      - s_xy_s_elev
     n_splines: [6, 8, 10, 14]
     n_splines_tensor: [6, 8, 10]
-    tensor_formulas: ["te_xyelev", "te_xy_ti_elev"]
+    tensor_formulas: [te_xyelev, te_xy_ti_elev]
     tau_wet: [0.3, 0.5, 0.7]
-
-aggregation:
-  weekly:
-    freq: "W"
-    time_col: "year_week"
-  daily:
-    freq: "D"
-    time_col: "date"
-  monthly:
-    freq: "ME"
-    time_col: "year_month"
-  half_hourly:
-    freq: "30min"
-    time_col: "timestamp"
-    add_is_daylight: true
-
-targets:
-  precipitation:
-    raw_col: "precipitation"
-    stats: ["sum"]
-    output_names: ["precip_sum"]
-  temperature:
-    raw_col: "temperature"
-    stats: ["mean", "min", "max"]
-    output_names: ["temp_mean", "temp_min", "temp_max"]
-  wind_speed:
-    raw_col: "wind_speed"
-    stats: ["mean", "max"]
-    output_names: ["wind_mean", "wind_max"]
-  relative_humidity:
-    raw_col: "relative_humidity"
-    stats: ["mean"]
-    output_names: ["rh_mean"]
-  snow_height:
-    raw_col: "snow_height"
-    stats: ["mean", "max", "min"]
-    output_names: ["snow_mean", "snow_max", "snow_min"]
-
-min_stations_per_field: 10
-random_seed: 31
-verbose: true
-n_jobs: -1
-overwrite_maps: true
-
-# Shared core covariates (toggle per method).
-# Station train/LLOCV uses finest; maps use cell-mean from Source/terrain/grid_<res>m.nc.
 covariates:
   elev: true
   smooth_elev: true
@@ -120,4 +58,5 @@ covariates:
   clc: true
   dist_to_coast: true
   signed_dist_to_ridge: true
-
+  basin_continuity: true
+  elev_above_valley: true

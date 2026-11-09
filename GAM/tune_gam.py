@@ -28,7 +28,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs, variables_from_cfg
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from gam_data import (
     attach_pack_terrain,
@@ -114,7 +114,7 @@ def main():
     elif args.variable:
         variables = [args.variable]
     else:
-        variables = block.get("variables_to_process", ["temp_mean"])
+        variables = variables_from_cfg(cfg)
     search = block.get("search", {})
     n_folds = args.folds or (2 if args.quick else int(comp.get("tune_folds", block.get("n_folds", 5))))
     months = args.months or ("seasonal4" if args.quick else comp.get("tune_months", "seasonal4"))

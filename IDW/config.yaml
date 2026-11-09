@@ -1,69 +1,29 @@
-## config.yaml - IDW Master Thesis Pipeline
-
-paths:
-  input_root: "Kombiniert"
-  dem: "DEM_Source/COP30_mosaic_EPSG31287.tif"
-  output_root: "IDW/Output"
-
+# IDW. Paths and geometry live in paths.py and shared/grids/config.yaml.
 domain:
-  preset: "full"
-  custom_bbox: [-76229, 123066, 637216, 501366]
-  buffer_m: 100000
-
-predefined_bboxes:
-  # Alpine Convention perimeter in EPSG:31287 (from process_new_dem.py run)
-  full: [-76229, 123066, 637216, 501366]
-  
-time_resolution: "monthly"
+  preset: full
+time_resolution: monthly
 start_date: "2020-01-01"
-end_date:   "2025-12-31"
-
+end_date: "2025-12-31"
 resolutions_to_process: [1000]
-primary_metric: "rmse"
-
+variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
+min_stations_per_field: 10
+overwrite_maps: true
 aggregation:
   weekly:
-    freq: "W"
-    time_col: "year_week"
+    time_col: year_week
   daily:
-    freq: "D"
-    time_col: "date"
+    time_col: date
+  monthly:
+    time_col: year_month
   half_hourly:
-    freq: "30min"
-    time_col: "timestamp"
-    add_is_daylight: true
+    time_col: timestamp
 
-targets:
-  precipitation:
-    raw_col: "precipitation"
-    stats: ["sum"]
-    output_names: ["precip_sum"]
-  temperature:
-    raw_col: "temperature"
-    stats: ["mean", "min", "max"]
-    output_names: ["temp_mean", "temp_min", "temp_max"]
-  wind_speed:
-    raw_col: "wind_speed"
-    stats: ["mean", "max"]
-    output_names: ["wind_mean", "wind_max"]
-  relative_humidity:
-    raw_col: "relative_humidity"
-    stats: ["mean"]
-    output_names: ["rh_mean"]
-  snow_height:
-    raw_col: "snow_height"
-    stats: ["mean", "max", "min"]
-    output_names: ["snow_mean", "snow_max", "snow_min"]
+idw:
+  seed: 31
 
 param_grid:
   power:
-    # Full factorial: 5 x 5 x 6 = 150. Three parameters, so every interaction is scored.
+    # Full factorial: 5 x 5 x 6 = 150.
     p: [1.0, 1.5, 2.0, 3.0, 4.0]
     Fz: [0.0, 0.25, 0.5, 0.75, 1.0]
     k_neighbors: [4, 8, 16, 32, 64, 128]
-
-min_stations_per_field: 10
-random_seed: 31
-verbose: true
-n_jobs: 1
-

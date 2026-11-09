@@ -36,7 +36,7 @@ from gam_data import (
 )
 from llocv_gam import cfg_to_gam, load_tuned
 from shared.terrain import aspect_trig, slope_aspect_from_dem
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 
 try:
@@ -83,7 +83,7 @@ def main():
     elif args.variable:
         variables = [args.variable]
     else:
-        variables = (cfg["gam"].get("variables_to_process") or ["temp_mean"])
+        variables = variables_from_cfg(cfg)
     months = args.months or ("seasonal4" if args.quick else None)
     splits = args.split or ("test" if args.quick else "all")
     pack = pack_from_master(cfg, int(cfg.get("gam", {}).get("n_regions", 6)))
@@ -134,6 +134,10 @@ def main():
         print(f"grid ready clc={'yes' if clc is not None else 'no'}", flush=True)
 
         for var in variables:
+            out = get_interpolated_map_path("GAM", domain, var, res, cfg["start_date"], cfg["end_date"], time_res)
+            if out.exists() and not cfg.get("overwrite_maps", True):
+                print(f"exists, skip {out.name}", flush=True)
+                continue
             t_var = time.time()
             print(f"{var} load panel…", flush=True)
             panel = load_panel(cfg, var)

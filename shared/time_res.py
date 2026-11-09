@@ -14,6 +14,18 @@ import numpy as np
 import pandas as pd
 
 TIME_RESOLUTIONS = ("monthly", "weekly", "daily", "half_hourly")
+DEFAULT_VARIABLES = (
+    "temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean",
+)
+
+
+def variables_from_cfg(cfg: dict, override=None) -> list[str]:
+    """CLI list wins. Otherwise top-level variables_to_process."""
+    if override:
+        return [str(v) for v in override]
+    raw = (cfg or {}).get("variables_to_process") or list(DEFAULT_VARIABLES)
+    return [str(v) for v in raw]
+
 _WEEK_RE = re.compile(r"^(\d{4})-W(\d{1,2})$")
 _MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
 

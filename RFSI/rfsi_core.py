@@ -437,14 +437,33 @@ class RFSI:
         return self.predict_field(coords_obs, z_obs, coords_pred, X_cov_pred=X_cov_pred)
 
 
-def extras_for_var(df, var: str, rh_t_mode: str = "none") -> dict | None:
-    """Terrain extras for every variable (GAM-aligned), plus tmean for RH."""
+def cov_switches(cfg: dict | None) -> tuple[bool, bool]:
+    """elev and landcover follow the shared covariates block, not a second pair of flags."""
+    from shared.terrain import enabled_covariates
+    cols = set(enabled_covariates(cfg or {}))
+    return ("elev" in cols), ("clc_level2" in cols)
+
+
+def extras_for_var(df, var: str, rh_t_mode: str = "none", cfg: dict | None = None) -> dict | None:
+    """Terrain extras enabled by covariates, plus tmean for RH and region if attached.
+
+    cfg=None keeps every present column (synthetic tests). A config restricts
+    the set to enabled_covariates so a false toggle actually turns the column off.
+    """
+    allowed = None
+    if cfg is not None:
+        from shared.terrain import enabled_covariates
+        allowed = set(enabled_covariates(cfg))
     out = {}
     for c in ("slope", "northness", "tpi", "smooth_elev",
               "dist_to_coast", "signed_dist_to_ridge",
-              "basin_continuity", "elev_above_valley", "region"):
+              "basin_continuity", "elev_above_valley"):
+        if allowed is not None and c not in allowed:
+            continue
         if c in df.columns:
             out[c] = df[c].to_numpy()
+    if "region" in getattr(df, "columns", []):
+        out["region"] = df["region"].to_numpy()
     v = str(var).lower()
     if v.startswith("rh") and rh_t_mode in ("predicted", "observed") and "temp_mean" in df.columns:
         out["tmean"] = df["temp_mean"].to_numpy()
