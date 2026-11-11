@@ -137,8 +137,9 @@ def main():
         if str(var).lower().startswith("rh") and kcfg_preview.rh_t_mode in ("predicted", "observed"):
             fit_panel = attach_temperature(fit_panel, cfg)
         fit = fit_panel[fit_panel["split"].isin(("train", "dev"))]
+        # months filters which maps to write, not the training data.
+        # Fit stays on the full train+dev window so a 2025-only produce still has rows.
         if months:
-            fit = subset_times(fit, months)
             panel = subset_times(panel, months)
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         fit, _ = apply_hour_cut(fit, time_res, args.hours)
@@ -212,6 +213,8 @@ def main():
 
             times = sorted(panel["time"].unique())
             n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
+            n_valid = int(valid_cell.sum())
+            print(f"  {var} {res}m: {n_valid:,} cells x {len(times)} times, jobs={n_jobs}", flush=True)
 
             def one(t):
                 df_t = panel[panel["time"] == t]
@@ -238,12 +241,26 @@ def main():
                     pred_flat[sl] = model.predict_frame(df_t, qry, var)
                 return t, pred_flat.reshape(ny, nx)
 
+            # Bar must count finished months, not submitted ones. Wrapping the
+            # generator that feeds Parallel hits 100% before any kriging runs.
             if n_jobs == 1:
                 results = [one(t) for t in tqdm(times, desc=f"  {var} {res}m")]
             else:
+                from threading import Lock
+                bar = tqdm(total=len(times), desc=f"  {var} {res}m")
+                lock = Lock()
+
+                def one_counted(t):
+                    try:
+                        return one(t)
+                    finally:
+                        with lock:
+                            bar.update(1)
+
                 results = Parallel(n_jobs=n_jobs, backend="threading")(
-                    delayed(one)(t) for t in tqdm(times, desc=f"  {var} {res}m")
+                    delayed(one_counted)(t) for t in times
                 )
+                bar.close()
             results = [r for r in results if r is not None]
             if not results:
                 print(f"  {var}: no fields")

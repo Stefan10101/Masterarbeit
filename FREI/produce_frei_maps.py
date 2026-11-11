@@ -121,7 +121,6 @@ def main():
                         if c not in ("elev", "slope", "northness", "clc_level2")]
             grid_cov = {}
             try:
-                import xarray as xr
                 from paths import get_grid_terrain_path
                 tds = xr.open_dataset(get_grid_terrain_path(int(res)))
                 for col in cov_keys:

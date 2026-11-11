@@ -1,0 +1,15 @@
+{
+  "files": {
+    "holdout_stations_precipitation.yaml": "d92db38b060d1bf0",
+    "holdout_stations_relative_humidity.yaml": "8cf87838484a1425",
+    "holdout_stations_snow_height.yaml": "74b3c26e8afed6c2",
+    "holdout_stations_temperature.yaml": "c686106d9b885cbd",
+    "holdout_stations_wind_speed.yaml": "647ef7bb5cd5c9fc",
+    "quarter_splits.yaml": "0d13b4c9229e2469",
+    "tune_targets_precipitation.yaml": "823d7488903cd9aa",
+    "tune_targets_relative_humidity.yaml": "b10571dd2680fd15",
+    "tune_targets_snow_height.yaml": "a7eb5f803659032d",
+    "tune_targets_temperature.yaml": "074548caff8ee157",
+    "tune_targets_wind_speed.yaml": "ca441845b09c1c22"
+  }
+}

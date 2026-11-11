@@ -131,6 +131,7 @@ def main():
     parser.add_argument("--time-resolution", default=None)
     parser.add_argument("--resolution", type=int, default=None)
     parser.add_argument("--max-days", type=int, default=None, help="Produce N randomly sampled days")
+    parser.add_argument("--months", default=None, help="comma-separated YYYY-MM (e.g. 2025-01,2025-02,...) or seasonal4")
     parser.add_argument("--zero-ridge", action="store_true", help="Test: zero signed_dist_to_ridge on the grid")
     parser.add_argument("--zero-coast", action="store_true", help="Test: zero dist_to_coast on the grid")
     parser.add_argument("--no-tile", action="store_true", help="Test: predict the full grid in one pass")
@@ -156,6 +157,8 @@ def main():
                 cmd += ["--resolution", str(args.resolution)]
             if args.max_days is not None:
                 cmd += ["--max-days", str(args.max_days)]
+            if args.months:
+                cmd += ["--months", args.months]
             if args.zero_ridge:
                 cmd.append("--zero-ridge")
             if args.zero_coast:
@@ -232,6 +235,15 @@ def main():
         print("TEST: dist_to_coast zeroed on grid")
 
     days = np.array(sorted(df["time"].unique()))
+    if args.months and str(args.months).strip().lower() not in ("", "all", "none"):
+        spec = str(args.months).strip().lower()
+        t = pd.to_datetime(days)
+        if spec == "seasonal4":
+            days = days[np.isin(t.month, (2, 5, 8, 11))]
+        else:
+            keys = {s.strip() for s in spec.split(",") if s.strip()}
+            stamp = t.strftime("%Y-%m")
+            days = days[np.isin(stamp, list(keys))]
     if args.max_days is not None and args.max_days < len(days):
         rng = np.random.default_rng(cfg["smacnp"].get("seed", 42))
         pick = rng.choice(len(days), args.max_days, replace=False)

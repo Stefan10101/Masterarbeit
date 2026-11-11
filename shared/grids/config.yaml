@@ -3,7 +3,7 @@
 # holds the geometry and resolution choices.
 
 projected_crs: "EPSG:31287"
-resolutions_to_process: [1000]
+resolutions_to_process: [500]
 
 domain:
   buffer_m: 100000

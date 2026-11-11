@@ -222,7 +222,7 @@ class RFSI:
                  two_step: bool = False, tau_wet: float = 0.5, trace: float = 0.1,
                  var_name: str = ""):
         self.n_obs = int(n_obs)
-        self.rf_params = rf_params or {
+        self.rf_params = dict(rf_params) if rf_params else {
             "n_estimators": 400,
             "max_depth": None,
             "min_samples_leaf": 1,
@@ -230,6 +230,9 @@ class RFSI:
             "random_state": 42,
             "n_jobs": -1,
         }
+        md = self.rf_params.get("max_depth")
+        if md is not None:
+            self.rf_params["max_depth"] = int(md)
         self.two_step = bool(two_step)
         self.log_amount = bool(two_step)
         self.tau_wet = float(tau_wet)

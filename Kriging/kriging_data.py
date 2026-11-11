@@ -335,6 +335,13 @@ def load_panel(cfg, var: str) -> pd.DataFrame:
     for extra in ("elev", "clc_code", "clc_level2", "slope", "northness"):
         if extra in stations.columns:
             keep.append(extra)
+    # Keep every enabled core covariate. The old hard-coded list dropped
+    # smooth_elev/tpi/coast/ridge/basin/elev_above_valley, so the RK trend
+    # fitted on 2 extras while the grid query built 8 and the matmul crashed.
+    from shared.terrain import enabled_covariates
+    for extra in enabled_covariates(cfg):
+        if extra in stations.columns and extra not in keep:
+            keep.append(extra)
     stations = stations[keep].drop_duplicates("station_name")
 
     valid = df[["station_name", "time", var]].dropna()

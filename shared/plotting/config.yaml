@@ -1,10 +1,11 @@
 plotting:
-  method: "RFSI"          # change per method: FREI, Kriging, GAM, RFSI, CNN, RGI, SMACNP, IDW
+  mode: folder_loop
+  input_nc_folder: "C:\\Users\\stefa\\Documents\\UNI\\Master\\Masterarbeit\\Daten\\Methods"   # parent of all method Output folders
   domain: "full"
-  time_resolution: "weekly"
-  resolutions: [1000]
+  time_resolution: "monthly"
+  resolutions: [500]          # or [500] if you actually produced 500 m grids
   time_period: "20200101-20251231"
-  variables: [temp_mean, precip_sum]
+  variables: [temp_mean, precip_sum, wind_mean, rh_mean, snow_mean,]
   output_root: null
   dpi: 250
   scatter_dpi: 300

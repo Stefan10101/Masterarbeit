@@ -34,6 +34,12 @@ from paths import (
 )
 from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, cov_switches, extras_for_var, two_step_var
 from rfsi_optimizer import compute_metrics
+
+def _depth(d):
+    """max_depth must be int or None for sklearn; pandas turns it into float."""
+    if d is None or (isinstance(d, float) and np.isnan(d)):
+        return None
+    return int(d)
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.splits.evaluation_sets import prepare_for_tuning
 
@@ -311,6 +317,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
     t0 = time.perf_counter()
     n_grid = len(grid)
     for i, (n_obs, depth, leaf, feat) in enumerate(grid, start=1):
+        depth = _depth(depth)
         print(f"  [{i}/{n_grid}] n={n_obs} depth={depth} leaf={leaf} feat={feat}", flush=True)
         rf_params = {
             "n_estimators": n_est_search,
@@ -365,8 +372,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
             step = n_now * 2
         already = set(table["n_obs"].astype(int))
         if step is not None and step not in already:
-            depth = best["max_depth"]
-            depth = None if pd.isna(depth) else depth
+            depth = _depth(best["max_depth"])
             leaf = int(best["min_samples_leaf"])
             feat = best["max_features"]
             print(f"  boundary: n_obs={n_now} is an endpoint. scoring n_obs={step}", flush=True)
@@ -404,7 +410,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
         "cluster_method": cluster_method,
         "n_medoid_months": int(panel["time"].nunique()),
         "n_obs": int(best["n_obs"]),
-        "max_depth": None if pd.isna(best["max_depth"]) else best["max_depth"],
+        "max_depth": _depth(best["max_depth"]),
         "min_samples_leaf": int(best["min_samples_leaf"]),
         "max_features": best["max_features"],
         "n_estimators": n_est_final,

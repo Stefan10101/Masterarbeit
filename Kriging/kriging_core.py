@@ -291,7 +291,9 @@ def ordinary_krige(
     jitter = 1e-8 * (nug + ps + 1.0)
     for s in range(0, nq, tile):
         sl = slice(s, min(s + tile, nq))
-        d_qo, idx = tree.query(qry_c[sl], k=kk, workers=-1)
+        # workers=1: this runs inside a joblib thread pool. workers=-1
+        # opens a second pool and deadlocks on Windows (CPU drops, bar stuck).
+        d_qo, idx = tree.query(qry_c[sl], k=kk, workers=1)
         d_qo = np.atleast_2d(np.asarray(d_qo, dtype=np.float64))
         idx = np.atleast_2d(np.asarray(idx, dtype=np.int64))
         if kk == 1:
@@ -363,43 +365,60 @@ class KrigingInterpolator:
         return keys
 
     def _extras(self, df: pd.DataFrame, fit: bool = False) -> list:
+        """Extra trend columns.
+
+        Fit records the keys it actually saw in extra_stats. Predict emits
+        exactly those keys, in the same order: a query column that was not
+        fitted is ignored, a fitted column missing from the query is zero.
+        This keeps the design width identical to beta.
+        """
         keys = self.extra_keys()
         cols = []
         for k in keys:
-            if k not in df.columns:
-                if fit:
-                    continue
-                if k in self.extra_stats:
-                    cols.append(np.zeros(len(df), dtype=np.float64))
-                continue
-            v = np.asarray(df[k], dtype=np.float64)
-            v = np.where(np.isfinite(v), v, np.nan)
             if fit:
+                if k not in df.columns:
+                    continue
+                v = np.asarray(df[k], dtype=np.float64)
+                v = np.where(np.isfinite(v), v, np.nan)
                 mu = float(np.nanmean(v)) if np.isfinite(v).any() else 0.0
                 sd = float(np.nanstd(v)) if np.isfinite(v).any() else 1.0
                 if not np.isfinite(sd) or sd < 1e-8:
                     sd = 1.0
                 self.extra_stats[k] = (mu, sd)
-            else:
-                mu, sd = self.extra_stats.get(k, (0.0, 1.0))
+                v = np.where(np.isfinite(v), v, mu)
+                cols.append((v - mu) / sd)
+                continue
+            if k not in self.extra_stats:
+                continue
+            mu, sd = self.extra_stats[k]
+            if k not in df.columns:
+                cols.append(np.zeros(len(df), dtype=np.float64))
+                continue
+            v = np.asarray(df[k], dtype=np.float64)
             v = np.where(np.isfinite(v), v, mu)
             cols.append((v - mu) / sd)
-        # 250 m elev bin as a single standardised index (smooth), plus
-        # x*bin and y*bin so location can override the elevation signal.
-        # Free one-hot removed to avoid hard edges and sparse-bin dominance.
+        # 250 m elev bin as a single standardised index, plus x*bin and y*bin.
+        # Stats are stored on the fit so the grid query uses the same scale.
         if self.two_step and "elev" in df.columns and "x" in df.columns:
             b = elev_bin(df["elev"].to_numpy()).astype(np.float64)
-            mu = float(b.mean()) if b.size else 0.0
-            sd = float(b.std()) if b.size else 1.0
-            if sd < 1e-8:
-                sd = 1.0
+            if fit:
+                mu = float(b.mean()) if b.size else 0.0
+                sd = float(b.std()) if b.size else 1.0
+                if sd < 1e-8:
+                    sd = 1.0
+                self.extra_stats["_elev_bin"] = (mu, sd)
+            else:
+                mu, sd = self.extra_stats.get("_elev_bin", (0.0, 1.0))
             b_s = (b - mu) / sd
             cols.append(b_s)
-            # spatial interactions (standardised coords if available)
             xs = df["x"].to_numpy(dtype=np.float64)
             ys = df["y"].to_numpy(dtype=np.float64)
-            xs = (xs - xs.mean()) / max(xs.std(), 1.0)
-            ys = (ys - ys.mean()) / max(ys.std(), 1.0)
+            if self.coord_stats:
+                xs = (xs - self.coord_stats["x"][0]) / self.coord_stats["x"][1]
+                ys = (ys - self.coord_stats["y"][0]) / self.coord_stats["y"][1]
+            else:
+                xs = (xs - xs.mean()) / max(xs.std(), 1.0)
+                ys = (ys - ys.mean()) / max(ys.std(), 1.0)
             cols.append(b_s * xs)
             cols.append(b_s * ys)
         return cols
@@ -431,6 +450,11 @@ class KrigingInterpolator:
         X = self._X(df)
         b = np.zeros_like(beta)
         b[col_ok] = beta[col_ok]
+        if X.shape[1] != b.shape[0]:
+            raise ValueError(
+                f"trend design mismatch: X has {X.shape[1]} cols, beta has {b.shape[0]} "
+                f"(extras={list(self.extra_stats)}, clc={self.clc_levels})"
+            )
         return X @ b
 
     def _pick_vgm(self, cluster_id: int, indicator: bool = False) -> dict:
