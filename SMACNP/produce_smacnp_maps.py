@@ -27,6 +27,7 @@ from smacnp_data import (
     FeatureScaler,
 )
 from smacnp_core import SMACNP
+from shared.map_io import save_map_with_partials
 from paths import get_smacnp_model_path, get_master_grid_path, get_method_output_dir
 
 try:
@@ -68,23 +69,36 @@ def build_model_from_ckpt(ckpt: dict, device: torch.device) -> SMACNP:
     return model.to(device).eval()
 
 
-def grid_features(grid: xr.Dataset, feat_cols: list[str], cfg: dict) -> tuple[np.ndarray, tuple[int, int]]:
+def grid_features(grid: xr.Dataset, feat_cols: list[str], cfg: dict,
+                  resolution: int = 1000) -> tuple[np.ndarray, tuple[int, int]]:
     """Build (N, n_features) on the master grid.
 
-    Terrain cache may have a different shape. Features are reindexed onto
-    the master grid coordinates (nearest) so the output matches the master grid.
-    CLC one-hot columns (clc_l2_*) are derived from the integer clc_level2 field.
+    Prefer the terrain cache at the same resolution as the master grid.
+    Fall back to the 1000 m cache with nearest reindex only if the matching
+    file is missing.
     """
     from paths import get_grid_terrain_path
     from shared.clc import one_hot_level2
 
-    cache_path = get_grid_terrain_path(1000)
+    cache_path = get_grid_terrain_path(int(resolution))
+    if not cache_path.exists() and int(resolution) != 1000:
+        alt = get_grid_terrain_path(1000)
+        if alt.exists():
+            print(f"  terrain cache {resolution}m missing, falling back to 1000m")
+            cache_path = alt
     if not cache_path.exists():
         raise FileNotFoundError(f"grid terrain cache missing: {cache_path}")
+    print(f"  terrain cache: {cache_path.name}")
     cache = xr.open_dataset(cache_path)
 
-    # Align cache fields onto the master grid
-    aligned = cache.reindex(y=grid.y, x=grid.x, method="nearest")
+    # Align only when the cache grid differs from the master grid.
+    same = (
+        cache.y.size == grid.y.size
+        and cache.x.size == grid.x.size
+        and np.allclose(cache.y.values, grid.y.values)
+        and np.allclose(cache.x.values, grid.x.values)
+    )
+    aligned = cache if same else cache.reindex(y=grid.y, x=grid.x, method="nearest")
     ny, nx = int(grid.y.size), int(grid.x.size)
     xx, yy = np.meshgrid(grid.x.values, grid.y.values)
 
@@ -201,7 +215,7 @@ def main():
     print(f"grid {grid_path}  shape=({grid.y.size}, {grid.x.size})")
 
     print("Computing grid features...")
-    grid_mat, (ny, nx) = grid_features(grid, feat_cols, cfg)
+    grid_mat, (ny, nx) = grid_features(grid, feat_cols, cfg, resolution=res)
 
     # Station context (all stations)
     print("Loading stations...")
@@ -234,34 +248,41 @@ def main():
         grid_mat[:, feat_cols.index("dist_to_coast")] = 0.0
         print("TEST: dist_to_coast zeroed on grid")
 
-    days = np.array(sorted(df["time"].unique()))
+    times_u = np.array(sorted(df["time"].unique()))
+    unit = {"monthly": "months", "weekly": "weeks", "daily": "days",
+            "half_hourly": "slots"}.get(cfg["time_resolution"], "times")
     if args.months and str(args.months).strip().lower() not in ("", "all", "none"):
         spec = str(args.months).strip().lower()
-        t = pd.to_datetime(days)
+        t = pd.to_datetime(times_u)
         if spec == "seasonal4":
-            days = days[np.isin(t.month, (2, 5, 8, 11))]
+            times_u = times_u[np.isin(t.month, (2, 5, 8, 11))]
         else:
             keys = {s.strip() for s in spec.split(",") if s.strip()}
             stamp = t.strftime("%Y-%m")
-            days = days[np.isin(stamp, list(keys))]
-    if args.max_days is not None and args.max_days < len(days):
+            times_u = times_u[np.isin(stamp, list(keys))]
+    if args.max_days is not None and args.max_days < len(times_u):
         rng = np.random.default_rng(cfg["smacnp"].get("seed", 42))
-        pick = rng.choice(len(days), args.max_days, replace=False)
-        days = np.sort(days[pick])
-    print(f"predicting {len(days)} days")
+        pick = rng.choice(len(times_u), args.max_days, replace=False)
+        times_u = np.sort(times_u[pick])
+    print(f"predicting {len(times_u)} {unit}")
 
-    # Tile by whole rows so cuts never split a row (avoids horizontal seams)
-    rows_per_tile = ny if args.no_tile else max(1, 50000 // nx)
+    # Tile by whole rows. Variance encoder attention (v_dim=512) on a
+    # ~200k-cell tile tries to allocate >12 GB and OOMs a 12 GB card.
+    # ~40k cells keeps the (M, k, D) projections inside VRAM; the location
+    # encoder is already chunked so the smaller tile no longer stalls on cdist.
+    rows_per_tile = ny if args.no_tile else max(1, 40000 // nx)
+    if args.rows_per_tile is not None:
+        rows_per_tile = max(1, int(args.rows_per_tile))
     if args.no_tile:
         print("TEST: full grid in one pass")
+    print(f"  rows_per_tile={rows_per_tile}  (~{rows_per_tile * nx:,} cells)")
     means = []
     variances = []
     times = []
 
-    for i, day in enumerate(days):
-        if i % 10 == 0 or i == len(days) - 1:
-            print(f"  day {i+1}/{len(days)}  {day}", flush=True)
-        df_day = df[df["time"] == day].dropna(subset=feat_cols + ["value"])
+    for i, ts in enumerate(times_u):
+        print(f"  {unit[:-1] if unit.endswith('s') else unit} {i+1}/{len(times_u)}  {ts}", flush=True)
+        df_day = df[df["time"] == ts].dropna(subset=feat_cols + ["value"])
         if len(df_day) < 2:
             continue
         x_ctx = torch.from_numpy(df_day[feat_cols].to_numpy(dtype=np.float32)).unsqueeze(0).to(device)
@@ -272,7 +293,8 @@ def main():
         mu_full = np.full((ny, nx), np.nan, dtype=np.float32)
         var_full = np.full((ny, nx), np.nan, dtype=np.float32)
 
-        for r0 in range(0, ny, rows_per_tile):
+        n_tiles = (ny + rows_per_tile - 1) // rows_per_tile
+        for ti, r0 in enumerate(range(0, ny, rows_per_tile)):
             r1 = min(r0 + rows_per_tile, ny)
             sl = grid_mat.reshape(ny, nx, -1)[r0:r1].reshape(-1, grid_mat.shape[1])
             x_tgt = torch.from_numpy(sl).unsqueeze(0).to(device)
@@ -289,10 +311,15 @@ def main():
             else:
                 mu_full[r0:r1] = scaler.inverse(pred["mu"].cpu().numpy().squeeze()).reshape(r1 - r0, nx).astype(np.float32)
                 var_full[r0:r1] = pred["variance"].cpu().numpy().squeeze().reshape(r1 - r0, nx).astype(np.float32)
+            if (ti + 1) % 10 == 0 or ti == n_tiles - 1:
+                print(f"    tile {ti+1}/{n_tiles}", flush=True)
+            del x_tgt, pred
+            # Do not empty_cache every tile. That forces a full device sync
+            # and is what turns a normal forward into the spike-then-freeze.
 
         means.append(mu_full)
         variances.append(var_full)
-        times.append(day)
+        times.append(ts)
 
     if not means:
         print("no maps produced")
@@ -310,7 +337,7 @@ def main():
 
     out_dir = get_method_output_dir("SMACNP") / "interpolated_maps" / cfg["time_resolution"]
     out_dir.mkdir(parents=True, exist_ok=True)
-    ds.to_netcdf(out_path)
+    save_map_with_partials(ds, out_path, cfg["time_resolution"])
     print(f"wrote {out_path}")
     grid.close()
 

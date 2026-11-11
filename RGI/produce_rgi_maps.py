@@ -21,14 +21,19 @@ import yaml
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
+try:
+    import torch
+except ImportError:
+    torch = None
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from shared.map_io import save_map_with_partials
 from paths import (
     get_interpolated_map_path,
-    get_llocv_path,
     get_master_grid_path,
     get_rgi_model_path,
     get_rgi_tuned_params_path,
@@ -36,7 +41,6 @@ from paths import (
 from rgi_core import RGI
 from rgi_data import (
     attach_extras,
-    compute_metrics,
     data_sources,
     extra_cols_for_var,
     load_config,
@@ -73,7 +77,7 @@ def main():
     p.add_argument("--variables", nargs="*", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--jobs", type=int, default=None,
-                   help="parallel timestamps (default: half the logical cores)")
+                   help="parallel timestamps (default: 1 on CUDA, half cores on CPU)")
     p.add_argument("--months", default=None)
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -84,7 +88,6 @@ def main():
         cfg.setdefault("rgi", {})
         cfg["rgi"]["epochs"] = min(int(cfg["rgi"].get("epochs", 80)), 15)
         cfg["rgi"]["patience"] = min(int(cfg["rgi"].get("patience", 12)), 4)
-        cfg["rgi"]["save_llocv"] = False
         cfg["_quick_months"] = args.months or "seasonal4"
     if xr is None:
         raise RuntimeError("xarray is required for produce_rgi_maps.py")
@@ -96,7 +99,6 @@ def main():
     resolutions = cfg.get("resolutions_to_process", [1000])
     rgi_cfg = cfg.get("rgi", {})
     variables = variables_from_cfg(cfg, args.variables)
-    save_llocv = bool(rgi_cfg.get("save_llocv", True))
     save_model = bool(rgi_cfg.get("save_model", True))
     tile = int(rgi_cfg.get("predict_tile", 120000))
     min_stations = int(cfg.get("min_stations_per_field", 10))
@@ -111,13 +113,17 @@ def main():
 
     for var in variables:
         panel = attach_extras(load_panel(cfg, var), cfg, var)
-        if cfg.get("_quick_months"):
-            panel = subset_times(panel, cfg["_quick_months"])
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
+        # Fit on full train+dev. --months / --quick only select prediction times.
         fit = panel[panel["split"].isin(("train", "dev"))]
         if fit.empty:
             print(f"  [SKIP] {var}: no train/dev rows")
             continue
+        # --months always restricts prediction. --quick defaults to seasonal4.
+        pred = panel
+        month_spec = args.months or cfg.get("_quick_months")
+        if month_spec:
+            pred = subset_times(panel, month_spec)
         tuned = load_tuned(var, time_res)
         tuned["extra_cols"] = extra_cols_for_var(var, cfg)
         tuned["variable"] = var
@@ -137,7 +143,6 @@ def main():
             model.save(path)
             print(f"  model → {path}")
 
-        llocv_records = []
         for res in resolutions:
             grid_path = get_master_grid_path(grid_method, res)
             grid = xr.open_dataset(grid_path)
@@ -168,17 +173,40 @@ def main():
                 grid.close()
                 continue
 
-            times = sorted(panel["time"].unique())
-            n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
+            times = sorted(pred["time"].unique())
+            # Concurrent large-graph forwards on a single consumer GPU freeze the
+            # driver. Force sequential when the model is on CUDA unless the user
+            # explicitly overrides with --jobs.
+            on_cuda = (
+                torch is not None
+                and hasattr(model, "device")
+                and getattr(model.device, "type", None) == "cuda"
+            )
+            if args.jobs is not None:
+                n_jobs = max(1, int(args.jobs))
+            elif on_cuda:
+                n_jobs = 1
+            else:
+                n_jobs = max(1, (os.cpu_count() or 1) // 2)
+            if on_cuda and n_jobs > 1:
+                print(f"  warning: --jobs={n_jobs} on CUDA may freeze the GPU")
+            # Cap tile size on CUDA so a single forward (esp. k=32, L=5) stays
+            # inside consumer VRAM while still saturating the GPU. Config value
+            # is still respected on CPU.
+            tile_use = tile
+            if on_cuda and tile_use > 96000:
+                tile_use = 96000
+                print(f"  CUDA tile capped at {tile_use} (config was {tile})")
 
             def one(t):
-                df_t = panel[panel["time"] == t]
+                df_t = pred[pred["time"] == t]
                 if len(df_t) < min_stations:
                     return None
                 pred_flat = np.full(flat_x.size, np.nan, dtype=np.float32)
                 idx = np.flatnonzero(valid_cell)
-                for s in range(0, len(idx), tile):
-                    sl = idx[s:s + tile]
+                n_tiles = 0
+                for s in range(0, len(idx), tile_use):
+                    sl = idx[s:s + tile_use]
                     qry = pd.DataFrame({
                         "x": flat_x[sl],
                         "y": flat_y[sl],
@@ -187,6 +215,13 @@ def main():
                         var: np.zeros(len(sl), dtype=np.float32),
                     })
                     pred_flat[sl] = model.predict_frame(df_t, qry, var)
+                    n_tiles += 1
+                    # Periodic cleanup only — every-tile sync + empty_cache
+                    # leaves the GPU idle. Every 4 tiles is enough to bound VRAM.
+                    if on_cuda and (n_tiles % 4 == 0):
+                        torch.cuda.empty_cache()
+                if on_cuda:
+                    torch.cuda.empty_cache()
                 return t, pred_flat.reshape(ny, nx)
 
             if n_jobs == 1:
@@ -202,26 +237,6 @@ def main():
                 continue
             kept, stacks = zip(*results)
             data_3d = np.stack(stacks).astype(np.float32)
-            # station check only when we actually save it
-            station_rmse = [np.nan] * len(kept)
-            if save_llocv:
-                station_rmse = []
-                for t in kept:
-                    df_t = panel[panel["time"] == t]
-                    preds_st = []
-                    for name in df_t["station_name"].tolist():
-                        y1 = model.predict_stations_at_time(df_t, var, [name])
-                        preds_st.append(float(y1[0]) if len(y1) else np.nan)
-                    preds_st = np.asarray(preds_st, dtype=np.float32)
-                    met = compute_metrics(df_t[var].to_numpy(), preds_st)
-                    station_rmse.append(met["rmse"])
-                    for name, obs, pr in zip(df_t["station_name"], df_t[var], preds_st):
-                        llocv_records.append({
-                            "time": t, "station_name": name, "variable": var,
-                            "observed": float(obs), "predicted": float(pr),
-                            "resolution_m": int(res),
-                        })
-
             n_kept = len(kept)
             # data_3d already stacked to n_kept
             time_coord = pd.DatetimeIndex(pd.to_datetime(kept, utc=True)).tz_convert(
@@ -234,7 +249,6 @@ def main():
             if "elev" in grid:
                 ds["elev"] = (("y", "x"), grid.elev.values.astype(np.float32))
             ds["k"] = ("time", np.full(n_kept, rcfg.k, dtype=np.int16))
-            ds["station_rmse"] = ("time", np.asarray(station_rmse, dtype=np.float32))
             ds.attrs.update({
                 "title": f"{var} - RGI - {time_res} - {domain}",
                 "domain": domain,
@@ -253,22 +267,11 @@ def main():
                 "created": datetime.now().isoformat(),
             })
             out_file.parent.mkdir(parents=True, exist_ok=True)
-            ds.to_netcdf(out_file, engine="netcdf4")
+            save_map_with_partials(ds, out_file, time_res)
             print(f"  saved {n_kept} timesteps → {out_file}")
             grid.close()
             del data_3d, ds
             gc.collect()
-
-        if save_llocv and llocv_records:
-            llocv_path = get_llocv_path(
-                "RGI", domain, var, resolutions[0],
-                start_date=str(start.date()),
-                end_date=str(end.date()),
-                time_resolution=time_res,
-            )
-            pd.DataFrame(llocv_records).to_parquet(llocv_path, index=False)
-            print(f"  frozen station check → {llocv_path}")
-            print("  note: not nested station LLOCV (see llocv_rgi.py)")
 
     print("\nRGI production finished.")
 

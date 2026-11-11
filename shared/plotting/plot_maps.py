@@ -18,6 +18,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
+import time
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -82,39 +83,64 @@ def get_mode():
 
 
 def get_input_nc_files():
+    """Collect interpolated-map NetCDFs.
+
+    Two layouts are written by the produce scripts:
+
+    Standard (IDW, RFSI, Kriging, Frei, GAM, CNN, RGI, BSS, TPS)
+        Methods/<Method>/Output/interpolated_maps/<domain>/res_<R>m/<var>/
+            <var>_<R>m_<time_res>_<YYYYMMDD>-<YYYYMMDD>.nc
+        via paths.get_interpolated_map_path
+
+    SMACNP
+        Methods/SMACNP/Output/interpolated_maps/<time_res>/
+            <var>_<time_res>_<R>m.nc
+        no domain folder, no date range in the name
+    """
+    import re
     mode = get_mode()
     if mode == "folder_loop":
         folder = PLOTTING_CFG.get("input_nc_folder")
-        return sorted(glob.glob(str(Path(folder) / "**/*.nc"), recursive=True))
-
-    method = PLOTTING_CFG.get("method")
-    domain = PLOTTING_CFG.get("domain", "full")
-    resolutions = PLOTTING_CFG.get("resolutions") or []
-    time_period = PLOTTING_CFG.get("time_period")
-
-    base = Path(get_method_output_dir(method)) / "interpolated_maps"
-    # Standard layout: interpolated_maps/<domain>/res_*m/<time_res>/*.nc
-    pattern = str(base / domain / "res_*m" / "*" / "*.nc")
-    nc_files = sorted(glob.glob(pattern))
-    # SMACNP layout: interpolated_maps/<time_res>/*.nc
-    if not nc_files:
-        pattern = str(base / "*" / "*.nc")
+        # Recursive glob covers both layouts above.
+        nc_files = sorted(glob.glob(str(Path(folder) / "**/*.nc"), recursive=True))
+    else:
+        method = PLOTTING_CFG.get("method")
+        domain = PLOTTING_CFG.get("domain", "full")
+        base = Path(get_method_output_dir(method)) / "interpolated_maps"
+        # Standard layout
+        pattern = str(base / domain / "res_*m" / "*" / "*.nc")
         nc_files = sorted(glob.glob(pattern))
+        # SMACNP layout (and any other flat time_res folder)
+        pattern2 = str(base / "*" / "*.nc")
+        nc_files = sorted(set(nc_files) | set(glob.glob(pattern2)))
 
+    # Filters apply in both modes.
+    resolutions = PLOTTING_CFG.get("resolutions") or []
     if resolutions:
         res_patterns = [f"res_{r}m" for r in resolutions] + [f"{r}m" for r in resolutions]
         nc_files = [f for f in nc_files if any(r in f for r in res_patterns)]
 
+    # Period filter: keep a file if it contains the requested range, OR if it
+    # embeds no date range at all (SMACNP style). Drop only files that carry
+    # a different explicit range.
+    time_period = PLOTTING_CFG.get("time_period")
     if time_period:
-        matched = [f for f in nc_files if time_period in Path(f).name]
-        if matched:
-            nc_files = matched
+        date_range = re.compile(r"\d{8}-\d{8}")
+        kept = []
+        for f in nc_files:
+            name = Path(f).name
+            if time_period in name or not date_range.search(name):
+                kept.append(f)
+        dropped = len(nc_files) - len(kept)
+        if dropped:
+            print(f"  time_period '{time_period}': kept {len(kept)} "
+                  f"(incl. files with no date range), dropped {dropped}")
+        nc_files = kept
 
-    # Optional: keep only one timescale (weekly, daily, monthly, ...)
     time_res_filter = PLOTTING_CFG.get("time_resolution")
     if time_res_filter:
         key = str(time_res_filter).lower()
-        nc_files = [f for f in nc_files if key in Path(f).name.lower()]
+        nc_files = [f for f in nc_files if key in Path(f).name.lower() or key in str(f).lower()]
 
     return nc_files
 
@@ -124,16 +150,29 @@ def get_colormap(var_name):
     return cmaps.get(var_name, cmaps.get("default", "viridis"))
 
 
-def detect_method(ds, fallback: str = "IDW") -> str:
+def detect_method(ds, fallback: str = "IDW", nc_path=None) -> str:
+    """Method name from NC attrs, else from the Methods/<Method>/ folder."""
     attr = str(ds.attrs.get("method", "")).upper()
-    if "SMACNP" in attr:
-        return "SMACNP"
-    if "RFSI" in attr or "RANDOM FOREST" in attr:
+    title = str(ds.attrs.get("title", "")).upper()
+    blob = attr + " " + title
+    known = ("SMACNP", "RFSI", "KRIGING", "FREI", "GAM", "CNN", "RGI", "TPS", "BSS", "IDW")
+    for name in known:
+        if name in blob:
+            return name
+    if "RANDOM FOREST" in blob:
         return "RFSI"
-    if "BSS" in attr or "BILINEAR" in attr:
-        return "BSS"
-    if "IDW" in attr:
-        return "IDW"
+    # Frei/GAM/CNN/SMACNP produce scripts do not write a method attribute.
+    # Recover it from .../Methods/<Method>/Output/...
+    if nc_path is not None:
+        parts = [x.upper() for x in Path(nc_path).parts]
+        if "METHODS" in parts:
+            i = parts.index("METHODS")
+            if i + 1 < len(parts):
+                folder = parts[i + 1]
+                for name in known:
+                    if name in folder or folder in name:
+                        return name
+                return folder
     return fallback.upper()
 
 
@@ -308,7 +347,7 @@ def process_one_timestep(args):
 
     ds = xr.open_dataset(nc_path)
     plot_type, X, Y, C = _normalize_spatial_data(ds, data_var, t_idx)
-    method = detect_method(ds, fallback=PLOTTING_CFG.get("method", "IDW"))
+    method = detect_method(ds, fallback=PLOTTING_CFG.get("method", "IDW"), nc_path=nc_path)
 
     if not hasattr(process_one_timestep, "_mask") or process_one_timestep._mask_shape != C.shape:
         process_one_timestep._mask = alpine_mask(X, Y, buffer_km=100.0)
@@ -323,13 +362,25 @@ def process_one_timestep(args):
 
     fig, ax = plt.subplots(figsize=(12, 8))
 
-    # Grayscale DEM everywhere
+    # Grayscale DEM everywhere. elev may carry a time dimension in the NC;
+    # take the first slice so pcolormesh receives a 2-D field.
     elev_vals = ds["elev"].values if "elev" in ds else elev_grid
     if elev_vals is not None:
-        ax.pcolormesh(X, Y, elev_vals, cmap="gray_r", vmin=0, vmax=3200, shading="auto", zorder=1)
+        elev_vals = np.asarray(elev_vals)
+        if elev_vals.ndim == 3:
+            elev_vals = elev_vals[0]
+        elif elev_vals.ndim > 3:
+            elev_vals = np.squeeze(elev_vals)
+        if elev_vals.ndim == 2:
+            ax.pcolormesh(X, Y, elev_vals, cmap="gray_r", vmin=0, vmax=3200,
+                          shading="auto", zorder=1)
 
     # Interpolation only inside perimeter + buffer
-    pcm = ax.pcolormesh(X, Y, C_plot, cmap=get_colormap(var_name), shading="auto", alpha=0.75, zorder=2)
+    C_plot = np.asarray(C_plot)
+    if C_plot.ndim == 3:
+        C_plot = C_plot[0]
+    pcm = ax.pcolormesh(X, Y, C_plot, cmap=get_colormap(var_name),
+                        shading="auto", alpha=0.75, zorder=2)
 
     # Coast and rivers
     coast.plot(ax=ax, color="0.35", linewidth=0.4, zorder=3)
@@ -372,17 +423,34 @@ def process_one_timestep(args):
     time_label = "".join(c if c.isalnum() or c in "_-" else "_" for c in time_label)
     out_path = get_map_output_path(method, domain, var_name, res, time_label)
     out_path = Path(out_path).resolve()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"  Saving {out_path}")
-    try:
-        fig.savefig(str(out_path), dpi=MAPS_CFG.get("dpi", 200), bbox_inches="tight", facecolor="white")
-    except OSError as e:
-        print(f"  Failed to save {out_path}: {e}")
-        print(f"  Parent exists: {out_path.parent.exists()}, is_dir: {out_path.parent.is_dir()}")
-        raise
+    # Skip if a non-empty PNG already exists (avoids collisions when multiple
+    # input NCs map to the same plot path under folder_loop).
+    if out_path.exists() and out_path.stat().st_size > 1000:
+        print(f"  Skip existing {out_path}")
+        plt.close(fig)
+        ds.close()
+        return out_path.name
+    # Retry: Windows + high joblib parallelism can return OSError 22 on open()
+    last_err = None
+    for attempt in range(3):
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            print(f"  Saving {out_path}")
+            fig.savefig(str(out_path), dpi=MAPS_CFG.get("dpi", 200),
+                        bbox_inches="tight", facecolor="white")
+            last_err = None
+            break
+        except OSError as e:
+            last_err = e
+            print(f"  Failed to save {out_path} (attempt {attempt+1}): {e}")
+            time.sleep(0.15 * (attempt + 1))
+    if last_err is not None:
+        print(f"  Giving up on {out_path}")
+        # Do not raise: one bad file must not abort the whole Parallel run
     plt.close(fig)
     ds.close()
     return out_path.name
+
 
 
 def _normalize_spatial_data(ds, data_var, t_idx):
@@ -400,6 +468,19 @@ def main():
 
     nc_files = get_input_nc_files()
     print(f"Found {len(nc_files)} NC file(s)")
+    if nc_files:
+        from collections import Counter
+        methods = []
+        for f in nc_files:
+            try:
+                with xr.open_dataset(f) as ds:
+                    methods.append(detect_method(ds, fallback="?", nc_path=f))
+            except Exception:
+                methods.append("?")
+        counts = Counter(methods)
+        print("  by method:", ", ".join(f"{m}={n}" for m, n in sorted(counts.items())))
+        for f in nc_files:
+            print(f"    {Path(f).name}")
 
     show_stations = MAPS_CFG.get("show_stations", True)
     show_provider = MAPS_CFG.get("show_provider_symbols", True)
@@ -411,6 +492,7 @@ def main():
     elev_cache = {}
 
     all_tasks = []
+    seen_keys = set()
 
     for nc_path in nc_files:
         nc_path = Path(nc_path)
@@ -435,7 +517,7 @@ def main():
             data_var = "prediction" if "prediction" in ds else var_name
 
         times = ds["time"].values
-        method = detect_method(ds, fallback=PLOTTING_CFG.get("method", "IDW"))
+        method = detect_method(ds, fallback=PLOTTING_CFG.get("method", "IDW"), nc_path=nc_path)
         domain = ds.attrs.get("domain", "full")
         res = int(ds.attrs.get("resolution_m", 0) or 0)
         if res == 0:
@@ -489,8 +571,14 @@ def main():
               f"(time_res={time_res})")
 
         for t_idx in t_indices:
+            t_val = times[t_idx]
+            time_key = pd.to_datetime(t_val).strftime("%Y%m%d_%H%M")
+            key = (method, domain, var_name, res, time_key)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
             all_tasks.append((
-                str(nc_path), t_idx, times[t_idx], var_name, data_var,
+                str(nc_path), t_idx, t_val, var_name, data_var,
                 stations_df, show_stations, show_provider,
                 show_topo, show_extra, time_res, domain, res, elev_grid
             ))

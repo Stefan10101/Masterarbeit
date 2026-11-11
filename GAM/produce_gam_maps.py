@@ -19,6 +19,7 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from shared.map_io import save_map_with_partials
 from paths import get_interpolated_map_path, get_master_grid_path
 from gam_core import GAMInterpolator
 from gam_data import (
@@ -256,7 +257,7 @@ def main():
                               coords={"time": np.array(used), "y": y, "x": x}, name=var)
             out = get_interpolated_map_path("GAM", domain, var, res, cfg["start_date"], cfg["end_date"], time_res)
             print(f"{var} write {out}", flush=True)
-            xr.Dataset({var: da}).to_netcdf(out)
+            save_map_with_partials(xr.Dataset({var: da}), out, time_res)
             print(f"wrote {out} fields={len(fields)} skip={n_skip} {time.time() - t_var:.0f}s", flush=True)
 
 

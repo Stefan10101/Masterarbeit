@@ -28,11 +28,11 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from shared.map_io import save_map_with_partials
 from paths import (
     get_interpolated_map_path,
     get_kriging_model_path,
     get_kriging_tuned_params_path,
-    get_llocv_path,
     get_master_grid_path,
 )
 from kriging_core import KrigingInterpolator
@@ -41,7 +41,6 @@ from kriging_data import (
     attach_temperature,
     clc_group,
     compute_block,
-    compute_metrics,
     data_sources,
     load_config,
     load_panel,
@@ -84,7 +83,6 @@ def parse_args():
     p.add_argument("--jobs", type=int, default=None,
                    help="parallel timestamps (default: half the logical cores)")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
-    p.add_argument("--skip-station-check", action="store_true")
     add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
@@ -106,9 +104,7 @@ def main():
     comp = compute_block(cfg)
     months = args.months or ("seasonal4" if args.quick else None)
     splits = args.split or ("test" if args.quick else comp.get("produce_splits", "all"))
-    skip_station = bool(args.skip_station_check or args.quick)
     pack = pack_from_master(cfg, int(kblock.get("n_regions", 6)))
-    save_llocv = bool(kblock.get("save_llocv", True))
     save_model = bool(kblock.get("save_model", True))
     min_stations = int(cfg.get("min_stations_per_field", 10))
     _, _, grid_method = data_sources(cfg)
@@ -167,7 +163,6 @@ def main():
             joblib.dump(model.state_dict(), path)
             print(f"  model → {path}")
 
-        llocv_records = []
         for res in resolutions:
             grid_path = get_master_grid_path(grid_method, res)
             grid = xr.open_dataset(grid_path)
@@ -268,30 +263,6 @@ def main():
                 continue
             kept, stacks = zip(*results)
             data_3d = np.stack(stacks).astype(np.float32)
-            # station check remains sequential (cheap relative to the grid)
-            station_rmse = [np.nan] * len(kept)
-            if not skip_station:
-                station_rmse = []
-                for t in kept:
-                    df_t = panel[panel["time"] == t]
-                    preds_st = []
-                    names = df_t["station_name"].tolist()
-                    for name in names:
-                        donors = df_t[df_t["station_name"] != name]
-                        qry = df_t[df_t["station_name"] == name]
-                        y1 = model.predict_frame(donors, qry, var)
-                        preds_st.append(float(y1[0]) if len(y1) else np.nan)
-                    preds_st = np.asarray(preds_st, dtype=np.float32)
-                    met = compute_metrics(df_t[var].to_numpy(), preds_st)
-                    station_rmse.append(met["rmse"])
-                    if save_llocv:
-                        for name, obs, pr in zip(df_t["station_name"], df_t[var], preds_st):
-                            llocv_records.append({
-                                "time": t, "station_name": name, "variable": var,
-                                "observed": float(obs), "predicted": float(pr),
-                                "resolution_m": int(res),
-                            })
-
             n_kept = len(kept)
             # data_3d already stacked to n_kept; no slice needed
             time_coord = pd.DatetimeIndex(pd.to_datetime(kept, utc=True)).tz_convert(
@@ -304,7 +275,6 @@ def main():
             if "elev" in grid:
                 ds["elev"] = (("y", "x"), grid.elev.values.astype(np.float32))
             ds["k"] = ("time", np.full(n_kept, kcfg.k, dtype=np.int16))
-            ds["station_rmse"] = ("time", np.asarray(station_rmse, dtype=np.float32))
             ds.attrs.update({
                 "title": f"{var} - Kriging - {time_res} - {domain}",
                 "domain": domain,
@@ -328,22 +298,11 @@ def main():
                 "created": datetime.now().isoformat(),
             })
             out_file.parent.mkdir(parents=True, exist_ok=True)
-            ds.to_netcdf(out_file, engine="netcdf4")
+            save_map_with_partials(ds, out_file, time_res)
             print(f"  saved {n_kept} timesteps → {out_file}")
             grid.close()
             del data_3d, ds
             gc.collect()
-
-        if save_llocv and llocv_records:
-            llocv_path = get_llocv_path(
-                "Kriging", domain, var, resolutions[0],
-                start_date=str(start.date()),
-                end_date=str(end.date()),
-                time_resolution=time_res,
-            )
-            pd.DataFrame(llocv_records).to_parquet(llocv_path, index=False)
-            print(f"  frozen station check → {llocv_path}")
-            print("  note: not nested station LLOCV (see llocv_kriging.py)")
 
     print("\nKriging production finished.")
 

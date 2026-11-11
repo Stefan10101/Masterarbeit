@@ -79,8 +79,41 @@ def find_k_nearest_context_points(
         return torch.empty((B, 0, k), dtype=torch.long, device=s_target.device), k
 
     dist = torch.cdist(s_target, s_context)  # (B, M, N)
-    nearest = dist.topk(k, dim=-1, largest=False).indices  # (B, M, k)
+    # For large M the dense distance matrix is the main produce cost.
+    # Chunk if the allocation would be huge.
+    if M * N > 50_000_000:
+        parts = []
+        step = max(1, 50_000_000 // N)
+        for i in range(0, M, step):
+            d = torch.cdist(s_target[:, i:i + step], s_context)
+            parts.append(d.topk(k, dim=-1, largest=False).indices)
+        nearest = torch.cat(parts, dim=1)
+    else:
+        nearest = dist.topk(k, dim=-1, largest=False).indices
     return nearest, k
+
+
+def _chunked_cross_attention(
+    attn: MultiHeadCrossAttentionWrapper,
+    query: torch.Tensor,
+    gathered_keys: torch.Tensor,
+    gathered_values: torch.Tensor,
+    chunk: int = 4096,
+) -> torch.Tensor:
+    """Run cross-attention in target chunks.
+
+    A single call on M≈40k, k=15, D=512 builds multi-GB intermediates and
+    spikes a 12 GB card. Fixed chunks keep peak VRAM flat.
+    query: (B, M, D), gathered_*: (B, M, k, D)
+    """
+    B, M, D = query.shape
+    outs = []
+    for i in range(0, M, chunk):
+        q = query[:, i:i + chunk].reshape(-1, 1, D)
+        k = gathered_keys[:, i:i + chunk].reshape(-1, gathered_keys.size(2), D)
+        v = gathered_values[:, i:i + chunk].reshape(-1, gathered_values.size(2), D)
+        outs.append(attn(q, k, v).reshape(B, -1, D))
+    return torch.cat(outs, dim=1)
 
 
 class MultiHeadCrossAttentionWrapper(nn.Module):
@@ -160,15 +193,19 @@ class LocalizedMeanAttributeEncoder(nn.Module):
             r_key = self.key_norm(r_key)
             r_query = self.query_norm(r_query)
 
-        nearest_indices, final_k = find_k_nearest_context_points(s_target, s_context, min(self.k, N))
-        batch_idx = torch.arange(B, device=r_key.device).view(B, 1, 1).expand(B, M, final_k)
-        gathered_keys = r_key[batch_idx, nearest_indices]
-        gathered_values = r_value[batch_idx, nearest_indices]
-
-        q = r_query.reshape(B * M, 1, D)
-        k = gathered_keys.reshape(B * M, final_k, D)
-        v = gathered_values.reshape(B * M, final_k, D)
-        out = self.cross_attention(q, k, v).reshape(B, M, D)
+        # Chunk targets so the (M, k, D) gather and the attention never
+        # allocate the full tile at once. This is what was spiking the GPU.
+        chunk = 4096
+        outs = []
+        for i in range(0, M, chunk):
+            s_t = s_target[:, i:i + chunk]
+            rq = r_query[:, i:i + chunk]
+            ni, fk = find_k_nearest_context_points(s_t, s_context, min(self.k, N))
+            bidx = torch.arange(B, device=r_key.device).view(B, 1, 1).expand(B, s_t.size(1), fk)
+            gk = r_key[bidx, ni]
+            gv = r_value[bidx, ni]
+            outs.append(_chunked_cross_attention(self.cross_attention, rq, gk, gv, chunk=chunk))
+        out = torch.cat(outs, dim=1)
         if self.use_layer_norm:
             out = self.output_norm(out)
         return out
@@ -234,13 +271,18 @@ class LocalizedVarianceEncoder(nn.Module):
             v_key = self.key_norm(v_key)
             v_query = self.query_norm(v_query)
 
-        nearest_indices, final_k = find_k_nearest_context_points(s_target, s_context, min(self.k, N))
-        batch_idx = torch.arange(B, device=v_key.device).view(B, 1, 1).expand(B, M, final_k)
-        gathered_keys = v_key[batch_idx, nearest_indices]
-
-        q = v_query.reshape(B * M, 1, D)
-        k = gathered_keys.reshape(B * M, final_k, D)
-        out = self.cross_attention(q, k, k).reshape(B, M, D)
+        # Same target chunking as the mean encoder. v_dim=512 makes the
+        # unchunked gather the largest single allocation in the forward.
+        chunk = 4096
+        outs = []
+        for i in range(0, M, chunk):
+            s_t = s_target[:, i:i + chunk]
+            vq = v_query[:, i:i + chunk]
+            ni, fk = find_k_nearest_context_points(s_t, s_context, min(self.k, N))
+            bidx = torch.arange(B, device=v_key.device).view(B, 1, 1).expand(B, s_t.size(1), fk)
+            gk = v_key[bidx, ni]
+            outs.append(_chunked_cross_attention(self.cross_attention, vq, gk, gk, chunk=chunk))
+        out = torch.cat(outs, dim=1)
         if self.use_layer_norm:
             out = self.output_norm(out)
         return out
@@ -256,11 +298,20 @@ class MeanLocationEncoder(nn.Module):
         s_context = s_context.float()
         s_target = s_target.float()
         y_context = y_context.float()
-        w_ctx = self.mlp(torch.cat([s_context, y_context], dim=-1))
+        w_ctx = self.mlp(torch.cat([s_context, y_context], dim=-1))  # (B, N, w)
         temp = torch.exp(self.log_temp).clamp(min=1e-3, max=10.0)
-        dist = torch.cdist(s_target, s_context, p=1.0)
-        attn = torch.softmax(-dist / temp, dim=-1)
-        return torch.bmm(attn, w_ctx)
+        B, M, _ = s_target.shape
+        # Dense cdist+softmax over all targets is the produce bottleneck
+        # (spikes the GPU then drops). Chunk the targets so peak memory stays
+        # bounded and the GPU stays busy instead of thrashing.
+        chunk = 8192
+        outs = []
+        for i in range(0, M, chunk):
+            st = s_target[:, i:i + chunk]
+            dist = torch.cdist(st, s_context, p=1.0)          # (B, m, N)
+            attn = torch.softmax(-dist / temp, dim=-1)
+            outs.append(torch.bmm(attn, w_ctx))
+        return torch.cat(outs, dim=1)
 
 
 class MeanDecoder(nn.Module):

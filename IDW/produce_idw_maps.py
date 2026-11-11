@@ -30,6 +30,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from idw_core import get_valid_targets, interpolate_idw
 from idw_data import load_config, load_global_params, load_panel
+from shared.map_io import save_map_with_partials
 from paths import get_interpolated_map_path, get_master_grid_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res, variables_from_cfg
 
@@ -169,7 +170,7 @@ def main():
                 "crs": "EPSG:31287",
                 "created": datetime.now().isoformat(),
             })
-            ds.to_netcdf(out_file, engine="netcdf4")
+            save_map_with_partials(ds, out_file, time_res)
             print(f"  saved {out_file.name}  ({len(results)} timesteps)")
             del data_3d, ds, results, tasks
             gc.collect()

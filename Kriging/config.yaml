@@ -7,7 +7,7 @@ end_date: "2025-12-31"
 resolutions_to_process: [500]
 variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
 min_stations_per_field: 10
-overwrite_maps: true
+overwrite_maps: false
 aggregation:
   weekly:
     time_col: year_week

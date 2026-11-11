@@ -18,6 +18,7 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from shared.map_io import save_map_with_partials
 from paths import get_interpolated_map_path, get_master_grid_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.splits.evaluation_sets import apply_evaluation_protocol
@@ -165,7 +166,7 @@ def main():
             da = xr.DataArray(np.stack(fields), dims=("time", "y", "x"),
                               coords={"time": np.array(used), "y": y, "x": x}, name=var)
             out = get_interpolated_map_path("Frei", domain, var, res, cfg["start_date"], cfg["end_date"], time_res)
-            xr.Dataset({var: da}).to_netcdf(out)
+            save_map_with_partials(xr.Dataset({var: da}), out, time_res)
             print(f"wrote {out} n={len(fields)}", flush=True)
 
 

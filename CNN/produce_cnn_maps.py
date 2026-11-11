@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CNN production maps. Trains if no frozen weights exist."""
+"""CNN production maps. Loads frozen weights and interpolates the grid."""
 
 from __future__ import annotations
 
@@ -19,10 +19,11 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from shared.map_io import save_map_with_partials
 from paths import get_cnn_model_path, get_interpolated_map_path, get_master_grid_path
 from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_fz_raster, idw_raster, station_to_raster, two_step_var
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, attach_temperature, attach_station_tpi
-from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned, train_one
+from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 
 try:
@@ -103,10 +104,13 @@ def main():
                 panel = attach_temperature(panel, cfg)
             if str(var).lower().startswith("wind"):
                 panel = attach_station_tpi(panel)
+            panel, _hours = apply_hour_cut(panel, time_res, args.hours)
+            # Months / quick only restrict prediction. Training (if weights missing)
+            # stays on the full panel so a 2025-only produce still has train rows.
+            pred = panel
             if args.quick or args.months:
                 from cnn_data import subset_times
-                panel = subset_times(panel, args.months or "seasonal4")
-            panel, _hours = apply_hour_cut(panel, time_res, args.hours)
+                pred = subset_times(panel, args.months or "seasonal4")
             ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))
             wpath = get_cnn_model_path(var, time_res)
             print(f"{var} weights={wpath} exists={wpath.exists()}", flush=True)
@@ -126,17 +130,13 @@ def main():
                     flush=True,
                 )
             else:
-                print(f"{var} no weights, training…", flush=True)
-                model, _ = train_one(
-                    panel, var, ccfg, elev, clc, gx, gy,
-                    slope, sinasp, cosasp, time_res=time_res,
-                    trace=precip_trace(cfg, time_res, var),
-                    cfg=cfg,
+                raise FileNotFoundError(
+                    f"{var}: no CNN weights at {wpath}. "
+                    "Run train_cnn.py first; produce only interpolates."
                 )
-                torch.save(model.state_dict(), wpath)
             fields, used = [], []
-            subdaily = is_subdaily(panel, time_res)
-            times = list(panel.groupby("time"))
+            subdaily = is_subdaily(pred, time_res)
+            times = list(pred.groupby("time"))
             n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
 
             def prep(item):
@@ -241,7 +241,7 @@ def main():
                               coords={"time": np.array(used), "y": gy, "x": gx}, name=var)
             out = get_interpolated_map_path("CNN", domain, var, res, cfg["start_date"], cfg["end_date"], time_res)
             print(f"{var} write {out}", flush=True)
-            xr.Dataset({var: da}).to_netcdf(out)
+            save_map_with_partials(xr.Dataset({var: da}), out, time_res)
             print(f"wrote {out} fields={len(fields)} {time.time() - t_var:.0f}s", flush=True)
 
 

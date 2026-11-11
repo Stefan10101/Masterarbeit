@@ -27,17 +27,32 @@ import warnings
 warnings.filterwarnings("ignore")
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
+from shared.map_io import save_map_with_partials
 from paths import (
     get_rfsi_tuned_params_path,
     get_aggregated_data_path,
     get_domain_stations_path,
     get_interpolated_map_path,
-    get_llocv_path,
     get_master_grid_path,
     get_rfsi_model_path,
 )
+def subset_times(panel, spec):
+    """Local copy. Months filter for prediction only."""
+    if spec is None or spec == "" or str(spec).lower() in ("all", "none"):
+        return panel
+    import pandas as pd
+    SEASONAL4_MONTHS = (2, 5, 8, 11)
+    spec = str(spec).strip().lower()
+    if spec == "seasonal4":
+        times = pd.to_datetime(panel["time"])
+        return panel.loc[times.dt.month.isin(SEASONAL4_MONTHS)].copy()
+    keys = {s.strip() for s in spec.split(",") if s.strip()}
+    stamp = pd.to_datetime(panel["time"]).dt.strftime("%Y-%m")
+    return panel.loc[stamp.isin(keys)].copy()
+
+
 from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, cov_switches, extras_for_var, neighbor_width, two_step_var
-from rfsi_optimizer import compute_metrics
+from shared.splits.evaluation_sets import apply_evaluation_protocol
 from shared.time_res import add_time_res_arg, apply_time_res, variables_from_cfg
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -56,7 +71,6 @@ rfsi_cfg = cfg.get("rfsi", {})
 RF_FIXED = dict(rfsi_cfg.get("rf_fixed", {"n_estimators": 250, "random_state": 22}))
 N_OBS = int(rfsi_cfg.get("n_obs", 10))
 CHUNK_SIZE = int(rfsi_cfg.get("predict_chunk_size", 250_000))
-SAVE_LLOCV = bool(rfsi_cfg.get("save_llocv", True))
 SAVE_MODEL = bool(rfsi_cfg.get("save_model", True))
 USE_ELEV, USE_LC = cov_switches(cfg)
 MIN_STATIONS = cfg.get("min_stations_per_field", 10)
@@ -165,7 +179,7 @@ def main():
     print("=" * 80)
     print(f"RFSI pooled production | {DOMAIN} | {TIME_RES}")
     print(f"Period: {START_DATE.date()} → {END_DATE.date()}")
-    print(f"n_obs={N_OBS}  n_estimators={RF_FIXED.get('n_estimators')}  save_llocv={SAVE_LLOCV}")
+    print(f"n_obs={N_OBS}  n_estimators={RF_FIXED.get('n_estimators')}")
     print("=" * 80)
 
     station_data = load_aggregated_data()
@@ -234,24 +248,31 @@ def main():
         if str(var).lower().startswith("rh") and rh_t_mode in ("predicted", "observed") and "temp_mean" in station_data.columns:
             tjoin = station_data[["station_name", "time", "temp_mean"]]
             valid = valid.merge(tjoin, on=["station_name", "time"], how="left")
-        if args.quick or args.months:
-            from Kriging.kriging_data import subset_times, subset_splits
-            valid = subset_times(valid, args.months or "seasonal4")
-            valid = subset_splits(valid.assign(split="test"), "test") if False else valid
-            if args.quick:
-                spec_start = pd.Timestamp("2024-01-01")
-                valid = valid[valid["time"] >= spec_start]
+        # Tag protocol splits. Fit on train+dev only.
+        # --months / --quick select prediction times, never the fit set.
+        valid, _, _, _ = apply_evaluation_protocol(valid, variable=var)
+        fit_valid = valid[valid["split"].isin(("train", "dev"))]
+        if fit_valid.empty:
+            print(f"  [SKIP] {var}: no train/dev rows")
+            continue
+        pred_valid = valid
+        if args.months:
+            pred_valid = subset_times(valid, args.months)
+        elif args.quick:
+            pred_valid = subset_times(valid, "seasonal4")
+            spec_start = pd.Timestamp("2024-01-01")
+            pred_valid = pred_valid[pred_valid["time"] >= spec_start]
 
-        n_times = valid["time"].nunique()
-        n_stat = valid["station_name"].nunique()
-        print(f"  {len(valid):,} rows | {n_stat} stations | {n_times} timestamps")
+        n_times = pred_valid["time"].nunique()
+        n_stat = fit_valid["station_name"].nunique()
+        print(f"  fit {len(fit_valid):,} rows | pred {len(pred_valid):,} rows | {n_stat} stations | {n_times} pred timestamps")
         if n_stat < MIN_STATIONS:
             print("  too few stations — skip")
             continue
 
         X_cov, encoder = prepare_covariates(
-            valid, fit_encoder=True, use_elev=use_elev, use_lc=use_lc,
-            extras=extras_for_var(valid, var, rh_t_mode, cfg),
+            fit_valid, fit_encoder=True, use_elev=use_elev, use_lc=use_lc,
+            extras=extras_for_var(fit_valid, var, rh_t_mode, cfg),
         )
         model = RFSI(
             n_obs=n_obs, rf_params=var_params,
@@ -261,9 +282,9 @@ def main():
         )
         print("  fitting pooled forest …")
         model.fit_pooled(
-            times=valid["time"].to_numpy(),
-            coords=valid[["x", "y"]].to_numpy(),
-            z=valid[var].to_numpy(),
+            times=fit_valid["time"].to_numpy(),
+            coords=fit_valid[["x", "y"]].to_numpy(),
+            z=fit_valid[var].to_numpy(),
             X_cov=X_cov,
             min_stations=MIN_STATIONS,
         )
@@ -275,7 +296,6 @@ def main():
                   "n_obs": n_obs, "rf_params": var_params}, model_path)
             print(f"  saved model → {model_path}")
 
-        llocv_records = []
 
         for res in RESOLUTIONS:
             print(f"\n  resolution {res} m")
@@ -336,13 +356,13 @@ def main():
             t_model = None
             if need_t_grid:
                 Xt, _ = prepare_covariates(
-                    valid, encoder=encoder, use_elev=use_elev, use_lc=use_lc
+                    fit_valid, encoder=encoder, use_elev=use_elev, use_lc=use_lc
                 )
                 t_model = RFSI(n_obs=n_obs, rf_params=var_params, var_name="temp_mean")
                 t_model.fit_pooled(
-                    times=valid["time"].to_numpy(),
-                    coords=valid[["x", "y"]].to_numpy(),
-                    z=valid["temp_mean"].to_numpy(),
+                    times=fit_valid["time"].to_numpy(),
+                    coords=fit_valid[["x", "y"]].to_numpy(),
+                    z=fit_valid["temp_mean"].to_numpy(),
                     X_cov=Xt,
                     min_stations=MIN_STATIONS,
                 )
@@ -367,13 +387,11 @@ def main():
                 print(f"  exists, skip {out_file.name}")
                 continue
 
-            time_steps = sorted(valid["time"].unique())
+            time_steps = sorted(pred_valid["time"].unique())
             data_3d = np.full((len(time_steps), ny, nx), np.nan, dtype=np.float32)
             kept_times = []
-            station_rmse = []
-
             for i, t in enumerate(tqdm(time_steps, desc=f"  {var} {res}m")):
-                df_t = valid[valid["time"] == t]
+                df_t = pred_valid[pred_valid["time"] == t]
                 if len(df_t) < MIN_STATIONS:
                     continue
                 coords = df_t[["x", "y"]].to_numpy()
@@ -407,17 +425,6 @@ def main():
                 data_3d[idx] = pred_map
                 kept_times.append(t)
 
-                st_pred = model.predict_stations(coords, z, X_cov_obs=X_t)
-                met = compute_metrics(z, st_pred)
-                station_rmse.append(met["rmse"])
-                if SAVE_LLOCV:
-                    for name, obs, pred in zip(df_t["station_name"].to_numpy(), z, st_pred):
-                        llocv_records.append({
-                            "time": t, "station_name": name, "variable": var,
-                            "observed": float(obs), "predicted": float(pred),
-                            "resolution_m": int(res),
-                        })
-
             n_kept = len(kept_times)
             data_3d = data_3d[:n_kept]
             time_coord = as_naive_utc(kept_times)
@@ -432,7 +439,6 @@ def main():
             if "elev" in grid_crop:
                 ds["elev"] = (("y", "x"), grid_crop.elev.values.astype(np.float32))
             ds["n_obs"] = ("time", np.full(n_kept, n_obs, dtype=np.int16))
-            ds["station_rmse"] = ("time", np.asarray(station_rmse, dtype=np.float32))
             ds.attrs.update({
                 "title": f"{var} - RFSI pooled - {TIME_RES} - {DOMAIN}",
                 "domain": DOMAIN,
@@ -451,22 +457,11 @@ def main():
                 "created": datetime.now().isoformat(),
             })
             out_file.parent.mkdir(parents=True, exist_ok=True)
-            ds.to_netcdf(out_file, engine="netcdf4")
+            save_map_with_partials(ds, out_file, TIME_RES)
             print(f"  saved {n_kept} timesteps → {out_file}")
             grid_ds.close()
             del data_3d, ds
             gc.collect()
-
-        if SAVE_LLOCV and llocv_records:
-            llocv_path = get_llocv_path(
-                "RFSI", DOMAIN, var, RESOLUTIONS[0],
-                start_date=str(START_DATE.date()),
-                end_date=str(END_DATE.date()),
-                time_resolution=TIME_RES,
-            )
-            pd.DataFrame(llocv_records).to_parquet(llocv_path, index=False)
-            print(f"  station predictions → {llocv_path}")
-            print("  note: frozen-model, self excluded; not nested station LLOCV")
 
     print("\nRFSI pooled production finished.")
 
