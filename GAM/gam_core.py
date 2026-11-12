@@ -35,6 +35,7 @@ class GAMConfig:
     min_clc_count: int = 15
     two_step: bool = True
     tau_wet: float = 0.5
+    log_amount: bool = True
     rscript: str = "Rscript"
     fit_r: str = "fit_gam.R"
     min_stations: int = 10
@@ -510,8 +511,9 @@ class GAMInterpolator:
                 # producing expm1 of large linear predictors.
                 cap = float(np.quantile(wet_vals, 0.99)) if wet_vals.size else 1e3
                 cap = max(cap, 1.0)
-                log_cap = np.log1p(cap)
-                amt_in = np.log1p(wet_vals)
+                use_log = bool(getattr(self.cfg, "log_amount", True))
+                log_cap = np.log1p(cap) if use_log else cap
+                amt_in = np.log1p(wet_vals) if use_log else wet_vals
                 # Subset pending extras to the wet donors so frame lengths match.
                 extra_wet = None
                 pending = getattr(self, "_pending_extra", None)
@@ -539,10 +541,8 @@ class GAMInterpolator:
                     elev_bin=eb_q,
                 )
                 raw = np.minimum(raw, log_cap)
-                amt = np.maximum(np.expm1(raw), 0.0)
-            else:
-                amt = np.zeros(np.asarray(xq).size)
-            gate = p >= self.cfg.tau_wet
+                amt = np.maximum(np.expm1(raw), 0.0) if use_log else np.maximum(raw, 0.0)
+                gate = p >= self.cfg.tau_wet
             # Robust fallback: if the occurrence model never clears tau but
             # wet donors exist, open the gate on the highest-p fraction that
             # matches the donor wet rate. Prevents constant-zero fields.

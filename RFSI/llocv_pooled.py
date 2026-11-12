@@ -197,9 +197,11 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
         fit_df, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
         extras=extras_for_var(fit_df, var, rh_t_mode, cfg),
     )
+    log_amt = str(cfg.get("time_resolution", "")).lower() != "monthly"
     model = RFSI(
         n_obs=n_obs, rf_params=rf_params,
         two_step=two_step, tau_wet=tau_wet, var_name=var,
+        log_amount=log_amt,
     )
     model.fit_pooled(
         times=fit_df["time"].to_numpy(),

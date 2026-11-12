@@ -34,7 +34,7 @@ import pandas as pd
 CODE_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_DIR))
 
-from paths import get_metadata_path, get_domain_stations_path, get_station_terrain_path
+from paths import get_metadata_path, get_domain_stations_path, get_station_terrain_path, get_aggregated_data_path
 from shared.splits.evaluation_sets import (
     select_stratified_holdout,
     select_tune_targets,
@@ -61,7 +61,7 @@ def load_station_table() -> pd.DataFrame:
     if not meta.exists():
         raise FileNotFoundError(f"stations_overview.csv not found at {meta}")
 
-    df = pd.read_csv(meta)
+    df = pd.read_csv(meta, encoding="utf-8")
     cols = {c.lower(): c for c in df.columns}
     lon = next((cols[c] for c in ("lon", "longitude", "long") if c in cols), None)
     lat = next((cols[c] for c in ("lat", "latitude") if c in cols), None)
@@ -92,6 +92,18 @@ def load_station_table() -> pd.DataFrame:
     out = out.dropna(subset=["lon", "lat"]).drop_duplicates("station_name")
     print(f"loaded {len(out)} stations from overview ({meta})")
     return out
+
+
+
+def stations_in_aggregate(time_res: str = "monthly") -> set:
+    """Station names that appear in the aggregated parquet (any non-null row)."""
+    path = get_aggregated_data_path("Source", time_res)
+    if not path.exists():
+        print(f"  warning: aggregate file not found at {path}; no station filter applied")
+        return set()
+    df = pd.read_parquet(path, columns=["station_name"])
+    return set(df["station_name"].astype(str).str.strip().unique())
+
 
 
 def main() -> None:
@@ -142,6 +154,14 @@ def main() -> None:
         held_set = set(held)
         pool = [sid for sid in measuring["station_name"].astype(str) if sid not in held_set]
 
+        # Keep only stations that actually appear in the aggregate file.
+        in_agg = stations_in_aggregate("monthly")
+        if in_agg:
+            before_h, before_p = len(held), len(pool)
+            held = [sid for sid in held if str(sid).strip() in in_agg]
+            pool = [sid for sid in pool if str(sid).strip() in in_agg]
+            print(f"  aggregate filter: held-out {before_h} → {len(held)}, pool {before_p} → {len(pool)}")
+
         hold_meta = {
             "variable": var,
             "fraction": args.fraction,
@@ -190,7 +210,7 @@ def main() -> None:
         "tune_frac": args.tune_frac,
         "test_frac": args.test_frac,
         "seed": args.seed,
-        "note": "Whole year-quarters; every season appears in each split when possible",
+        "note": "Contiguous chronological blocks: train 2020-Q1..2023-Q4, tune 2024-Q1..2024-Q4, test 2025-Q1..2025-Q4",
     }
     write_quarter_splits(qsplits, q_meta, QUARTER_SPLITS_PATH)
     print(f"\nwrote quarter splits → {QUARTER_SPLITS_PATH}")

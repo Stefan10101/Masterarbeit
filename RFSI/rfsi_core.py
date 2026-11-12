@@ -220,7 +220,7 @@ def assemble_pooled_training(
 class RFSI:
     def __init__(self, n_obs: int = 12, rf_params: Optional[dict] = None,
                  two_step: bool = False, tau_wet: float = 0.5, trace: float = 0.1,
-                 var_name: str = ""):
+                 var_name: str = "", log_amount: bool | None = None):
         self.n_obs = int(n_obs)
         self.rf_params = dict(rf_params) if rf_params else {
             "n_estimators": 400,
@@ -234,7 +234,7 @@ class RFSI:
         if md is not None:
             self.rf_params["max_depth"] = int(md)
         self.two_step = bool(two_step)
-        self.log_amount = bool(two_step)
+        self.log_amount = bool(two_step) if log_amount is None else bool(log_amount)
         self.tau_wet = float(tau_wet)
         self.trace = float(trace)
         self.var_name = str(var_name)
@@ -272,7 +272,7 @@ class RFSI:
             self.model_ind = self.RandomForestRegressor(**self.rf_params)
             self.model_ind.fit(Xi, yi)
             wet_m = z > self.trace
-            z_amt = np.log1p(np.maximum(z, 0.0))
+            z_amt = np.log1p(np.maximum(z, 0.0)) if self.log_amount else np.maximum(z, 0.0)
             if int(wet_m.sum()) >= max(min_stations * 3, 30):
                 Xc = None if X_cov is None else np.asarray(X_cov)[wet_m]
                 X, y, n = assemble_pooled_training(
@@ -341,21 +341,21 @@ class RFSI:
             )
             Xi = np.hstack([X_nb_i, np.asarray(X_cov_pred)]) if X_cov_pred is not None else X_nb_i
             p = np.clip(self.model_ind.predict(Xi), 0.0, 1.0)
-            if self.log_amount:
-                wet_m = z_obs > self.trace
-                if int(wet_m.sum()) >= 2:
-                    # Amount neighbours = wet stations only (matches training)
-                    X_nb_a = build_neighbor_features(
-                        coords_obs[wet_m],
-                        np.log1p(np.maximum(z_obs[wet_m], 0.0)),
-                        coords_pred,
-                        n_obs=self.n_obs, exclude_self=False,
-                    )
-                    X_nb_a = np.nan_to_num(X_nb_a, nan=0.0)
-                    Xa = np.hstack([X_nb_a, np.asarray(X_cov_pred)]) if X_cov_pred is not None else X_nb_a
-                    hat = np.expm1(self.model.predict(Xa))
-                else:
-                    hat = np.zeros(len(coords_pred), dtype=np.float64)
+            wet_m = z_obs > self.trace
+            if int(wet_m.sum()) >= 2:
+                # Amount neighbours = wet stations only (matches training)
+                z_nb = np.log1p(np.maximum(z_obs[wet_m], 0.0)) if self.log_amount else np.maximum(z_obs[wet_m], 0.0)
+                X_nb_a = build_neighbor_features(
+                    coords_obs[wet_m], z_nb, coords_pred,
+                    n_obs=self.n_obs, exclude_self=False,
+                )
+                X_nb_a = np.nan_to_num(X_nb_a, nan=0.0)
+                Xa = np.hstack([X_nb_a, np.asarray(X_cov_pred)]) if X_cov_pred is not None else X_nb_a
+                hat = self.model.predict(Xa)
+                if self.log_amount:
+                    hat = np.expm1(hat)
+            else:
+                hat = np.zeros(len(coords_pred), dtype=np.float64)
             hat = np.where(p >= self.tau_wet, np.maximum(hat, 0.0), 0.0)
         return clip_var(self.var_name, hat)
 
@@ -394,28 +394,31 @@ class RFSI:
         # (dry queries have no self in the wet donor set).
         wet_m = z_obs > self.trace
         hat = np.zeros(len(coords_obs), dtype=np.float64)
-        if int(wet_m.sum()) >= 2 and self.log_amount:
+        if int(wet_m.sum()) >= 2:
             wet_coords = coords_obs[wet_m]
-            wet_log = np.log1p(np.maximum(z_obs[wet_m], 0.0))
+            wet_vals = np.log1p(np.maximum(z_obs[wet_m], 0.0)) if self.log_amount else np.maximum(z_obs[wet_m], 0.0)
             X_cov_w = None if X_cov_obs is None else np.asarray(X_cov_obs)[wet_m]
             X_cov_d = None if X_cov_obs is None else np.asarray(X_cov_obs)[~wet_m]
 
+            def _inv(arr):
+                return np.expm1(arr) if self.log_amount else arr
+
             if wet_m.any():
                 X_nb_w = build_neighbor_features(
-                    wet_coords, wet_log, wet_coords,
+                    wet_coords, wet_vals, wet_coords,
                     n_obs=self.n_obs, exclude_self=True,
                 )
                 X_nb_w = np.nan_to_num(X_nb_w, nan=0.0)
                 Xw = np.hstack([X_nb_w, X_cov_w]) if X_cov_w is not None else X_nb_w
-                hat[wet_m] = np.expm1(self.model.predict(Xw))
+                hat[wet_m] = _inv(self.model.predict(Xw))
             if (~wet_m).any():
                 X_nb_d = build_neighbor_features(
-                    wet_coords, wet_log, coords_obs[~wet_m],
+                    wet_coords, wet_vals, coords_obs[~wet_m],
                     n_obs=self.n_obs, exclude_self=False,
                 )
                 X_nb_d = np.nan_to_num(X_nb_d, nan=0.0)
                 Xd = np.hstack([X_nb_d, X_cov_d]) if X_cov_d is not None else X_nb_d
-                hat[~wet_m] = np.expm1(self.model.predict(Xd))
+                hat[~wet_m] = _inv(self.model.predict(Xd))
         hat = np.where(p >= self.tau_wet, np.maximum(hat, 0.0), 0.0)
         return clip_var(self.var_name, hat)
 

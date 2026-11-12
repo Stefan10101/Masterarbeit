@@ -87,6 +87,7 @@ def cfg_to_frei(cfg, overrides=None) -> FreiConfig:
         lam_z=float(o.get("lam_z", f.get("lam_z", 150.0))),
         two_step=bool(f.get("two_step", True)),
         tau_wet=float(o.get("tau_wet", f.get("tau_wet", 0.5))),
+        log_amount=str(cfg.get("time_resolution", "")).lower() != "monthly",
         trace=float(o.get("trace", f.get("trace", 0.1))),
         min_stations=int(cfg.get("min_stations_per_field", 10)),
         predict_tile=int(f.get("predict_tile", 20000)),

@@ -4,7 +4,8 @@ train_frac: 0.7
 tune_frac: 0.15
 test_frac: 0.15
 seed: 42
-note: Whole year-quarters; every season appears in each split when possible
+note: 'Contiguous chronological blocks: train 2020-Q1..2023-Q4, tune 2024-Q1..2024-Q4,
+  test 2025-Q1..2025-Q4'
 splits:
   train:
   - 2020-Q1

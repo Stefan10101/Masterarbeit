@@ -125,7 +125,8 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
             continue
         val = train[train["split"] == "dev"] if "dev" in train["split"].values else None
         model = RGI(rcfg)
-        model.fit(train, var, val_df=val if val is not None and len(val) else None)
+        log_amt = str(cfg.get("time_resolution", "")).lower() != "monthly"
+        model.fit(train, var, val_df=val if val is not None and len(val) else None, force_log_amount=log_amt)
         # Same-timestamp senders, excluding the held-out stations.
         for t, hold_t in hold.groupby("time", sort=False):
             others = panel[(panel["time"] == t) & (~panel["station_name"].isin(hold_set))]

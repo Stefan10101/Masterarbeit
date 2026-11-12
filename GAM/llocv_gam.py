@@ -36,11 +36,19 @@ from gam_data import (
 
 
 
-def _extra(df):
-    """Enabled continuous core covariates present on the frame."""
-    cols = ("smooth_elev", "northness",
-            "dist_to_coast",
-            "basin_continuity", "elev_above_valley")
+def _extra(df, cfg=None):
+    """Enabled continuous core covariates present on the frame.
+
+    Columns already passed as dedicated arguments (elev, slope, tpi,
+    signed_dist_to_ridge, clc) are skipped so they are not double-counted.
+    """
+    from shared.terrain import enabled_covariates
+    from gam_data import load_gam_config
+    skip = {"elev", "clc_level2", "clc", "slope", "tpi", "signed_dist_to_ridge",
+            "sinasp", "cosasp"}
+    if cfg is None:
+        cfg = load_gam_config()
+    cols = [c for c in enabled_covariates(cfg) if c not in skip]
     out = {c: df[c].to_numpy() for c in cols if c in df.columns}
     return out or None
 
@@ -75,6 +83,7 @@ def cfg_to_gam(cfg, overrides=None) -> GAMConfig:
         min_clc_count=int(g.get("min_clc_count", 15)),
         two_step=bool(g.get("two_step", True)),
         tau_wet=float(o.get("tau_wet", g.get("tau_wet", 0.5))),
+        log_amount=str(cfg.get("time_resolution", "")).lower() != "monthly",
         rscript=str(g.get("rscript", "Rscript")),
         fit_r=str(g.get("fit_r", "fit_gam.R")),
         min_stations=int(cfg.get("min_stations_per_field", 10)),

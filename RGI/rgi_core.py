@@ -406,19 +406,10 @@ class RGI:
             yhat = np.expm1(yhat)
         yhat = clip_var(var or self.cfg.var_name, yhat)
         if self.ind is not None:
-            p_wet = np.asarray(self.ind.predict_frame(obs_df, query_df, var), dtype=np.float64)
-            # Indicator head is unbounded; absolute values are poorly calibrated.
-            # Rank-gate to the donor wet fraction so the scale of p does not matter.
-            raw_obs = np.asarray(obs_df[var], dtype=np.float64)
-            wet_frac = float(np.mean(raw_obs > self.cfg.trace)) if raw_obs.size else 0.0
-            if wet_frac <= 0.0 or p_wet.size == 0:
-                gate = np.zeros(p_wet.size, dtype=bool)
-            else:
-                k = max(1, int(np.round(wet_frac * p_wet.size)))
-                k = min(k, p_wet.size)
-                thr = np.partition(p_wet, -k)[-k]
-                gate = p_wet >= thr
-            yhat = np.where(gate, np.maximum(yhat, 0.0), 0.0)
+            p_raw = np.asarray(self.ind.predict_frame(obs_df, query_df, var), dtype=np.float64)
+            # Indicator head is unbounded. Sigmoid to a probability, then soft-gate.
+            p_wet = 1.0 / (1.0 + np.exp(-np.clip(p_raw, -20, 20)))
+            yhat = p_wet * np.maximum(yhat, 0.0)
         return yhat
 
     def predict_stations_at_time(self, df_t, var: str, hold_names) -> np.ndarray:

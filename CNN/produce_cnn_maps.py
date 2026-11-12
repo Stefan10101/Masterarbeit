@@ -154,7 +154,16 @@ def main():
                     gx, gy, elev,
                     p=model.cfg.idw_p, Fz=model.cfg.idw_fz, k=model.cfg.idw_k,
                 )
-                if getattr(model, "log_amount", False):
+                log_res = bool(getattr(model, "log_residual", False))
+                if log_res:
+                    dlog = np.log1p(np.maximum(val, 0.0))
+                    base = idw_fz_raster(
+                        sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(), dlog,
+                        gx, gy, elev,
+                        p=model.cfg.idw_p, Fz=model.cfg.idw_fz, k=model.cfg.idw_k,
+                    )
+                    inp, _ = station_to_raster(rows, cols, dlog, ny, nx)
+                elif getattr(model, "log_amount", False):
                     inp = np.log1p(np.maximum(field, 0.0)).astype(np.float32)
                 elif base is not None:
                     inp = np.where(mask > 0, field - base, 0.0).astype(np.float32)
@@ -200,13 +209,16 @@ def main():
                 if two_step and hat_t.ndim == 3 and hat_t.shape[0] >= 2:
                     pr = 1.0 / (1.0 + np.exp(-hat_t[0]))
                     amt = hat_t[1] * model.y_std + model.y_mean
-                    if model.log_amount:
+                    cap = float(getattr(model, "_amt_clip", 1e3))
+                    if getattr(model, "log_residual", False) and p["base"] is not None:
+                        amt = np.minimum(amt + p["base"], np.log1p(cap))
                         amt = np.expm1(amt)
+                    elif model.log_amount:
+                        amt = np.expm1(amt)
+                        amt = np.minimum(amt, cap)
                     elif p["base"] is not None:
                         amt = amt + p["base"]
                     amt = np.maximum(amt, 0.0)
-                    cap = float(getattr(model, "_amt_clip", 1e3))
-                    amt = np.minimum(amt, cap)
                     gate = pr >= model.cfg.tau_wet
                     hat = np.where(gate, amt, 0.0)
                 else:
@@ -223,7 +235,9 @@ def main():
                 # Proximity blend: near stations trust the CNN, far away the IDW.
                 d0 = float(getattr(model.cfg, "gate_d0_km", 35.0))
                 w = station_weight(p["mask"], d0_km=d0)
-                if p["base"] is not None:
+                # Log residual already contains the baseline; blending with a
+                # log-space base would be wrong.
+                if p["base"] is not None and not getattr(model, "log_residual", False):
                     hat = w * hat + (1.0 - w) * p["base"]
                 hat = clip_var(var, hat).astype(np.float32)
                 fields.append(hat)

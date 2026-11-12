@@ -16,10 +16,12 @@ Pool stations (donors) may come from the wider interpolation domain
 
 Temporal splits
 ---------------
-Whole year-quarters assigned to train / tune / test.
-Default ratio 70 / 15 / 15. Quarters are distributed so every season
-appears in each split (as far as the available quarters allow).
-Ratio and seed are configurable.
+Whole year-quarters assigned to train / tune / test as contiguous
+chronological blocks.
+  train: 2020-Q1 .. 2023-Q4
+  tune:  2024-Q1 .. 2024-Q4
+  test:  2025-Q1 .. 2025-Q4
+Fraction and seed arguments are ignored.
 
 Primary scores: held-out stations × test quarters.
 Secondary scores: pool stations (train + tune) on the same times.
@@ -362,41 +364,26 @@ def assign_quarter_splits(
     seed: int = 42,
 ) -> Dict[str, List[str]]:
     """
-    Assign whole year-quarters to train / tune / test.
+    Assign whole year-quarters to train / tune / test as contiguous
+    chronological blocks.
 
-    Quarters are grouped by season (Q1–Q4) and allocated inside each
-    season so that every split receives all seasons whenever possible.
-    The overall fractions are matched as closely as the discrete quarters allow.
+    Locked protocol (2026-11-09):
+      train: 2020-Q1 .. 2023-Q4
+      tune:  2024-Q1 .. 2024-Q4
+      test:  2025-Q1 .. 2025-Q4
+
+    The fraction / seed arguments are ignored; the blocks are fixed.
     """
-    if abs(train_frac + tune_frac + test_frac - 1.0) > 1e-6:
-        raise ValueError("fractions must sum to 1")
-
     quarters = _all_quarters(start_year, end_year)
-    by_season: Dict[int, List[str]] = {1: [], 2: [], 3: [], 4: []}
-    for q in quarters:
-        season = int(q[-1])
-        by_season[season].append(q)
-
-    rng = np.random.default_rng(seed)
     assignment: Dict[str, List[str]] = {"train": [], "tune": [], "test": []}
-
-    for season, qlist in by_season.items():
-        qlist = list(qlist)
-        rng.shuffle(qlist)
-        n = len(qlist)
-        n_train = int(round(n * train_frac))
-        n_tune = int(round(n * tune_frac))
-        # remainder goes to test so the counts sum to n
-        n_test = n - n_train - n_tune
-        if n_test < 0:  # rare rounding overflow
-            n_train += n_test
-            n_test = 0
-        assignment["train"].extend(qlist[:n_train])
-        assignment["tune"].extend(qlist[n_train:n_train + n_tune])
-        assignment["test"].extend(qlist[n_train + n_tune:])
-
-    for k in assignment:
-        assignment[k] = sorted(assignment[k])
+    for q in quarters:
+        year = int(q[:4])
+        if year <= 2023:
+            assignment["train"].append(q)
+        elif year == 2024:
+            assignment["tune"].append(q)
+        else:
+            assignment["test"].append(q)
     return assignment
 
 

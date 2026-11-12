@@ -471,7 +471,7 @@ class KrigingInterpolator:
         # often as it occurred (ETS 0.20). Depth stays a continuous field.
         snow = str(var).lower().startswith("snow")
         self.two_step = is_precip(var) and not snow
-        self.log_amount = self.two_step
+        self.log_amount = self.two_step and str(time_res).lower() != "monthly"
         self.trace = precip_trace(cfg_yaml, time_res, var) if self.two_step else 0.0
         z = train[var].to_numpy(dtype=np.float64)
         st, self.coord_stats = _standardize_fit(train["x"], train["y"], train["elev"])

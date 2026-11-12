@@ -36,11 +36,11 @@ cnn:
   weight_decay: 0.0001
   batch_times: 2
   tile_size: 128
-  tiles_per_batch: 8
+  tiles_per_batch: 48
   accum_steps: 4
   seed: 22
   device: auto
-  use_amp: false
+  use_amp: true
   n_folds: 5
   search:
     n_levels: [2, 3, 4, 5]

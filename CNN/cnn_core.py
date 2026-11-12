@@ -412,6 +412,9 @@ class CNNInterpolator:
         self.z_mean = 0.0
         self.z_std = 1.0
         self.log_amount = False
+        self.log_residual = False
+        self.in_mean = 0.0
+        self.in_std = 1.0
         self.in_ch = in_ch
         self.out_ch = out_ch
 
@@ -421,6 +424,8 @@ class CNNInterpolator:
             "y_mean": self.y_mean, "y_std": self.y_std,
             "z_mean": self.z_mean, "z_std": self.z_std,
             "log_amount": bool(self.log_amount),
+            "log_residual": bool(self.log_residual),
+            "in_mean": float(self.in_mean), "in_std": float(self.in_std),
             "amt_clip": float(getattr(self, "_amt_clip", 1e3)),
             "in_ch": self.in_ch, "out_ch": self.out_ch,
             "cfg": self.cfg.__dict__,
@@ -449,11 +454,16 @@ class CNNInterpolator:
         self.z_mean = blob["z_mean"]
         self.z_std = blob["z_std"]
         self.log_amount = bool(blob.get("log_amount", False))
+        self.log_residual = bool(blob.get("log_residual", False))
+        self.in_mean = float(blob.get("in_mean", self.y_mean))
+        self.in_std = float(blob.get("in_std", self.y_std))
         self._amt_clip = float(blob.get("amt_clip", 1e3))
 
     def pack_channels(self, value, mask, elev, clc, slope=None, sinasp=None, cosasp=None,
                       time_ch=None, extras=None, dx_m: float = 1000.0, dy_m: float = 1000.0):
-        v = np.where(mask > 0, (value - self.y_mean) / self.y_std, 0.0)
+        scale_m = self.in_mean if self.log_residual else self.y_mean
+        scale_s = self.in_std if self.log_residual else self.y_std
+        v = np.where(mask > 0, (value - scale_m) / max(scale_s, 1e-6), 0.0)
         elev = np.asarray(elev, dtype=np.float64)
         bad = ~np.isfinite(elev)
         if bad.any():
@@ -500,43 +510,101 @@ class CNNInterpolator:
             )
         return packed
 
-    def predict_raster(self, value, mask, elev, clc, slope=None, sinasp=None, cosasp=None,
-                       time_ch=None, two_step: bool = False, base=None, extras=None,
-                       var: str = "", donor_wet: float | None = None) -> np.ndarray:
+    def bind_static(self, elev, clc, slope=None, sinasp=None, cosasp=None,
+                    extras=None, n_time: int = 0, dx_m: float = 1000.0, dy_m: float = 1000.0):
+        """Pack terrain/CLC/extras once. Per-timestamp code only fills value, mask, weight, time."""
+        z = np.zeros(np.asarray(elev).shape, dtype=np.float32)
+        tch = [0.0] * int(n_time) if n_time else None
+        packed = self.pack_channels(
+            z, z, elev, clc, slope=slope, sinasp=sinasp, cosasp=cosasp,
+            time_ch=tch, extras=extras, dx_m=dx_m, dy_m=dy_m,
+        )
+        self._static = packed
+        self._n_time = int(n_time)
+        self._weight_idx = 3 + (3 if self.cfg.use_terrain else 0)
+        self._time_start = self._weight_idx + 1 + 16
+        self._dx_m = float(dx_m)
+        self._dy_m = float(dy_m)
+        self._d0 = float(getattr(self.cfg, "gate_d0_km", 35.0))
+
+    def pack_dynamic(self, value, mask, time_ch=None, rh_field=None):
+        """Copy the static pack and write the per-timestamp channels."""
+        ch = self._static.copy()
+        value = np.asarray(value, dtype=np.float32)
+        mask = np.asarray(mask, dtype=np.float32)
+        scale_m = self.in_mean if self.log_residual else self.y_mean
+        scale_s = self.in_std if self.log_residual else self.y_std
+        ch[0] = np.where(mask > 0, (value - scale_m) / max(scale_s, 1e-6), 0.0)
+        ch[1] = mask
+        ch[self._weight_idx] = station_weight(mask, self._dx_m, self._dy_m, self._d0)
+        if time_ch:
+            t0 = self._time_start
+            for j, tv in enumerate(time_ch):
+                ch[t0 + j] = float(tv)
+        if rh_field is not None:
+            ch[-1] = np.asarray(rh_field, dtype=np.float32)
+        return ch
+
+    def predict_packed(self, packed, two_step: bool = False, base=None,
+                       var: str = "", donor_wet: float | None = None,
+                       apply_clip: bool = True) -> np.ndarray:
+        """Forward on an already-packed tensor, then residual/two-step post-process."""
         self.net.eval()
-        ch = self.pack_channels(value, mask, elev, clc, slope, sinasp, cosasp, time_ch, extras=extras)
-        x = torch.from_numpy(ch).unsqueeze(0).to(self.device)
+        x = torch.from_numpy(np.ascontiguousarray(packed)).unsqueeze(0).to(self.device)
         with torch.no_grad():
             hat = self.net(x).cpu().numpy()[0]
+        w = packed[self._weight_idx] if hasattr(self, "_weight_idx") else None
         if two_step and hat.ndim == 3 and hat.shape[0] >= 2:
             p = 1.0 / (1.0 + np.exp(-hat[0]))
             amt = hat[1] * self.y_std + self.y_mean
-            if self.log_amount:
+            cap = float(getattr(self, "_amt_clip", 1e3))
+            if self.log_residual and base is not None:
+                # base is IDW of log1p. Cap in log space, then invert.
+                amt = np.minimum(amt + base, np.log1p(cap))
                 amt = np.expm1(amt)
+            elif self.log_amount:
+                amt = np.expm1(amt)
+                amt = np.minimum(amt, cap)
             elif base is not None:
                 amt = amt + base
             amt = np.maximum(amt, 0.0)
-            cap = float(getattr(self, "_amt_clip", 1e3))
-            amt = np.minimum(amt, cap)
+            if not self.log_residual:
+                amt = np.minimum(amt, cap)
             gate = p >= self.cfg.tau_wet
-            # Rank-gate fallback: if the indicator never clears tau but wet
-            # donors exist, open the highest-p fraction matching the donor rate.
             if not gate.any() and donor_wet is not None and donor_wet > 0 and p.size:
                 k = max(1, int(np.ceil(donor_wet * p.size)))
                 thr = np.partition(p.ravel(), -k)[-k]
                 gate = p >= thr
             out = np.where(gate, amt, 0.0)
-            w = station_weight(mask, d0_km=float(getattr(self.cfg, "gate_d0_km", 35.0)))
-            if base is not None:
+            # Log residual already contains the baseline. Blending it with a
+            # raw-mm base would be meaningless.
+            if base is not None and not self.log_residual:
+                if w is None:
+                    w = station_weight(packed[1] > 0, d0_km=float(getattr(self.cfg, "gate_d0_km", 35.0)))
                 out = w * out + (1.0 - w) * base
-            return clip_var(var, out).astype(np.float32)
+            if apply_clip:
+                out = clip_var(var, out)
+            return out.astype(np.float32)
         raw = hat[0] if hat.ndim == 3 else hat
         out = raw * self.y_std + self.y_mean
         if self.log_amount:
             out = np.expm1(out)
             cap = float(getattr(self, "_amt_clip", 1e3))
             out = np.minimum(np.maximum(out, 0.0), cap)
-        w = station_weight(mask, d0_km=float(getattr(self.cfg, "gate_d0_km", 35.0)))
+        elif base is not None:
+            out = out + base
         if base is not None:
+            if w is None:
+                w = station_weight(packed[1] > 0, d0_km=float(getattr(self.cfg, "gate_d0_km", 35.0)))
             out = w * out + (1.0 - w) * base
-        return clip_var(var, out).astype(np.float32)
+        if apply_clip:
+            out = clip_var(var, out)
+        return out.astype(np.float32)
+
+    def predict_raster(self, value, mask, elev, clc, slope=None, sinasp=None, cosasp=None,
+                       time_ch=None, two_step: bool = False, base=None, extras=None,
+                       var: str = "", donor_wet: float | None = None) -> np.ndarray:
+        ch = self.pack_channels(value, mask, elev, clc, slope, sinasp, cosasp, time_ch, extras=extras)
+        # pack_channels just set the layout; remember the weight index for the blend.
+        self._weight_idx = 3 + (3 if self.cfg.use_terrain else 0)
+        return self.predict_packed(ch, two_step=two_step, base=base, var=var, donor_wet=donor_wet)

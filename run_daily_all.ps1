@@ -20,32 +20,32 @@ function Run-Step($label, $cmd) {
 }
 
 # IDW
-#Run-Step "IDW tune"  "python IDW/tune_idw.py --time-resolution $res --max-times 0 --variables $($vars -join ' ')"
-#Run-Step "IDW llocv" "python IDW/llocv_idw.py --time-resolution $res --variables $($vars -join ' ')"
+Run-Step "IDW tune"  "python IDW/tune_idw.py --time-resolution $res --max-times 0 --variables $($vars -join ' ')"
+Run-Step "IDW llocv" "python IDW/llocv_idw.py --time-resolution $res --variables $($vars -join ' ')"
 # Run-Step "IDW produce" "python IDW/produce_idw_maps.py --time-resolution $res --variables $($vars -join ' ')"
 
 # Kriging
-#Run-Step "Kriging tune"  "python Kriging/tune_kriging.py --time-resolution $res --max-times 0 --variables $($vars -join ' ')"
-#Run-Step "Kriging llocv" "python Kriging/llocv_kriging.py --time-resolution $res --variables $($vars -join ' ')"
+Run-Step "Kriging tune"  "python Kriging/tune_kriging.py --time-resolution $res --max-times 0 --variables $($vars -join ' ')"
+Run-Step "Kriging llocv" "python Kriging/llocv_kriging.py --time-resolution $res --variables $($vars -join ' ')"
 # Run-Step "Kriging produce" "python Kriging/produce_kriging_maps.py --time-resolution $res --variables $($vars -join ' ')"
 
 # FREI
-#foreach ($v in $vars) {
-#    Run-Step "FREI tune $v"  "python FREI/tune_frei.py --time-resolution $res --max-times 0 --variable $v"
-#    Run-Step "FREI llocv $v" "python FREI/llocv_frei.py --time-resolution $res --variable $v"
+foreach ($v in $vars) {
+    Run-Step "FREI tune $v"  "python FREI/tune_frei.py --time-resolution $res --max-times 0 --variable $v"
+    Run-Step "FREI llocv $v" "python FREI/llocv_frei.py --time-resolution $res --variable $v"
 #    # Run-Step "FREI produce $v" "python FREI/produce_frei_maps.py --time-resolution $res --variable $v"
-#}
+}
 
 # GAM
-#foreach ($v in $vars) {
-#    #Run-Step "GAM tune $v"  "python GAM/tune_gam.py --time-resolution $res --max-times 0 --variable $v"
-#    Run-Step "GAM llocv $v" "python GAM/llocv_gam.py --time-resolution $res --variable $v"
+foreach ($v in $vars) {
+   Run-Step "GAM tune $v"  "python GAM/tune_gam.py --time-resolution $res --max-times 0 --variable $v"
+   Run-Step "GAM llocv $v" "python GAM/llocv_gam.py --time-resolution $res --variable $v"
 #    # Run-Step "GAM produce $v" "python GAM/produce_gam_maps.py --time-resolution $res --variable $v"
-#}
+}
 
 # RFSI
-#Run-Step "RFSI tune"  "python RFSI/tune_pooled.py --time-resolution $res --max-times 0 --variables $($vars -join ' ')"
-#Run-Step "RFSI llocv" "python RFSI/llocv_pooled.py --time-resolution $res --variables $($vars -join ' ')"
+Run-Step "RFSI tune"  "python RFSI/tune_pooled.py --time-resolution $res --max-times 0 --variables $($vars -join ' ')"
+Run-Step "RFSI llocv" "python RFSI/llocv_pooled.py --time-resolution $res --variables $($vars -join ' ')"
 # Run-Step "RFSI produce" "python RFSI/produce_rfsi_maps.py --time-resolution $res --variables $($vars -join ' ')"
 
 # CNN
