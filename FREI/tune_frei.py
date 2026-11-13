@@ -29,6 +29,7 @@ from paths import get_frei_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs, variables_from_cfg
 from shared.splits.evaluation_sets import apply_evaluation_protocol, load_tune_targets
 from frei_data import (
+    load_idw_residual_params,
     attach_temperature,
     compute_block,
     compute_metrics,
@@ -55,18 +56,25 @@ def _init(panel, cfg, packs, n_folds, var):
     _VAR = var
 
 
-def _eval_cell(nr, sh, k, aw):
-    fcfg = cfg_to_frei(_CFG, {"n_regions": nr, "shrink": sh, "k": k, "across_w": aw})
+def _eval_cell(nr, nsec, sh, aw):
+    # Residual p/Fz/k come from IDW (stored on _CFG for this run).
+    idw = getattr(_eval_cell, "idw", {"power": 2.0, "Fz": 0.3, "k": 12})
+    fcfg = cfg_to_frei(_CFG, {
+        "n_regions": nr, "n_sections": nsec, "shrink": sh, "across_w": aw,
+        "power": idw["power"], "Fz": idw["Fz"], "k": idw["k"],
+    })
     fcfg.select_metric = False
-    # Score fixed tune-targets on train+tune; donors exclude them.
     pred = run_llocv(_PANEL, _VAR, fcfg, _N_FOLDS, {"train"}, {"tune"}, _PACKS.get(int(nr)))
     met = compute_metrics(pred["observed"], pred["predicted"])
     nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0
     return {
         "n_regions": int(nr),
+        "n_sections": int(nsec),
         "shrink": float(sh),
-        "k": int(k),
         "across_w": float(aw),
+        "power": float(idw["power"]),
+        "Fz": float(idw["Fz"]),
+        "k": int(idw["k"]),
         "rmse": float(met["rmse"]),
         "n": int(len(pred)),
         "finite": nfin,
@@ -98,20 +106,20 @@ def _print_rows(var, results, best):
             flush=True,
         )
         if best is None or (np.isfinite(row["rmse"]) and row["rmse"] < best["rmse"]):
-            best = {k: row[k] for k in ("n_regions", "shrink", "k", "across_w", "rmse")}
+            best = {k: row[k] for k in ("n_regions", "n_sections", "shrink", "across_w", "power", "Fz", "k", "rmse")}
     return best
 
 
-def _coord_search(nregs, shrinks, ks, aws, jobs, var, defaults):
+def _coord_search(nregs, nsecs, shrinks, aws, jobs, var, defaults):
     locked = dict(defaults)
     best = None
     seen = set()
     all_rows = []
     builders = [
-        ("n_regions", lambda: [(nr, locked["shrink"], locked["k"], locked["across_w"]) for nr in nregs]),
-        ("shrink", lambda: [(locked["n_regions"], sh, locked["k"], locked["across_w"]) for sh in shrinks]),
-        ("k", lambda: [(locked["n_regions"], locked["shrink"], k, locked["across_w"]) for k in ks]),
-        ("across_w", lambda: [(locked["n_regions"], locked["shrink"], locked["k"], aw) for aw in aws]),
+        ("n_regions", lambda: [(nr, locked["n_sections"], locked["shrink"], locked["across_w"]) for nr in nregs]),
+        ("n_sections", lambda: [(locked["n_regions"], ns, locked["shrink"], locked["across_w"]) for ns in nsecs]),
+        ("shrink", lambda: [(locked["n_regions"], locked["n_sections"], sh, locked["across_w"]) for sh in shrinks]),
+        ("across_w", lambda: [(locked["n_regions"], locked["n_sections"], locked["shrink"], aw) for aw in aws]),
     ]
     for name, builder in builders:
         cells = [c for c in builder() if c not in seen]
@@ -124,8 +132,8 @@ def _coord_search(nregs, shrinks, ks, aws, jobs, var, defaults):
         all_rows.extend(rows)
         best = _print_rows(var, rows, best)
         locked["n_regions"] = best["n_regions"]
+        locked["n_sections"] = best["n_sections"]
         locked["shrink"] = best["shrink"]
-        locked["k"] = best["k"]
         locked["across_w"] = best["across_w"]
     return best, all_rows
 
@@ -178,9 +186,6 @@ def main():
                 n = max(1, int(round(args.max_times * len(ts) / max(panel["time"].nunique(), 1))))
                 keep.extend(rng.choice(ts, size=min(n, len(ts)), replace=False).tolist())
             panel = panel[panel["time"].isin(keep)].copy()
-        rh_mode = args.rh_t_mode or block.get("rh_t_mode", "none")
-        if var.lower().startswith("rh") and rh_mode in ("predicted", "observed"):
-            panel = attach_temperature(panel, cfg)
         panel = subset_times(panel, months)
         panel, hours = apply_hour_cut(panel, time_res, args.hours)
         jobs = cap_jobs(jobs, len(panel))
@@ -192,9 +197,11 @@ def main():
             flush=True,
         )
         nregs = list(search.get("n_regions", [block.get("n_regions", 6)]))
+        nsecs = list(search.get("n_sections", [block.get("n_sections", 3)]))
         shrinks = list(search.get("shrink", [block.get("shrink", 0.3)]))
-        ks = list(search.get("k", [block.get("k", 16)]))
         aws = list(search.get("across_w", [block.get("across_w", 4.0)]))
+        idw = load_idw_residual_params(time_res, var)
+        _eval_cell.idw = idw
         packs = {}
         for nr in nregs:
             print(f"building pack n_regions={nr}", flush=True)
@@ -202,23 +209,23 @@ def main():
         _init(panel, cfg, packs, n_folds, var)
         defaults = {
             "n_regions": int(block.get("n_regions", nregs[0])),
+            "n_sections": int(block.get("n_sections", nsecs[0])),
             "shrink": float(block.get("shrink", shrinks[0])),
-            "k": int(block.get("k", ks[0])),
             "across_w": float(block.get("across_w", aws[0])),
         }
         if mode == "grid":
-            cells = list(itertools.product(nregs, shrinks, ks, aws))
+            cells = list(itertools.product(nregs, nsecs, shrinks, aws))
             print(f"{var} grid cells={len(cells)}", flush=True)
             results = _run_cells(cells, jobs)
             best = _print_rows(var, results, None)
             all_rows = results
         else:
-            best, all_rows = _coord_search(nregs, shrinks, ks, aws, jobs, var, defaults)
+            best, all_rows = _coord_search(nregs, nsecs, shrinks, aws, jobs, var, defaults)
         if best is None:
             print(f"{var} no finite DEV result", flush=True)
             continue
         best["trace"] = precip_trace(cfg, time_res, var)
-        best["rh_t_mode"] = rh_mode if var.lower().startswith("rh") else "none"
+        best.update(idw)
         best["tune_months"] = months
         best["tune_mode"] = mode
         best["tune_folds"] = n_folds

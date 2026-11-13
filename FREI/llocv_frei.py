@@ -25,6 +25,7 @@ from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, app
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 from frei_core import FreiConfig, FreiInterpolator, two_step_var
 from frei_data import (
+    load_idw_residual_params,
     attach_temperature,
     data_sources,
     load_frei_config,
@@ -75,16 +76,16 @@ def cfg_to_frei(cfg, overrides=None) -> FreiConfig:
     o = overrides or {}
     return FreiConfig(
         n_regions=int(o.get("n_regions", f.get("n_regions", 6))),
+        n_sections=int(o.get("n_sections", f.get("n_sections", 3))),
         shrink=float(o.get("shrink", f.get("shrink", 0.3))),
         blend_km=float(f.get("blend_km", 15.0)),
-        summit_tpi=float(f.get("summit_tpi", 80.0)),
         coldpool_tpi=float(f.get("coldpool_tpi", -60.0)),
         accum_pct=float(f.get("accum_pct", 96.0)),
         k=int(o.get("k", f.get("k", 16))),
         power=float(o.get("power", f.get("power", 2.0))),
+        Fz=float(o.get("Fz", f.get("Fz", 0.3))),
         across_w=float(o.get("across_w", f.get("across_w", 4.0))),
         select_metric=bool(o.get("select_metric", f.get("select_metric", True))),
-        lam_z=float(o.get("lam_z", f.get("lam_z", 150.0))),
         two_step=bool(f.get("two_step", True)),
         tau_wet=float(o.get("tau_wet", f.get("tau_wet", 0.5))),
         log_amount=str(cfg.get("time_resolution", "")).lower() != "monthly",
@@ -93,12 +94,6 @@ def cfg_to_frei(cfg, overrides=None) -> FreiConfig:
         predict_tile=int(f.get("predict_tile", 20000)),
         seed=int(f.get("seed", 22)),
         across_w_grid=tuple(f.get("search", {}).get("across_w", [2.0, 4.0, 8.0])),
-        rh_t_mode=str(o.get("rh_t_mode", f.get("rh_t_mode", "none"))),
-        snow_terrain=bool(f.get("snow_terrain", True)),
-        wind_elev_bg=bool(f.get("wind_elev_bg", True)),
-        enabled_covariates=tuple(
-            c for c, on in (cfg.get("covariates") or {}).items() if on
-        ),
     )
 
 
@@ -233,8 +228,6 @@ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, p
             don[var].to_numpy(),
             q["x"].to_numpy(), q["y"].to_numpy(), q["elev"].to_numpy(),
             var=var,
-            extra_s=_covar_arrays(don, fcfg.enabled_covariates),
-            extra_q=_covar_arrays(q, fcfg.enabled_covariates),
         )
         if hat is None:
             return None
@@ -321,15 +314,12 @@ def main():
     for var in variables:
         tuned = load_tuned(var, time_res)
         tuned["trace"] = precip_trace(cfg, time_res, var)
-        if args.rh_t_mode:
-            tuned["rh_t_mode"] = args.rh_t_mode
+        tuned.update(load_idw_residual_params(time_res, var))
         fcfg = cfg_to_frei(cfg, tuned)
         if args.quick:
             fcfg.select_metric = False
         pack = pack_from_master(cfg, fcfg.n_regions)
         panel = load_panel(cfg, var)
-        if var.lower().startswith("rh") and fcfg.rh_t_mode in ("predicted", "observed"):
-            panel = attach_temperature(panel, cfg)
         if months:
             panel = subset_times(panel, months)
         panel, hours = apply_hour_cut(panel, time_res, args.hours)
@@ -341,7 +331,7 @@ def main():
         )
         out = get_nested_llocv_path("Frei", var, time_res, domain="full")
         pred.to_parquet(out, index=False)
-        print(f"{var} folds={n_folds} months={months or 'all'} hours={hours} rh_t={fcfg.rh_t_mode} -> {out}")
+        print(f"{var} folds={n_folds} months={months or 'all'} hours={hours} -> {out}")
         print_split_metrics(pred)
         if "split" in pred.columns and (pred["split"] == "test").any():
             part = pred[pred["split"] == "test"]

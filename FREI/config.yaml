@@ -1,4 +1,4 @@
-# Frei 2014 / SPARTACUS-style interpolator.
+# Frei 2014 / SPARTACUS-style interpolator (redesigned).
 domain:
   preset: full
 time_resolution: monthly
@@ -19,23 +19,19 @@ aggregation:
     time_col: timestamp
 
 frei:
-  profile: spartacus3
   n_regions: 6
+  n_sections: 3
   shrink: 0.3
   blend_km: 15.0
-  summit_tpi: 80.0
   coldpool_tpi: -60.0
   accum_pct: 96.0
   k: 16
   power: 2.0
+  Fz: 0.3
   across_w: 4.0
   select_metric: true
-  lam_z: 150.0
   two_step: true
   tau_wet: 0.5
-  rh_t_mode: predicted
-  snow_terrain: true
-  wind_elev_bg: true
   seed: 22
   n_folds: 5
   predict_tile: 20000
@@ -46,17 +42,6 @@ frei:
     produce_splits: all
   search:
     n_regions: [3, 4, 6, 8, 12]
+    n_sections: [1, 2, 3, 4, 5]
     shrink: [0.1, 0.3, 0.5, 0.8]
-    k: [4, 8, 16, 32, 64, 128]
     across_w: [1.0, 2.0, 4.0, 8.0]
-covariates:
-  elev: true
-  smooth_elev: true
-  slope: true
-  northness: true
-  tpi: true
-  clc: true
-  dist_to_coast: true
-  signed_dist_to_ridge: true
-  basin_continuity: true
-  elev_above_valley: true

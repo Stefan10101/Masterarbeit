@@ -24,6 +24,7 @@ from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, app
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from frei_core import FreiInterpolator, two_step_var
 from frei_data import (
+    load_idw_residual_params,
     attach_temperature,
     compute_block,
     data_sources,
@@ -95,8 +96,7 @@ def main():
             panel, _, _, _ = apply_evaluation_protocol(panel, variable=var)
             tuned = load_tuned(var, time_res)
             tuned["trace"] = precip_trace(cfg, time_res, var)
-            if args.rh_t_mode:
-                tuned["rh_t_mode"] = args.rh_t_mode
+            tuned.update(load_idw_residual_params(time_res, var))
             fcfg = cfg_to_frei(cfg, tuned)
             if var.lower().startswith("rh") and fcfg.rh_t_mode in ("predicted", "observed"):
                 panel = attach_temperature(panel, cfg)
@@ -113,7 +113,7 @@ def main():
             use_profile = not two_step_var(var)
             print(
                 f"{var} produce times={panel['time'].nunique()} split={splits} "
-                f"years={years or 'all'} months={months or 'all'} rh_t={fcfg.rh_t_mode}",
+                f"years={years or 'all'} months={months or 'all'}",
                 flush=True,
             )
             # Grid covariates for the linear background, same keys as LLOCV.
@@ -138,14 +138,9 @@ def main():
                 ts, sl = ts_sl
                 if sl["station_name"].nunique() < min_stations:
                     return None
-                t_obs = sl["temp_mean"].to_numpy() if "temp_mean" in sl.columns else None
-                extra_s = [sl[c].to_numpy(dtype=float) for c in cov_keys if c in sl.columns]
-                extra_q = [grid_cov[c] for c in cov_keys if c in grid_cov and c in sl.columns]
                 hat, _ = model.predict_timestamp(
                     sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(),
-                    sl[var].to_numpy(), xq, yq, zq, use_profile=use_profile, var=var,
-                    t_obs=t_obs, t_obs_q=None,
-                    extra_s=extra_s or None, extra_q=extra_q or None,
+                    sl[var].to_numpy(), xq, yq, zq, use_profile=True, var=var,
                 )
                 stamp = pd.Timestamp(ts)
                 if stamp.tzinfo is not None:

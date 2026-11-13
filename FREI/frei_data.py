@@ -218,3 +218,26 @@ def print_split_metrics(pred_df: pd.DataFrame) -> None:
         f"RMSE={met_all['rmse']:.3f}  MAE={met_all['mae']:.3f}  "
         f"NSE={met_all['nse']:.3f}  KGE={met_all['kge']:.3f}  CCC={met_all['ccc']:.3f}"
     )
+
+def load_idw_residual_params(time_res: str, var: str) -> dict:
+    """Load p/Fz/k that IDW saved. Maps p -> power. Fallback if missing.
+
+    Does not import IDW code; only reads the yaml path from paths.py.
+    """
+    from paths import get_idw_tuned_params_path
+    fallback = {"power": 2.0, "Fz": 0.3, "k": 12}
+    path = get_idw_tuned_params_path(var, time_res)
+    if not path.exists():
+        print(f"  [WARN] no IDW params for {var}/{time_res} — using {fallback}", flush=True)
+        return fallback
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    out = dict(fallback)
+    if "p" in raw:
+        out["power"] = float(raw["p"])
+    if "Fz" in raw:
+        out["Fz"] = float(raw["Fz"])
+    if "k" in raw:
+        out["k"] = int(raw["k"])
+    print(f"  IDW residual params {var}: power={out['power']} Fz={out['Fz']} k={out['k']}", flush=True)
+    return out

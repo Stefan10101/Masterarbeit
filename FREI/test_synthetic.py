@@ -28,26 +28,15 @@ def n_for(var: str) -> int:
     return 220 if var.startswith(("precip", "snow")) else 130
 
 
-def extras(df, var, drop=False):
-    if drop:
-        return None
-    cols = []
-    if var.startswith("snow"):
-        cols = ["slope", "northness"]
-    elif var.startswith("wind"):
-        cols = ["tpi"]
-    return [df[c].to_numpy() for c in cols if c in df.columns] or None
-
-
-def predict(donors, queries, var, drop=False):
-    fcfg = FreiConfig(n_regions=1, shrink=0.2, k=12, across_w=2.0,
-                      select_metric=False, min_stations=8, two_step=True)
+def predict(donors, queries, var):
+    fcfg = FreiConfig(n_regions=1, n_sections=3, shrink=0.2, k=12, across_w=2.0,
+                      Fz=0.3, select_metric=False, min_stations=8, two_step=True)
     model = FreiInterpolator(fcfg)
     hat, _ = model.predict_timestamp(
         donors["x"].to_numpy(), donors["y"].to_numpy(), donors["elev"].to_numpy(),
         donors[var].to_numpy(),
         queries["x"].to_numpy(), queries["y"].to_numpy(), queries["elev"].to_numpy(),
-        var=var, extra_s=extras(donors, var, drop), extra_q=extras(queries, var, drop),
+        var=var,
     )
     return hat
 
@@ -65,11 +54,8 @@ def run_one(var: str):
         assert_no_leak(donors, held)
         if len(queries) < 5:
             continue
-        hat = predict(donors, queries, var, drop=False)
+        hat = predict(donors, queries, var)
         mets.append(score_recovery(queries[var], hat, var))
-        if covar != "none":
-            hat_d = predict(donors, queries, var, drop=True)
-            mets_drop.append(score_recovery(queries[var], hat_d, var, allow_constant=True))
         if i == 0:
             print_baselines(var, queries[var].to_numpy(),
                             mean_baseline(donors, queries, var),
