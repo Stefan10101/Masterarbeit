@@ -110,6 +110,71 @@ def apply_hour_cut(panel: pd.DataFrame, time_res: str, hours_arg=None, time_col:
     return subset_hours(panel, hours, time_col=time_col), hours
 
 
+def cap_timestamps(panel: pd.DataFrame, max_times, time_res: str,
+                   seed: int = 22, time_col: str = "time") -> pd.DataFrame:
+    """Cap unique timestamps. max_times <= 0 or None means no cap.
+
+    half_hourly: sample whole days so the 4 hour slots stay balanced and the
+    total stays <= max_times (365 // 4 = 91 days = 364 slots).
+    other resolutions: uniform random sample of timestamps.
+    Call after the hour cut so half_hourly only sees the kept hours.
+    """
+    if panel is None or len(panel) == 0:
+        return panel
+    if not max_times or int(max_times) <= 0:
+        return panel
+    max_times = int(max_times)
+    times = panel[time_col].drop_duplicates()
+    if len(times) <= max_times:
+        return panel
+    rng = np.random.default_rng(int(seed))
+    if str(time_res).lower() == "half_hourly":
+        dt = pd.to_datetime(times)
+        day = dt.dt.floor("D")
+        counts = day.value_counts()
+        n_per = int(counts.mode().iloc[0]) if len(counts) else 1
+        n_days = max(1, max_times // max(n_per, 1))
+        n_days = min(n_days, int(day.nunique()))
+        chosen = set(rng.choice(day.drop_duplicates().to_numpy(), size=n_days, replace=False))
+        keep = times.loc[day.isin(chosen)]
+        if len(keep) > max_times:
+            # rare: uneven slots/day. trim with equal hour counts.
+            hours = pd.to_datetime(keep).dt.hour
+            per_h = max(1, max_times // max(int(hours.nunique()), 1))
+            picked = []
+            for _, grp in keep.groupby(hours):
+                take = min(per_h, len(grp))
+                picked.extend(rng.choice(grp.to_numpy(), size=take, replace=False).tolist())
+            if len(picked) > max_times:
+                picked = rng.choice(np.asarray(picked), size=max_times, replace=False).tolist()
+            keep = np.asarray(picked)
+        else:
+            keep = keep.to_numpy()
+    else:
+        keep = rng.choice(times.to_numpy(), size=max_times, replace=False)
+    return panel.loc[panel[time_col].isin(keep)].copy()
+
+
+def cap_score_split(panel: pd.DataFrame, max_times, time_res: str,
+                     score_splits=("test",), seed: int = 22,
+                     time_col: str = "time", split_col: str = "split") -> pd.DataFrame:
+    """Cap only the score split (default test). Train/tune rows stay intact
+    so pooled methods still fit on the full pool. half_hourly uses the
+    day-balanced sampler inside cap_timestamps.
+    """
+    if panel is None or len(panel) == 0 or not max_times or int(max_times) <= 0:
+        return panel
+    if split_col not in panel.columns:
+        return cap_timestamps(panel, max_times, time_res, seed, time_col)
+    want = set(score_splits)
+    score = panel[panel[split_col].isin(want)]
+    rest = panel[~panel[split_col].isin(want)]
+    score = cap_timestamps(score, max_times, time_res, seed, time_col)
+    if rest.empty:
+        return score
+    return pd.concat([rest, score], ignore_index=True)
+
+
 def cap_jobs(jobs: int, n_rows: int, limit: int = 2, row_cut: int = 2_000_000) -> int:
     jobs = max(1, int(jobs))
     if n_rows > row_cut and jobs > limit:

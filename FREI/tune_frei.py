@@ -26,7 +26,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_frei_tuned_params_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs, variables_from_cfg, cap_timestamps
 from shared.splits.evaluation_sets import apply_evaluation_protocol, load_tune_targets
 from frei_data import (
     load_idw_residual_params,
@@ -56,19 +56,20 @@ def _init(panel, cfg, packs, n_folds, var):
     _VAR = var
 
 
-def _eval_cell(nr, nsec, sh, aw):
-    # Residual p/Fz/k come from IDW (stored on _CFG for this run).
+def _eval_cell(nsec, sh, aw):
+    # Residual p/Fz/k come from IDW. n_regions is fixed at 11.
     idw = getattr(_eval_cell, "idw", {"power": 2.0, "Fz": 0.3, "k": 12})
+    nr = 11
     fcfg = cfg_to_frei(_CFG, {
         "n_regions": nr, "n_sections": nsec, "shrink": sh, "across_w": aw,
         "power": idw["power"], "Fz": idw["Fz"], "k": idw["k"],
     })
     fcfg.select_metric = False
-    pred = run_llocv(_PANEL, _VAR, fcfg, _N_FOLDS, {"train"}, {"tune"}, _PACKS.get(int(nr)))
+    pred = run_llocv(_PANEL, _VAR, fcfg, _N_FOLDS, {"train"}, {"tune"}, _PACKS.get(nr))
     met = compute_metrics(pred["observed"], pred["predicted"])
     nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0
     return {
-        "n_regions": int(nr),
+        "n_regions": nr,
         "n_sections": int(nsec),
         "shrink": float(sh),
         "across_w": float(aw),
@@ -97,11 +98,11 @@ def _run_cells(cells, jobs):
 
 
 def _print_rows(var, results, best):
-    results = sorted(results, key=lambda r: (r["n_regions"], r["shrink"], r["k"], r["across_w"]))
+    results = sorted(results, key=lambda r: (r["n_sections"], r["shrink"], r["across_w"]))
     for row in results:
         print(
-            f"{var} nreg={row['n_regions']} shrink={row['shrink']} "
-            f"k={row['k']} across={row['across_w']} "
+            f"{var} nsec={row['n_sections']} shrink={row['shrink']} "
+            f"across={row['across_w']} "
             f"RMSE={row['rmse']:.3f} n={row['n']} finite={row['finite']}",
             flush=True,
         )
@@ -110,16 +111,15 @@ def _print_rows(var, results, best):
     return best
 
 
-def _coord_search(nregs, nsecs, shrinks, aws, jobs, var, defaults):
+def _coord_search(nsecs, shrinks, aws, jobs, var, defaults):
     locked = dict(defaults)
     best = None
     seen = set()
     all_rows = []
     builders = [
-        ("n_regions", lambda: [(nr, locked["n_sections"], locked["shrink"], locked["across_w"]) for nr in nregs]),
-        ("n_sections", lambda: [(locked["n_regions"], ns, locked["shrink"], locked["across_w"]) for ns in nsecs]),
-        ("shrink", lambda: [(locked["n_regions"], locked["n_sections"], sh, locked["across_w"]) for sh in shrinks]),
-        ("across_w", lambda: [(locked["n_regions"], locked["n_sections"], locked["shrink"], aw) for aw in aws]),
+        ("n_sections", lambda: [(ns, locked["shrink"], locked["across_w"]) for ns in nsecs]),
+        ("shrink", lambda: [(locked["n_sections"], sh, locked["across_w"]) for sh in shrinks]),
+        ("across_w", lambda: [(locked["n_sections"], locked["shrink"], aw) for aw in aws]),
     ]
     for name, builder in builders:
         cells = [c for c in builder() if c not in seen]
@@ -131,7 +131,6 @@ def _coord_search(nregs, nsecs, shrinks, aws, jobs, var, defaults):
             seen.add(c)
         all_rows.extend(rows)
         best = _print_rows(var, rows, best)
-        locked["n_regions"] = best["n_regions"]
         locked["n_sections"] = best["n_sections"]
         locked["shrink"] = best["shrink"]
         locked["across_w"] = best["across_w"]
@@ -176,18 +175,10 @@ def main():
         tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
         # Pool stations only for the search. Drop the official held-out set.
         panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
-        if args.max_times and panel["time"].nunique() > args.max_times:
-            rng = np.random.default_rng(int(block.get("seed", 22)))
-            keep = []
-            for sp in ("train", "tune"):
-                ts = panel.loc[panel["split"] == sp, "time"].drop_duplicates().to_numpy()
-                if len(ts) == 0:
-                    continue
-                n = max(1, int(round(args.max_times * len(ts) / max(panel["time"].nunique(), 1))))
-                keep.extend(rng.choice(ts, size=min(n, len(ts)), replace=False).tolist())
-            panel = panel[panel["time"].isin(keep)].copy()
         panel = subset_times(panel, months)
         panel, hours = apply_hour_cut(panel, time_res, args.hours)
+        if args.max_times:
+            panel = cap_timestamps(panel, args.max_times, time_res, seed=int(block.get("seed", 22)))
         jobs = cap_jobs(jobs, len(panel))
         print(
             f"{var} rows={len(panel)} times={panel['time'].nunique()} "
@@ -196,31 +187,28 @@ def main():
             f"mode={mode} months={months} hours={hours} folds={n_folds} jobs={jobs}",
             flush=True,
         )
-        nregs = list(search.get("n_regions", [block.get("n_regions", 6)]))
         nsecs = list(search.get("n_sections", [block.get("n_sections", 3)]))
         shrinks = list(search.get("shrink", [block.get("shrink", 0.3)]))
         aws = list(search.get("across_w", [block.get("across_w", 4.0)]))
         idw = load_idw_residual_params(time_res, var)
         _eval_cell.idw = idw
-        packs = {}
-        for nr in nregs:
-            print(f"building pack n_regions={nr}", flush=True)
-            packs[int(nr)] = pack_from_master(cfg, int(nr))
+        nr = int(block.get("n_regions", 11))
+        print(f"building pack n_regions={nr}", flush=True)
+        packs = {nr: pack_from_master(cfg, nr)}
         _init(panel, cfg, packs, n_folds, var)
         defaults = {
-            "n_regions": int(block.get("n_regions", nregs[0])),
             "n_sections": int(block.get("n_sections", nsecs[0])),
             "shrink": float(block.get("shrink", shrinks[0])),
             "across_w": float(block.get("across_w", aws[0])),
         }
         if mode == "grid":
-            cells = list(itertools.product(nregs, nsecs, shrinks, aws))
+            cells = list(itertools.product(nsecs, shrinks, aws))
             print(f"{var} grid cells={len(cells)}", flush=True)
             results = _run_cells(cells, jobs)
             best = _print_rows(var, results, None)
             all_rows = results
         else:
-            best, all_rows = _coord_search(nregs, nsecs, shrinks, aws, jobs, var, defaults)
+            best, all_rows = _coord_search(nsecs, shrinks, aws, jobs, var, defaults)
         if best is None:
             print(f"{var} no finite DEV result", flush=True)
             continue

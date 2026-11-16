@@ -208,7 +208,7 @@ def main():
                 region = sl["region"].to_numpy() if "region" in sl.columns else None
                 region_q = None
                 if pack is not None and "regions" in pack:
-                                        region_q = _sample_field(pack["regions"], pack["xs"], pack["ys"], xq, yq)
+                    region_q = _sample_field(pack["regions"], pack["xs"], pack["ys"], xq, yq)
                 hat = model.predict_timestamp(
                     sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(),
                     sl[var].to_numpy(), xq, yq, zq,

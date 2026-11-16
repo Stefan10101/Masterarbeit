@@ -34,7 +34,7 @@ from shared.splits.evaluation_sets import (
     load_quarter_splits,
     quarter_of,
 )
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res, variables_from_cfg, cap_score_split
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 
 
@@ -72,6 +72,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variables", nargs="+", default=None)
     p.add_argument("--months", default=None)
+    p.add_argument("--max-times", type=int, default=0,
+                   help="cap timestamps (0 = no cap). half_hourly samples whole days.")
     p.add_argument("--jobs", type=int, default=None,
                    help="parallel test timestamps (default: half the logical cores)")
     add_time_res_arg(p)
@@ -96,6 +98,8 @@ def main():
         if args.months and args.months != "all":
             from idw_data import subset_times
             tagged = subset_times(tagged, args.months)
+        if args.max_times:
+            tagged = cap_score_split(tagged, args.max_times, time_res)
 
         params = load_global_params(time_res, var)
         times = sorted(tagged.loc[tagged["quarter"].isin(test_quarters), "time"].unique())

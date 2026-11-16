@@ -24,7 +24,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_cnn_tuned_params_path, get_master_grid_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_timestamps
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from cnn_core import grid_terrain, two_step_var
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, attach_temperature, attach_station_tpi
@@ -42,6 +42,8 @@ def main():
     p.add_argument("--variables", nargs="+", default=None, help="list of variables")
     p.add_argument("--quick", action="store_true")
     p.add_argument("--jobs", type=int, default=4)
+    p.add_argument("--max-times", type=int, default=0,
+                   help="cap timestamps (0 = no cap). half_hourly samples whole days.")
     add_hours_arg(p)
     add_time_res_arg(p)
     args = p.parse_args()
@@ -103,6 +105,8 @@ def main():
         print(f"{var} train rows={len(train)} tune-target rows={len(dev)} "
               f"tune times={dev['time'].nunique()}", flush=True)
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
+        if args.max_times:
+            panel = cap_timestamps(panel, args.max_times, time_res, seed=int(block.get("seed", 22)))
         trace = precip_trace(cfg, time_res, var)
         best = None
         trials = []

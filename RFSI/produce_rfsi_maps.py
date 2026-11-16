@@ -342,7 +342,7 @@ def main():
             except Exception as exc:
                 print(f"  grid terrain cache missing: {exc}")
             if pack is not None:
-                                grid_df["region"] = _sample_field(
+                grid_df["region"] = _sample_field(
                     pack["regions"], pack["xs"], pack["ys"],
                     grid_points[:, 0], grid_points[:, 1],
                 ).astype(np.int32)

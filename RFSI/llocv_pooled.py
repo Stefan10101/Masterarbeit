@@ -37,7 +37,7 @@ from paths import (
 )
 from rfsi_core import RFSI, attach_region, build_covariates, build_region_pack, cov_switches, extras_for_var, neighbor_width, two_step_var
 from rfsi_optimizer import compute_metrics
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_score_split
 from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of, apply_evaluation_protocol
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 
@@ -123,7 +123,7 @@ def load_panel(cfg, var):
 
 
 def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_every,
-                 n_folds=0, months=None, pack=None):
+                 n_folds=0, months=None, pack=None, max_times: int = 0):
     rfsi_cfg = cfg.get("rfsi", {})
     tuned = {}
     tpath = get_rfsi_tuned_params_path(var, cfg["time_resolution"])
@@ -170,6 +170,8 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
         except Exception:
             pass
     valid, _hours = apply_hour_cut(valid, cfg["time_resolution"], cfg.get("_hours"))
+    if max_times:
+        valid = cap_score_split(valid, max_times, cfg["time_resolution"])
     # Protocol: fit on pool stations × train quarters; score held-out × test quarters
     fit_df = valid[(~valid["is_heldout"]) & (valid["split"] == "train")].copy()
     score_df = valid[(valid["is_heldout"]) & (valid["split"] == "test")].copy()
@@ -308,6 +310,8 @@ def parse_args():
                         "The forest already uses all cores via n_jobs=-1; "
                         "raise this only if predict is not saturating.")
     p.add_argument("--months", default=None)
+    p.add_argument("--max-times", type=int, default=0,
+                   help="cap timestamps (0 = no cap). half_hourly samples whole days.")
     add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
@@ -350,6 +354,7 @@ def main():
             max_stations=args.max_stations,
             checkpoint_every=args.checkpoint_every,
             n_folds=n_folds, months=months, pack=pack,
+            max_times=args.max_times,
         )
     print("\nNested LLOCV finished.")
 

@@ -34,6 +34,7 @@ from smacnp_core import SMACNP
 from paths import get_smacnp_model_path, get_method_output_dir
 from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of
 from shared.metrics import compute_metrics as eval_metrics, print_eval
+from shared.time_res import apply_hour_cut, cap_timestamps
 
 
 def get_device(cfg: dict) -> torch.device:
@@ -96,6 +97,10 @@ def main():
     parser.add_argument("--jobs", type=int, default=None,
                         help="parallel test days (default: half the logical cores). "
                              "GPU forwards serialize on the single device.")
+    parser.add_argument("--max-times", type=int, default=0,
+                        help="cap timestamps (0 = no cap). half_hourly samples whole days.")
+    parser.add_argument("--hours", default=None,
+                        help="UTC hours or 'all'. half_hourly default is 0,6,12,18.")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -112,6 +117,10 @@ def main():
                 cmd += ["--time-resolution", args.time_resolution]
             if args.jobs is not None:
                 cmd += ["--jobs", str(args.jobs)]
+            if args.max_times:
+                cmd += ["--max-times", str(args.max_times)]
+            if args.hours:
+                cmd += ["--hours", str(args.hours)]
             subprocess.check_call(cmd)
         return
     var = args.variable
@@ -130,6 +139,7 @@ def main():
 
     print("Loading panel and features...")
     df = load_panel(cfg, var)
+    df, _hours = apply_hour_cut(df, cfg["time_resolution"], args.hours)
     df = df.rename(columns={var: "value"})
     df["station_name"] = df["station_name"].astype(str)
     stations = df[["station_name", "x", "y"]].drop_duplicates("station_name")
@@ -161,6 +171,12 @@ def main():
     qsplits = load_quarter_splits()
     df["quarter"] = df["time"].map(quarter_of)
     test_days = set(df.loc[df["quarter"].isin(qsplits["test"]), "time"].unique())
+    if args.max_times:
+        test_df = df[df["time"].isin(test_days)]
+        rest = df[~df["time"].isin(test_days)]
+        test_df = cap_timestamps(test_df, args.max_times, cfg["time_resolution"])
+        df = pd.concat([rest, test_df], ignore_index=True)
+        test_days = set(test_df["time"].unique())
     print(f"test quarters={len(qsplits['test'])}  test days={len(test_days)}")
 
     # For evaluation: context = all training-pool stations present that day

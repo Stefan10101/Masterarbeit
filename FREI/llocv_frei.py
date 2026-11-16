@@ -21,7 +21,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_frei_tuned_params_path, get_master_grid_path, get_nested_llocv_path
 from shared.splits.evaluation_sets import apply_evaluation_protocol
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_score_split
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 from frei_core import FreiConfig, FreiInterpolator, two_step_var
 from frei_data import (
@@ -75,7 +75,7 @@ def cfg_to_frei(cfg, overrides=None) -> FreiConfig:
     f = dict(cfg.get("frei", {}))
     o = overrides or {}
     return FreiConfig(
-        n_regions=int(o.get("n_regions", f.get("n_regions", 6))),
+        n_regions=int(o.get("n_regions", f.get("n_regions", 11))),
         n_sections=int(o.get("n_sections", f.get("n_sections", 3))),
         shrink=float(o.get("shrink", f.get("shrink", 0.3))),
         blend_km=float(f.get("blend_km", 15.0)),
@@ -247,6 +247,8 @@ def main():
     p.add_argument("--quick", action="store_true")
     p.add_argument("--jobs", type=int, default=None,
                    help="parallel score groups (default: half the logical cores)")
+    p.add_argument("--max-times", type=int, default=0,
+                   help="cap timestamps (0 = no cap). half_hourly samples whole days.")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -276,6 +278,8 @@ def main():
         if months:
             panel = subset_times(panel, months)
         panel, hours = apply_hour_cut(panel, time_res, args.hours)
+        if args.max_times:
+            panel = cap_score_split(panel, args.max_times, time_res, seed=fcfg.seed)
         jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
         pred = run_llocv(
             panel, var, fcfg, n_folds,

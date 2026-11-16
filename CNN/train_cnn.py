@@ -33,7 +33,7 @@ from cnn_core import (
     two_step_var,
 )
 from cnn_data import data_sources, load_cnn_config, load_panel, precip_trace
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_timestamps
 from shared.splits.evaluation_sets import prepare_for_tuning
 
 try:
@@ -939,6 +939,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variable", default=None)
     p.add_argument("--quick", action="store_true")
+    p.add_argument("--max-times", type=int, default=0,
+                   help="cap timestamps (0 = no cap). half_hourly samples whole days.")
     add_hours_arg(p)
     add_time_res_arg(p)
     args = p.parse_args()
@@ -980,6 +982,8 @@ def main():
             is_dev = panel["split"] == "dev"
             panel.loc[is_dev & ~panel["station_name"].isin(targets), "split"] = "pool"
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
+        if args.max_times:
+            panel = cap_timestamps(panel, args.max_times, time_res, seed=int(cfg["cnn"].get("seed", 22)))
         ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))
         model, dev = train_one(
             panel, var, ccfg, elev, clc, gx, gy,

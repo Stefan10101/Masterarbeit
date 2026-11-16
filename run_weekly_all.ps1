@@ -1,6 +1,6 @@
-﻿# run_weekly_all.ps1
+# run_weekly_all.ps1
 # Full weekly sequence for all methods.
-# Methods that already finished are commented out so you can re-run the rest.
+# Tune: full period (no seasonal4). LLOCV: test year only.
 # Map production is left commented (expensive; enable later only for the methods you need).
 # Stops on the first non-zero exit code.
 
@@ -32,22 +32,22 @@ function Run-Step($label, $cmd) {
 # =============================================================================
 # Kriging  — tune + nested LLOCV finished for all 5; maps only temp_mean
 # =============================================================================
-# Run-Step "Kriging tune"    "python Kriging/tune_kriging.py --time-resolution weekly --max-times 0 --variables $vars"
+# Run-Step "Kriging tune"    "python Kriging/tune_kriging.py --time-resolution weekly --max-times 0 --months all --variables $vars"
 # Run-Step "Kriging llocv"   "python Kriging/llocv_kriging.py --time-resolution weekly --variables $vars"
 # Run-Step "Kriging produce" "python Kriging/produce_kriging_maps.py --time-resolution weekly --variables $vars"
 
 # =============================================================================
 # FREI  — tune + nested LLOCV finished for all 5 (30 Oct); maps missing
 # =============================================================================
-#Run-Step "FREI tune"    "python FREI/tune_frei.py --time-resolution weekly --max-times 0 --variables $vars"
-#Run-Step "FREI llocv"   "python FREI/llocv_frei.py --time-resolution weekly --variables $vars"
+#Run-Step "FREI tune"    "python FREI/tune_frei.py --time-resolution weekly --max-times 0 --months all --variables $vars"
+#Run-Step "FREI llocv"   "python FREI/llocv_frei.py --time-resolution weekly --score test --variables $vars"
 # Run-Step "FREI produce" "python FREI/produce_frei_maps.py --time-resolution weekly --variables $vars"
 
 # =============================================================================
 # GAM  — not started
 # =============================================================================
-#Run-Step "GAM tune"    "python GAM/tune_gam.py --time-resolution weekly --max-times 0 --variables $vars"
-#Run-Step "GAM llocv"   "python GAM/llocv_gam.py --time-resolution weekly --variables $vars"
+#Run-Step "GAM tune"    "python GAM/tune_gam.py --time-resolution weekly --max-times 0 --months all --variables $vars"
+#Run-Step "GAM llocv"   "python GAM/llocv_gam.py --time-resolution weekly --score test --variables $vars"
 # Run-Step "GAM produce" "python GAM/produce_gam_maps.py --time-resolution weekly --variables $vars"
 
 # =============================================================================
@@ -62,7 +62,7 @@ function Run-Step($label, $cmd) {
 # =============================================================================
 #Run-Step "CNN tune"    "python CNN/tune_cnn.py --time-resolution weekly"
 #Run-Step "CNN train"   "python CNN/train_cnn.py --time-resolution weekly"
-#Run-Step "CNN llocv"   "python CNN/llocv_cnn.py --time-resolution weekly"
+#Run-Step "CNN llocv"   "python CNN/llocv_cnn.py --time-resolution weekly --score test"
 # Run-Step "CNN produce" "python CNN/produce_cnn_maps.py --time-resolution weekly"
 
 # =============================================================================

@@ -40,7 +40,7 @@ def _depth(d):
     if d is None or (isinstance(d, float) and np.isnan(d)):
         return None
     return int(d)
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_timestamps
 from shared.splits.evaluation_sets import prepare_for_tuning
 
 _splits_path = CODE_DIR / "shared" / "splits" / "splits.py"
@@ -255,21 +255,14 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
     # Optional month cut for dry runs; no regime/medoid subset.
     if months or quick:
         panel = _subset_times(panel, months or "seasonal4")
-    if max_times and panel["time"].nunique() > max_times:
-        rng = np.random.default_rng(int(rfsi.get("seed", 31)))
-        keep = []
-        for sp in ("train", "tune"):
-            ts = panel.loc[panel["split"] == sp, "time"].drop_duplicates().to_numpy()
-            if len(ts) == 0:
-                continue
-            n = max(1, int(round(max_times * len(ts) / max(panel["time"].nunique(), 1))))
-            keep.extend(rng.choice(ts, size=min(n, len(ts)), replace=False).tolist())
-        panel = panel[panel["time"].isin(keep)].copy()
+    panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
+    if max_times:
+        panel = cap_timestamps(panel, max_times, cfg["time_resolution"],
+                               seed=int(rfsi.get("seed", 31)))
     print(f"  tune panel: {len(panel):,} rows | "
           f"{panel['station_name'].nunique()} stations | "
           f"{panel['time'].nunique()} times | "
           f"tune-targets={int(panel['is_tune_target'].sum())}")
-    panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
 
     X_all, encoder = prepare_covariates(
         panel, fit_encoder=True, use_elev=use_elev, use_lc=use_lc,

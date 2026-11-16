@@ -511,7 +511,7 @@ def attach_region(df, pack):
         return df
     if "x" not in df.columns or "y" not in df.columns:
         return df
-        out = df.copy()
+    out = df.copy()
     out["region"] = _sample_field(
         pack["regions"], pack["xs"], pack["ys"],
         out["x"].to_numpy(), out["y"].to_numpy(),

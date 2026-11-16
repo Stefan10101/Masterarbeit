@@ -30,7 +30,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_kriging_tuned_params_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_timestamps
 from kriging_core import KrigingConfig, KrigingInterpolator
 from shared.splits.evaluation_sets import apply_evaluation_protocol, load_tune_targets
 from kriging_data import (
@@ -156,19 +156,10 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
     args_max = max_times
     if months:
         panel = subset_times(panel, months)
-    if args_max and panel["time"].nunique() > args_max:
-        rng = np.random.default_rng(int(cfg.get("kriging", {}).get("seed", 22)))
-        keep = []
-        for sp in ("train", "tune"):
-            ts = panel.loc[panel["split"] == sp, "time"].drop_duplicates()
-            if ts.empty:
-                continue
-            n = max(1, int(round(args_max * len(ts) / max(panel["time"].nunique(), 1))))
-            chosen = ts.sample(n=min(n, len(ts)), random_state=rng).tolist()
-            keep.extend(chosen)
-        if keep:
-            panel = panel[panel["time"].isin(pd.to_datetime(keep))].copy()
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
+    if args_max:
+        panel = cap_timestamps(panel, args_max, cfg["time_resolution"],
+                               seed=int(cfg.get("kriging", {}).get("seed", 22)))
     if str(var).lower().startswith("rh") and (rh_t_mode or cfg.get("kriging", {}).get("rh_t_mode", "none")) in ("predicted", "observed"):
         panel = attach_temperature(panel, cfg)
     panel = attach_pack_terrain(panel, pack)

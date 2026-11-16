@@ -165,11 +165,29 @@ def plot_one(
             transform=ccrs.PlateCarree(), zorder=1, interpolation="bilinear",
         )
 
-    im = ax.pcolormesh(
-        xs, ys, values,
-        cmap=cmap, vmin=vmin, vmax=vmax,
-        transform=src_crs, zorder=2, shading="auto",
-    )
+    # basin_id is categorical: mask zeros and use a discrete legend
+    if da.name == "basin_id":
+        masked = np.ma.masked_where(values <= 0, values)
+        cmap_obj = plt.get_cmap("tab20", int(masked.max()))
+        im = ax.pcolormesh(
+            xs, ys, masked,
+            cmap=cmap_obj, vmin=0.5, vmax=masked.max() + 0.5,
+            transform=src_crs, zorder=2, shading="auto",
+        )
+        # discrete legend instead of colorbar
+        from matplotlib.patches import Patch
+        handles = [Patch(facecolor=cmap_obj(i / masked.max()), edgecolor="k", label=str(i + 1))
+                   for i in range(int(masked.max()))]
+        ax.legend(handles=handles, title="Basin", loc="lower left",
+                  fontsize=7, title_fontsize=8, framealpha=0.9, ncol=2)
+        cbar = None
+    else:
+        im = ax.pcolormesh(
+            xs, ys, values,
+            cmap=cmap, vmin=vmin, vmax=vmax,
+            transform=src_crs, zorder=2, shading="auto",
+        )
+        cbar = im
 
     if perimeter is not None:
         peri_m = perimeter.to_crs("EPSG:31287")
@@ -199,11 +217,12 @@ def plot_one(
     gl.xlabel_style = {"size": 7}
     gl.ylabel_style = {"size": 7}
 
-    cax = fig.add_axes([0.84, 0.18, 0.018, 0.62])
-    cbar = fig.colorbar(im, cax=cax)
-    if unit:
-        cbar.set_label(unit, fontsize=9)
-    cbar.ax.tick_params(labelsize=7)
+    if cbar is not None:
+        cax = fig.add_axes([0.84, 0.18, 0.018, 0.62])
+        cbar = fig.colorbar(im, cax=cax)
+        if unit:
+            cbar.set_label(unit, fontsize=9)
+        cbar.ax.tick_params(labelsize=7)
 
     ax.set_title(title, fontsize=11, pad=6)
 

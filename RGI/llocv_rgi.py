@@ -25,7 +25,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_nested_llocv_path, get_rgi_tuned_params_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_score_split
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 from rgi_core import RGI, RGIConfig
 from rgi_data import attach_extras, extra_cols_for_var, load_config, load_panel, print_split_metrics, subset_times
@@ -90,12 +90,14 @@ def station_folds(names: list[str], n_folds: int, seed: int) -> list[list[str]]:
     return folds
 
 
-def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations):
+def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations, max_times: int = 0):
     panel = attach_extras(load_panel(cfg, var), cfg, var)
     panel, held_out, pool, qsplits = apply_evaluation_protocol(panel, variable=var)
     if cfg.get("_quick_months"):
         panel = subset_times(panel, cfg["_quick_months"])
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
+    if max_times:
+        panel = cap_score_split(panel, max_times, cfg["time_resolution"])
     # Protocol
     fit_df = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
     score_df = panel[(panel["is_heldout"]) & (panel["split"] == "test")]
@@ -169,6 +171,8 @@ def parse_args():
     p.add_argument("--max-stations", type=int, default=0)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--months", default=None)
+    p.add_argument("--max-times", type=int, default=0,
+                   help="cap timestamps (0 = no cap). half_hourly samples whole days.")
     add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
@@ -201,6 +205,7 @@ def main():
             parse_split_arg(args.fit),
             parse_split_arg(args.score),
             args.mode, n_folds, args.max_stations,
+            max_times=args.max_times,
         )
     print("\nRGI LLOCV finished.")
 

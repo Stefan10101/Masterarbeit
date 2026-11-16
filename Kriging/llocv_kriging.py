@@ -30,7 +30,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_kriging_tuned_params_path, get_nested_llocv_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_score_split
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 from kriging_core import KrigingConfig, KrigingInterpolator
 from shared.splits.evaluation_sets import apply_evaluation_protocol
@@ -106,13 +106,15 @@ def station_folds(names: list[str], n_folds: int, seed: int) -> list[list[str]]:
 
 
 def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations, trend_override,
-                 months=None, rh_t_mode=None, pack=None, jobs: int = 1):
+                 months=None, rh_t_mode=None, pack=None, jobs: int = 1, max_times: int = 0):
     panel = load_panel(cfg, var)
     # Shared protocol
     panel, held_out, pool, qsplits = apply_evaluation_protocol(panel, variable=var)
     if months:
         panel = subset_times(panel, months)
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
+    if max_times:
+        panel = cap_score_split(panel, max_times, cfg["time_resolution"])
     need_t = str(var).lower().startswith("rh") and (
         (rh_t_mode or cfg.get("kriging", {}).get("rh_t_mode", "none")) in ("predicted", "observed")
     )
@@ -223,6 +225,8 @@ def parse_args():
     p.add_argument("--trend", choices=["linear", "none"], default=None,
                    help="override config trend (none = OK control)")
     p.add_argument("--months", default=None, help="all | seasonal4 | YYYY-MM,YYYY-MM")
+    p.add_argument("--max-times", type=int, default=0,
+                   help="cap timestamps (0 = no cap). half_hourly samples whole days.")
     p.add_argument("--quick", action="store_true")
     p.add_argument("--jobs", type=int, default=None,
                    help="parallel score timestamps (default: half the logical cores)")
@@ -259,6 +263,7 @@ def main():
             parse_split_arg(args.score),
             args.mode, n_folds, args.max_stations, args.trend,
             months=months, rh_t_mode=args.rh_t_mode, pack=pack, jobs=jobs,
+            max_times=args.max_times,
         )
     print("\nKriging LLOCV finished.")
 

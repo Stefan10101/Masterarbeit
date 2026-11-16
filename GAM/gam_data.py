@@ -150,7 +150,7 @@ def attach_pack_terrain(panel: pd.DataFrame, pack=None) -> pd.DataFrame:
     """
     if pack is None or "regions" not in pack or panel.empty:
         return panel
-        region = _sample_field(
+    region = _sample_field(
         pack["regions"], pack["xs"], pack["ys"],
         panel["x"].to_numpy(), panel["y"].to_numpy(),
     )

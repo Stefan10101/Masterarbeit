@@ -42,6 +42,7 @@ from shared.splits.evaluation_sets import (
     load_tune_targets,
     quarter_of,
 )
+from shared.time_res import apply_hour_cut, cap_timestamps
 
 
 def set_seed(seed: int):
@@ -281,6 +282,10 @@ def main():
     df = load_panel(cfg, var)
     if var not in df.columns:
         raise KeyError(f"column {var} not in panel")
+    df, _hours = apply_hour_cut(df, cfg["time_resolution"], getattr(args, "hours", None))
+    if args.max_times:
+        df = cap_timestamps(df, args.max_times, cfg["time_resolution"],
+                            seed=int(cfg["smacnp"].get("seed", 42)))
     df = df.rename(columns={var: "value"})
     print(f"panel rows={len(df)}  stations={df['station_name'].nunique()}")
 
@@ -339,13 +344,6 @@ def main():
     df["quarter"] = df["time"].map(quarter_of)
     train_days = df.loc[df["quarter"].isin(qsplits["train"]), "time"].unique()
     val_days = df.loc[df["quarter"].isin(qsplits["tune"]), "time"].unique()
-    if args.max_times:
-        rng = np.random.default_rng(int(cfg["smacnp"].get("seed", 42)))
-        if len(train_days) > args.max_times:
-            train_days = rng.choice(train_days, size=args.max_times, replace=False)
-        n_val = max(1, args.max_times // 4)
-        if len(val_days) > n_val:
-            val_days = rng.choice(val_days, size=n_val, replace=False)
     print(f"train quarters={len(qsplits['train'])}  tune quarters={len(qsplits['tune'])}")
     print(f"train days={len(train_days)}  val days={len(val_days)}")
     # Validation split is fixed so cells are comparable. Training context

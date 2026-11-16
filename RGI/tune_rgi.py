@@ -28,7 +28,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_rgi_tuned_params_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_timestamps
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from rgi_core import RGI, RGIConfig
 from rgi_data import attach_extras, compute_metrics, extra_cols_for_var, load_config, load_panel, subset_times
@@ -88,12 +88,10 @@ def run_variable(cfg, var, phase: str):
     panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
     if cfg.get("_quick_months"):
         panel = subset_times(panel, cfg["_quick_months"])
-    if cfg.get("_max_times") and panel["time"].nunique() > cfg["_max_times"]:
-        rng = np.random.default_rng(int(cfg.get("rgi", {}).get("seed", 22)))
-        ts = panel["time"].drop_duplicates().to_numpy()
-        keep = rng.choice(ts, size=cfg["_max_times"], replace=False)
-        panel = panel[panel["time"].isin(keep)].copy()
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
+    if cfg.get("_max_times"):
+        panel = cap_timestamps(panel, cfg["_max_times"], cfg["time_resolution"],
+                               seed=int(cfg.get("rgi", {}).get("seed", 22)))
     rgi_cfg = cfg.get("rgi", {})
     search = rgi_cfg.get("search", {})
     expand = rgi_cfg.get("search_expand", {})

@@ -19,7 +19,7 @@ aggregation:
     time_col: timestamp
 
 frei:
-  n_regions: 6
+  n_regions: 11
   n_sections: 3
   shrink: 0.3
   blend_km: 15.0
@@ -41,7 +41,6 @@ frei:
     tune_folds: 5
     produce_splits: all
   search:
-    n_regions: [3, 4, 6, 8, 12]
     n_sections: [1, 2, 3, 4, 5]
     shrink: [0.1, 0.3, 0.5, 0.8]
     across_w: [1.0, 2.0, 4.0, 8.0]

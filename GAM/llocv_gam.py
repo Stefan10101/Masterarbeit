@@ -18,7 +18,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path, get_nested_llocv_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_score_split
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 from gam_core import GAMConfig, GAMInterpolator
 from shared.splits.evaluation_sets import apply_evaluation_protocol
@@ -274,6 +274,8 @@ def main():
     p.add_argument("--months", default=None)
     p.add_argument("--quick", action="store_true")
     p.add_argument("--jobs", type=int, default=4)
+    p.add_argument("--max-times", type=int, default=0,
+                   help="cap timestamps (0 = no cap). half_hourly samples whole days.")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     add_hours_arg(p)
     add_time_res_arg(p)
@@ -308,6 +310,8 @@ def main():
         if months:
             panel = subset_times(panel, months)
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
+        if args.max_times:
+            panel = cap_score_split(panel, args.max_times, time_res, seed=gcfg.seed)
         pred = run_llocv(panel, var, gcfg, n_folds, parse_split_arg(args.fit), parse_split_arg(args.score), pack=pack, jobs=max(1, args.jobs))
         out = get_nested_llocv_path("GAM", var, time_res, domain="full")
         pred.to_parquet(out, index=False)

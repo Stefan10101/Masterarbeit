@@ -44,7 +44,7 @@ from shared.splits.evaluation_sets import (
     load_tune_targets,
     protocol_masks,
 )
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res, variables_from_cfg, cap_timestamps
 
 
 TRACE = {
@@ -203,8 +203,9 @@ def main():
 
         times = sorted(panel["time"].unique())
         if args.max_times and len(times) > args.max_times:
-            rng = np.random.default_rng(int(cfg.get("idw", {}).get("seed", 31)))
-            times = sorted(rng.choice(times, size=args.max_times, replace=False))
+            capped = cap_timestamps(panel, args.max_times, time_res,
+                                    seed=int(cfg.get("idw", {}).get("seed", 31)))
+            times = sorted(capped["time"].unique())
         print(f"\n----- {var}  {len(times)} timestamps  "
               f"{panel['station_name'].nunique()} stations -----")
 

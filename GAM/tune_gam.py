@@ -28,7 +28,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path
-from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs, variables_from_cfg
+from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs, variables_from_cfg, cap_timestamps
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from gam_data import (
     attach_pack_terrain,
@@ -126,22 +126,14 @@ def main():
         from shared.splits.evaluation_sets import apply_evaluation_protocol
         tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
         panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
-        if args.max_times and panel["time"].nunique() > args.max_times:
-            rng = np.random.default_rng(int(block.get("seed", 22)))
-            keep = []
-            for sp in ("train", "tune"):
-                ts = panel.loc[panel["split"] == sp, "time"].drop_duplicates().to_numpy()
-                if len(ts) == 0:
-                    continue
-                n = max(1, int(round(args.max_times * len(ts) / max(panel["time"].nunique(), 1))))
-                keep.extend(rng.choice(ts, size=min(n, len(ts)), replace=False).tolist())
-            panel = panel[panel["time"].isin(keep)].copy()
+        panel = subset_times(panel, months)
+        panel, hours = apply_hour_cut(panel, time_res, args.hours)
+        if args.max_times:
+            panel = cap_timestamps(panel, args.max_times, time_res, seed=int(block.get("seed", 22)))
         rh_mode = args.rh_t_mode or block.get("rh_t_mode", "none")
         if str(var).lower().startswith("rh") and rh_mode in ("predicted", "observed"):
             panel = attach_temperature(panel, cfg)
         panel = attach_pack_terrain(panel, pack)
-        panel = subset_times(panel, months)
-        panel, hours = apply_hour_cut(panel, time_res, args.hours)
         jobs = cap_jobs(jobs, len(panel))
         print(var, "rows", len(panel), "times", panel["time"].nunique(),
               "splits", panel.groupby("split").size().to_dict(),

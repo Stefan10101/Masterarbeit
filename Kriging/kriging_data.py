@@ -173,7 +173,7 @@ def attach_pack_terrain(panel: pd.DataFrame, pack) -> pd.DataFrame:
                 panel[c] = fill
         return panel
     pack = ensure_pack_terrain(pack)
-        xs, ys = pack["xs"], pack["ys"]
+    xs, ys = pack["xs"], pack["ys"]
     out = panel.copy()
     out["slope"] = _sample_field(pack["slope"], xs, ys, out["x"], out["y"]).astype(np.float64)
     out["northness"] = _sample_field(pack["northness"], xs, ys, out["x"], out["y"]).astype(np.float64)

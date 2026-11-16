@@ -34,7 +34,7 @@ sys.path.insert(0, str(CODE_DIR))
 
 @dataclass
 class FreiConfig:
-    n_regions: int = 6
+    n_regions: int = 11
     n_sections: int = 3
     shrink: float = 0.3
     blend_km: float = 15.0
@@ -219,6 +219,7 @@ class FreiInterpolator:
             return w, reg
         dx = float(self.pack.get("dx", 1000.0))
         blend_cells = max(float(self.cfg.blend_km) * 1000.0 / max(dx, 1.0), 1.0)
+        from shared.watersheds import sample_blend_weights
         w = sample_blend_weights(
             self.pack["region_dist"], self.pack["xs"], self.pack["ys"],
             x, y, blend_cells,
@@ -274,24 +275,38 @@ class FreiInterpolator:
         Line of sight is the straight 3-D line from (x0,y0,z0) to (x1,y1,z1).
         Blocking is the maximum height by which the DEM exceeds that line.
         Clear line of sight -> blocking = 0, even if elevations differ.
+
+        Accepts scalar or array endpoints of matching shape (vectorised over pairs).
         """
+        x0 = np.asarray(x0, dtype=np.float64)
+        y0 = np.asarray(y0, dtype=np.float64)
+        z0 = np.asarray(z0, dtype=np.float64)
+        x1 = np.asarray(x1, dtype=np.float64)
+        y1 = np.asarray(y1, dtype=np.float64)
+        z1 = np.asarray(z1, dtype=np.float64)
         dxy = np.hypot(x1 - x0, y1 - y0)
-        if self.pack is None or "elev" not in self.pack:
+        if self.pack is None or "elev" not in self.pack or dxy.size == 0:
             return dxy
-        # sample DEM along the line
-        n = max(int(dxy / 500.0), 2)  # ~500 m steps
-        t = np.linspace(0.0, 1.0, n)
+        # Common step count from the longest pair (~500 m). Short pairs are oversampled.
+        dmax = float(np.max(dxy))
+        n = max(int(dmax / 500.0), 2)
+        t = np.linspace(0.0, 1.0, n)[:, None]  # (n, 1) broadcasts over pairs
         xs = x0 + t * (x1 - x0)
         ys = y0 + t * (y1 - y0)
         line = z0 + t * (z1 - z0)
-        # nearest-cell sample of elev
         gx, gy = self.pack["xs"], self.pack["ys"]
         elev = self.pack["elev"]
-        ix = np.clip(((xs - gx[0]) / (gx[1] - gx[0])).astype(int), 0, len(gx) - 1)
-        iy = np.clip(((ys - gy[0]) / (gy[1] - gy[0])).astype(int), 0, len(gy) - 1)
+        dx = float(gx[1] - gx[0]) if len(gx) > 1 else 1.0
+        dy = float(gy[1] - gy[0]) if len(gy) > 1 else 1.0
+        if dx == 0.0:
+            dx = 1.0
+        if dy == 0.0:
+            dy = 1.0
+        ix = np.clip(((xs - gx[0]) / dx).astype(int), 0, len(gx) - 1)
+        iy = np.clip(((ys - gy[0]) / dy).astype(int), 0, len(gy) - 1)
         dem = elev[iy, ix]
         excess = np.maximum(0.0, dem - line)
-        blocking = float(excess.max()) / 500.0  # H_ref = 500 m
+        blocking = excess.max(axis=0) / 500.0  # per-pair max excess
         beta = float(getattr(self.cfg, "sight_beta", 2.0))
         return dxy * (1.0 + beta * blocking)
 
@@ -387,9 +402,13 @@ class FreiInterpolator:
         return clip_var(var, hat), info
 
     def _two_step(self, x, y, z, t, xq, yq, zq, var):
-        # Occurrence: residual field on the wet indicator
+        # Occurrence: piecewise-linear profile in logit space + residual IDW.
+        # Logit keeps the profile in (0, 1).
         wet = (t > self.cfg.trace).astype(float)
-        p, info = self._field(x, y, z, wet, xq, yq, zq, use_profile=False)
+        eps = 1e-3
+        wet_in = np.log((wet + eps) / (1.0 - wet + eps))
+        logit_p, info = self._field(x, y, z, wet_in, xq, yq, zq, use_profile=True)
+        p = 1.0 / (1.0 + np.exp(-logit_p))
         p = np.clip(p, 0.0, 1.0)
 
         wet_m = t > self.cfg.trace
