@@ -353,7 +353,7 @@ class KrigingInterpolator:
             "elev": "elev", "smooth_elev": "smooth_elev", "slope": "slope",
             "northness": "northness", "tpi": "tpi", "clc": "clc_level2",
             "dist_to_coast": "dist_to_coast", "signed_dist_to_ridge": "signed_dist_to_ridge",
-            "basin_continuity": "basin_continuity", "elev_above_valley": "elev_above_valley",
+            "basin_id": "basin_id", "elev_above_valley": "elev_above_valley",
         }
         keys = [colmap.get(k, k) for k in (self.cfg.enabled_covariates or [])]
         # elev is already in the main trend; do not double-count

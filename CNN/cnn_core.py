@@ -75,7 +75,7 @@ def clip_var(var: str, pred) -> np.ndarray:
 # elev, CLC, slope, sinasp, cosasp, northness are in the base pack.
 CNN_EXTRA_COVARIATES = (
     "smooth_elev", "tpi", "dist_to_coast", "signed_dist_to_ridge",
-    "basin_continuity", "elev_above_valley",
+    "basin_id", "elev_above_valley",
 )
 
 

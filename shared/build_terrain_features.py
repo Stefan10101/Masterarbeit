@@ -28,6 +28,7 @@ CODE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE_DIR))
 
 from paths import (
+    get_source_root,
     get_dem_path,
     get_landcover_path,
     get_domain_stations_path,
@@ -87,6 +88,32 @@ def _alpine_masks(xs, ys, buffer_m: float = 100000.0):
     return _rast(domain), _rast(geom)
 
 
+def _rasterize_basins(xs, ys, basins_path: Path) -> np.ndarray:
+    """Rasterize the 11 HydroBASINS polygons onto the grid. Returns int32 array."""
+    import geopandas as gpd
+    from rasterio.features import rasterize
+    from rasterio.transform import from_bounds
+
+    if not basins_path.exists():
+        raise FileNotFoundError(f"11-basin polygons not found: {basins_path}")
+    gdf = gpd.read_file(basins_path).to_crs("EPSG:31287")
+    xs = np.asarray(xs, dtype=np.float64)
+    ys = np.asarray(ys, dtype=np.float64)
+    dx = float(np.median(np.diff(xs))) if len(xs) > 1 else 1000.0
+    dy = float(np.median(np.diff(ys))) if len(ys) > 1 else 1000.0
+    ny, nx = len(ys), len(xs)
+    y_top = float(ys.max()) + abs(dy) / 2
+    y_bot = float(ys.min()) - abs(dy) / 2
+    x_left = float(xs.min()) - abs(dx) / 2
+    x_right = float(xs.max()) + abs(dx) / 2
+    transform = from_bounds(x_left, y_bot, x_right, y_top, nx, ny)
+    shapes = [(geom, int(i + 1)) for i, geom in enumerate(gdf.geometry)]
+    arr = rasterize(shapes, out_shape=(ny, nx), transform=transform, fill=0, dtype=np.int32)
+    if ys[0] < ys[-1]:
+        arr = arr[::-1]
+    return arr
+
+
 # CLC level-2 grouping (first two digits of the 3-digit CLC code)
 # 15 classes: 11,12,13,14,21,22,23,24,31,32,33,41,42,51,52
 CLC_LEVEL2 = {
@@ -108,36 +135,6 @@ CLC_LEVEL2 = {
 }
 
 
-
-
-def _label_from_outlets(direc: np.ndarray, outlets: np.ndarray) -> np.ndarray:
-    """Label every cell by the outlet it drains to. Edges are not forced."""
-    from shared.watersheds import D8
-    ny, nx = direc.shape
-    labels = np.zeros((ny, nx), dtype=np.int32)
-    oy, ox = np.where(outlets)
-    if len(oy) == 0:
-        return labels
-    labels[oy, ox] = np.arange(1, len(oy) + 1, dtype=np.int32)
-
-    yy, xx = np.indices((ny, nx))
-    di = np.array([d[0] for d in D8], dtype=np.int32)
-    dj = np.array([d[1] for d in D8], dtype=np.int32)
-    d = np.clip(direc, 0, 7)
-    flows = direc >= 0
-    down_y = np.clip(yy + di[d], 0, ny - 1)
-    down_x = np.clip(xx + dj[d], 0, nx - 1)
-    down = (down_y * nx + down_x).ravel()
-    self_idx = (yy * nx + xx).ravel()
-    down = np.where(flows.ravel(), down, self_idx)
-
-    flat = labels.ravel()
-    pos = np.arange(flat.size, dtype=np.int64)
-    nxt = np.where(flat != 0, pos, down.astype(np.int64))
-    jumps = int(np.ceil(np.log2(max(flat.size, 2)))) + 1
-    for _ in range(jumps):
-        nxt = nxt[nxt]
-    return flat[nxt].reshape(ny, nx)
 
 
 
@@ -227,104 +224,18 @@ def _basin_continuity(labels: np.ndarray, dx: float) -> np.ndarray:
     return dist
 
 
-def compute_valley_fields(dem: np.ndarray, dx: float,
-                          accum_pct: float = 96.0,
-                          valley_pct: float = 90.0,
-                          min_cells: int = 10,
-                          domain_mask: np.ndarray | None = None,
-                          seed_mask: np.ndarray | None = None,
-                          elev_min: float = 150.0,
-                          n_basins: int | None = None,
-                          tpi_radius_m: float = 5000.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Basin id, elev above valley floor, distance to valley axis.
 
-    domain_mask: compute only inside Alpine perimeter + buffer (others set to 0 / nan).
-    seed_mask: basin pour points only inside the strict Alpine perimeter.
-    elev_min: valley-axis and distance only consider cells above this elevation.
-    n_basins: if set, merge fine basins down to this count (15 = major rivers, 50-80 = finer).
-    Valley axis = high accumulation AND low TPI, on land above elev_min.
+def _local_valley_floor(elev: np.ndarray, radius_m: float = 2000.0, dx: float = 1000.0) -> np.ndarray:
+    """Local valley floor: minimum elev inside a ~2 km window.
+
+    No basin restriction. A 2 km window stays inside one valley in most
+    of the Alps, so neighbouring valleys keep their own floors.
     """
-    from shared.watersheds import d8_flow, flow_accum, label_basins, tpi, merge_basins
-    from scipy.ndimage import distance_transform_edt, uniform_filter as ndi_uniform
-    import scipy.ndimage as ndi
-
-    dem = np.asarray(dem, dtype=np.float64)
-    ny, nx = dem.shape
-    if domain_mask is None:
-        domain_mask = np.ones((ny, nx), dtype=bool)
-    else:
-        domain_mask = np.asarray(domain_mask, dtype=bool)
-    if seed_mask is None:
-        seed_mask = domain_mask
-    else:
-        seed_mask = np.asarray(seed_mask, dtype=bool) & domain_mask
-
-    finite = np.isfinite(dem) & domain_mask
-    if not finite.any():
-        z = np.zeros(dem.shape, dtype=np.float32)
-        return (np.zeros(dem.shape, dtype=np.int32), z, z)
-
-    # Fill nans / outside-domain for flow (nearest finite inside domain)
-    filled = dem.copy()
-    if not finite.all():
-        _, (iy, ix) = distance_transform_edt(~finite, return_indices=True)
-        filled = dem[iy, ix]
-
-    # Sink-fill so every cell drains, then D8 + accumulation
-    filled = _fill_sinks(filled, domain_mask)
-    direc = d8_flow(filled)
-    acc = flow_accum(direc)
-    acc = np.where(domain_mask, acc, 0.0)
-
-    # Confluence basins: split where streams join (the "go up the river" model)
-    if n_basins is not None and n_basins > 0:
-        basin = _pour_point_basins(direc, acc, filled, domain_mask, int(n_basins), elev_cut=400.0)
-        basin = np.where(domain_mask, basin, 0).astype(np.int32)
-    else:
-        basin = label_basins(direc, acc, accum_pct, min_cells=min_cells, force_edges=False)
-        basin = np.where(domain_mask, basin, 0).astype(np.int32)
-
-    # Valley floor = minimum elev inside each basin (inside domain)
-    floor = np.zeros_like(filled)
-    for b in np.unique(basin):
-        if b <= 0:
-            continue
-        m = (basin == b) & domain_mask
-        if m.any():
-            floor[m] = np.nanmin(filled[m])
-    rel = np.where(domain_mask, filled - floor, np.nan).astype(np.float32)
-
-    # Valley axis: high accumulation AND low TPI AND low elev_above_valley.
-    # Restricted to elev >= elev_min so the Po plain cannot set the threshold.
-    radius = max(int(tpi_radius_m / max(dx, 1.0)), 1)
-    tpi_map = tpi(filled, radius)
-    cand = domain_mask & (filled >= max(elev_min, 800.0)) & np.isfinite(tpi_map)
-    if cand.any():
-        acc_thr = np.percentile(acc[cand], max(valley_pct, 97.0))
-        tpi_thr = np.percentile(tpi_map[cand], 15.0)
-        # elev_above is not yet final; use a local proxy (elev - smooth)
-        elev_above_proxy = filled - ndi.uniform_filter(filled, size=radius * 2 + 1)
-        ea_thr = np.percentile(elev_above_proxy[cand], 20.0)
-        valley = cand & (acc >= acc_thr) & (tpi_map <= tpi_thr) & (elev_above_proxy <= ea_thr)
-    else:
-        valley = np.zeros_like(domain_mask)
-    if not valley.any() and cand.any():
-        valley = cand & (acc >= np.percentile(acc[cand], 98.0))
-    dist = distance_transform_edt(~valley).astype(np.float32) * float(dx)
-    dist = np.where(domain_mask, dist, np.nan)
-
-    # Size diagnostics
-    ids, counts = np.unique(basin[basin > 0], return_counts=True)
-    if len(counts):
-        areas = counts.astype(np.float64) * (dx / 1000.0) ** 2
-        print(
-            f"    basins: n={len(areas):,}  "
-            f"area_km2 min/p50/p90/max = "
-            f"{areas.min():.1f}/{np.median(areas):.1f}/{np.percentile(areas, 90):.1f}/{areas.max():.1f}",
-            flush=True,
-        )
-    return basin, rel, dist
-
+    from scipy.ndimage import minimum_filter
+    filled = np.nan_to_num(elev, nan=np.nanmax(elev))
+    radius_cells = max(int(round(radius_m / max(dx, 1.0))), 1)
+    floor = minimum_filter(filled, size=radius_cells * 2 + 1)
+    return floor.astype(np.float32)
 
 
 def station_valley_from_dem(xs, ys, dem_path, res_m: float = 100.0,
@@ -387,11 +298,11 @@ def station_valley_from_dem(xs, ys, dem_path, res_m: float = 100.0,
     except Exception as exc:
         print(f"    alpine mask failed ({exc}); using full station grid", flush=True)
         domain_mask = peri_mask = None
-    b, r, d = compute_valley_fields(
-        dest, res_m, accum_pct, valley_pct, min_cells,
-        domain_mask=domain_mask, seed_mask=peri_mask,
-        elev_min=150.0, n_basins=n_basins,
-    )
+    # local 2 km floor; basin_id comes from the HydroBASINS raster
+    floor = _local_valley_floor(dest, radius_m=2000.0, dx=res_m)
+    r = np.maximum(0.0, dest - floor).astype(np.float32)
+    b = np.zeros(dest.shape, dtype=np.int32)  # filled later from raster
+    d = np.full(dest.shape, np.nan, dtype=np.float32)
 
     # Nearest sample
     ix = np.clip(np.round((xs - x0) / res_m).astype(int), 0, nx - 1)
@@ -501,16 +412,17 @@ def coast_and_ridge_distances(xs, ys):
     coast_union = unary_union(coast.geometry)
     ridge = _smooth_ridge()
 
+    # vectorised distance (prepared geometry + STRtree is overkill; GeoSeries is enough)
     pts = gpd.GeoSeries([Point(x, y) for x, y in zip(xs, ys)], crs="EPSG:31287")
-    coast_m = np.array([pt.distance(coast_union) for pt in pts])
-
-    ridge_m = []
-    for pt in pts:
+    coast_m = pts.distance(coast_union).to_numpy()
+    # ridge: still a loop but on a LineString; keep it, it is cheap compared with the coast
+    ridge_m = np.empty(len(pts), dtype=np.float64)
+    for i, pt in enumerate(pts):
         nearest = nearest_points(pt, ridge)[1]
         d = pt.distance(ridge)
         sign = 1.0 if pt.y >= nearest.y else -1.0
-        ridge_m.append(d * sign * 111000.0)
-    return coast_m, np.array(ridge_m)
+        ridge_m[i] = d * sign * 111000.0
+    return coast_m, ridge_m
 
 
 def build_station_features(stations_method: str = "RFSI",
@@ -539,14 +451,20 @@ def build_station_features(stations_method: str = "RFSI",
     aspect = np.full(n, np.nan)
     clc2 = np.zeros(n, dtype=np.int16)
 
-    with rasterio.open(dem_path) as src:
-        for i, (x, y) in enumerate(zip(xs, ys)):
-            sm, ce, sl, asp = sample_dem_window(src, x, y, radius)
-            smooth[i] = sm
-            if np.isnan(elev[i]):
-                elev[i] = ce
-            slope[i] = sl
-            aspect[i] = asp
+    # parallel station DEM sampling
+    from concurrent.futures import ThreadPoolExecutor
+    def _one(xy):
+        x, y = xy
+        with rasterio.open(dem_path) as src:
+            return sample_dem_window(src, x, y, radius)
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        results = list(ex.map(_one, zip(xs, ys)))
+    for i, (sm, ce, sl, asp) in enumerate(results):
+        smooth[i] = sm
+        if np.isnan(elev[i]):
+            elev[i] = ce
+        slope[i] = sl
+        aspect[i] = asp
 
     if clc_path.exists():
         with rasterio.open(clc_path) as src:
@@ -678,12 +596,16 @@ def build_grid_features(resolution: int = 1000, grid_method: str = "RFSI",
         print(f"    alpine mask failed ({exc}); using full grid", flush=True)
         domain_mask = peri_mask = None
     n_basins = n_basins
-    basin_id, elev_above, dist_valley = compute_valley_fields(
-        elev, dx, accum_pct, valley_pct, min_cells,
-        domain_mask=domain_mask, seed_mask=peri_mask,
-        elev_min=150.0, n_basins=n_basins,
-    )
-    basin_cont = _basin_continuity(basin_id, dx)
+    basins_path = get_source_root() / "Basins" / "basins_n11.geojson"
+    try:
+        basin_id = _rasterize_basins(grid.x.values, grid.y.values, basins_path)
+    except Exception as exc:
+        print(f"    basin rasterize failed ({exc}); falling back to zeros", flush=True)
+        basin_id = np.zeros((ny, nx), dtype=np.int32)
+    # elev_above_valley = height above local 2 km floor
+    floor = _local_valley_floor(elev, radius_m=2000.0, dx=dx)
+    elev_above = np.maximum(0.0, elev - floor).astype(np.float32)
+    dist_valley = np.full(elev.shape, np.nan, dtype=np.float32)
 
     # 1000 m radius at this resolution → window in cells
     dx = float(np.median(np.diff(grid.x.values))) if nx > 1 else float(resolution)
@@ -753,7 +675,7 @@ def build_grid_features(resolution: int = 1000, grid_method: str = "RFSI",
             out.append(d * sign * 111000.0)
         return np.array(out)
 
-    step = 1
+    step = 4  # subsample; interpolated back to full grid
     ys_idx = np.arange(0, ny, step)
     xs_idx = np.arange(0, nx, step)
     sy, sx = np.meshgrid(grid.y.values[ys_idx], grid.x.values[xs_idx], indexing="ij")
@@ -814,8 +736,7 @@ def build_grid_features(resolution: int = 1000, grid_method: str = "RFSI",
             "signed_dist_to_ridge": (("y", "x"), ridge_full.astype(np.float32)),
             "clc_level2": (("y", "x"), clc2),
             "basin_id": (("y", "x"), basin_id.astype(np.int32)),
-            "basin_continuity": (("y", "x"), basin_cont.astype(np.float32)),
-            "elev_above_valley": (("y", "x"), elev_above.astype(np.float32)),
+                        "elev_above_valley": (("y", "x"), elev_above.astype(np.float32)),
         },
         coords={"y": grid.y.values, "x": grid.x.values},
     )

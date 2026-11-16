@@ -46,6 +46,12 @@ except ImportError:
     xr = None
 
 
+def _sample_field(field, xs, ys, x, y):
+    ix = np.clip(((np.asarray(x) - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
+    iy = np.clip(((np.asarray(y) - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
+    return field[iy, ix]
+
+
 def grid_terrain(elev, gx, gy):
     dx = float(gx[1] - gx[0]) if len(gx) > 1 else 1.0
     dy = float(gy[1] - gy[0]) if len(gy) > 1 else 1.0
@@ -202,8 +208,7 @@ def main():
                 region = sl["region"].to_numpy() if "region" in sl.columns else None
                 region_q = None
                 if pack is not None and "regions" in pack:
-                    from shared.watersheds import sample_region
-                    region_q = sample_region(pack["regions"], pack["xs"], pack["ys"], xq, yq)
+                                        region_q = _sample_field(pack["regions"], pack["xs"], pack["ys"], xq, yq)
                 hat = model.predict_timestamp(
                     sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(),
                     sl[var].to_numpy(), xq, yq, zq,

@@ -36,6 +36,12 @@ from paths import (
     get_master_grid_path,
     get_rfsi_model_path,
 )
+def _sample_field(field, xs, ys, x, y):
+    ix = np.clip(((np.asarray(x) - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
+    iy = np.clip(((np.asarray(y) - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
+    return field[iy, ix]
+
+
 def subset_times(panel, spec):
     """Local copy. Months filter for prediction only."""
     if spec is None or spec == "" or str(spec).lower() in ("all", "none"):
@@ -336,8 +342,7 @@ def main():
             except Exception as exc:
                 print(f"  grid terrain cache missing: {exc}")
             if pack is not None:
-                from shared.watersheds import sample_region
-                grid_df["region"] = sample_region(
+                                grid_df["region"] = _sample_field(
                     pack["regions"], pack["xs"], pack["ys"],
                     grid_points[:, 0], grid_points[:, 1],
                 ).astype(np.int32)

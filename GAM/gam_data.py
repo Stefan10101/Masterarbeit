@@ -18,6 +18,12 @@ DEFAULT_TRACE = {"half_hourly": 0.05, "daily": 0.1, "weekly": 0.7, "monthly": 1.
 DEFAULT_TRACE_SNOW = {"half_hourly": 0.5, "daily": 0.5, "weekly": 1.0, "monthly": 1.0}
 
 
+def _sample_field(field, xs, ys, x, y):
+    ix = np.clip(((np.asarray(x) - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
+    iy = np.clip(((np.asarray(y) - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
+    return field[iy, ix]
+
+
 def load_gam_config(path: Path | None = None) -> dict:
     path = path or Path(__file__).resolve().parent / "config.yaml"
     with open(path, "r", encoding="utf-8") as f:
@@ -144,8 +150,7 @@ def attach_pack_terrain(panel: pd.DataFrame, pack=None) -> pd.DataFrame:
     """
     if pack is None or "regions" not in pack or panel.empty:
         return panel
-    from shared.watersheds import sample_region
-    region = sample_region(
+        region = _sample_field(
         pack["regions"], pack["xs"], pack["ys"],
         panel["x"].to_numpy(), panel["y"].to_numpy(),
     )
@@ -154,32 +159,27 @@ def attach_pack_terrain(panel: pd.DataFrame, pack=None) -> pd.DataFrame:
     return out
 
 
-def pack_from_master(cfg, n_regions: int = 6):
-    """Build watershed pack for wind (and any other use). Returns None if grid missing."""
+def pack_from_master(cfg, n_regions: int = 11):
+    """Load basin_id from the terrain cache. No watersheds.py."""
     try:
         import xarray as xr
     except ImportError:
         return None
-    from paths import get_master_grid_path
-    from shared.watersheds import WatershedConfig, build_pack
-
-    _, _, grid_method = data_sources(cfg)
+    from paths import get_grid_terrain_path
     res = int(cfg.get("resolutions_to_process", [1000])[0])
-    path = get_master_grid_path(grid_method, res)
+    path = get_grid_terrain_path(res)
     if not path.exists():
         return None
     g = xr.open_dataset(path)
-    if "elev" not in g:
-        return None
-    gblock = cfg.get("gam", {})
-    wcfg = WatershedConfig(
-        n_regions=int(n_regions),
-        accum_pct=float(gblock.get("accum_pct", 96.0)),
-        summit_tpi=float(gblock.get("summit_tpi", 80.0)),
-        coldpool_tpi=float(gblock.get("coldpool_tpi", -60.0)),
-    )
-    dem = g["elev"].values.astype(np.float64)
-    return build_pack(dem, g["x"].values, g["y"].values, wcfg)
+    basin = g["basin_id"].values.astype(np.int32) if "basin_id" in g else np.zeros((g.y.size, g.x.size), dtype=np.int32)
+    return {
+        "regions": basin,
+        "basin_id": basin,
+        "xs": g["x"].values.astype(np.float64),
+        "ys": g["y"].values.astype(np.float64),
+        "n_regions": int(max(int(basin.max()), 1)),
+    }
+
 
 
 def subset_times(panel: pd.DataFrame, spec) -> pd.DataFrame:

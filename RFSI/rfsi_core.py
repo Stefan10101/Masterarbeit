@@ -24,6 +24,12 @@ warnings.filterwarnings("ignore")
 DIST_SCALE = 1000.0  # m → km in the distance features
 
 
+def _sample_field(field, xs, ys, x, y):
+    ix = np.clip(((np.asarray(x) - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
+    iy = np.clip(((np.asarray(y) - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
+    return field[iy, ix]
+
+
 def neighbor_width(n_obs: int) -> int:
     """z_1..z_n + d_km_1..d_n + idw."""
     return int(n_obs) * 2 + 1
@@ -59,7 +65,7 @@ def clip_var(var: str, pred) -> np.ndarray:
 _EXTRA_KEYS = (
     "slope", "northness", "tpi", "smooth_elev",
     "dist_to_coast", "signed_dist_to_ridge",
-    "basin_continuity", "elev_above_valley", "tmean",
+    "basin_id", "elev_above_valley", "tmean",
 )
 _EXTRA_SCALE = {
     "slope": 45.0,            # degrees
@@ -67,7 +73,7 @@ _EXTRA_SCALE = {
     "smooth_elev": 1000.0,    # m -> km
     "dist_to_coast": 1.0e5,   # m
     "signed_dist_to_ridge": 1.0e5,
-    "basin_continuity": 1.0e4,    # m
+    "basin_id": 1.0,    # m
     "elev_above_valley": 1000.0,  # m -> km
     "tmean": 10.0,            # C
 }
@@ -463,7 +469,7 @@ def extras_for_var(df, var: str, rh_t_mode: str = "none", cfg: dict | None = Non
     out = {}
     for c in ("slope", "northness", "tpi", "smooth_elev",
               "dist_to_coast", "signed_dist_to_ridge",
-              "basin_continuity", "elev_above_valley"):
+              "basin_id", "elev_above_valley"):
         if allowed is not None and c not in allowed:
             continue
         if c in df.columns:
@@ -476,23 +482,27 @@ def extras_for_var(df, var: str, rh_t_mode: str = "none", cfg: dict | None = Non
     return out or None
 
 
-def build_region_pack(cfg, n_regions: int = 6):
-    """Watershed region labels on the master grid. None if the grid is missing."""
+def build_region_pack(cfg, n_regions: int = 11):
+    """Load basin_id from the terrain cache. No watersheds.py."""
     try:
         import xarray as xr
     except ImportError:
         return None
-    from paths import get_master_grid_path
-    from shared.watersheds import WatershedConfig, build_pack
+    from paths import get_grid_terrain_path
     res = int(cfg.get("resolutions_to_process", [1000])[0])
-    path = get_master_grid_path("RFSI", res)
+    path = get_grid_terrain_path(res)
     if not path.exists():
         return None
     g = xr.open_dataset(path)
-    if "elev" not in g:
-        return None
-    wcfg = WatershedConfig(n_regions=int(n_regions))
-    return build_pack(g["elev"].values.astype("float64"), g["x"].values, g["y"].values, wcfg)
+    basin = g["basin_id"].values.astype(np.int32) if "basin_id" in g else np.zeros((g.y.size, g.x.size), dtype=np.int32)
+    return {
+        "regions": basin,
+        "basin_id": basin,
+        "xs": g["x"].values.astype(np.float64),
+        "ys": g["y"].values.astype(np.float64),
+        "n_regions": int(max(int(basin.max()), 1)),
+    }
+
 
 
 def attach_region(df, pack):
@@ -501,9 +511,8 @@ def attach_region(df, pack):
         return df
     if "x" not in df.columns or "y" not in df.columns:
         return df
-    from shared.watersheds import sample_region
-    out = df.copy()
-    out["region"] = sample_region(
+        out = df.copy()
+    out["region"] = _sample_field(
         pack["regions"], pack["xs"], pack["ys"],
         out["x"].to_numpy(), out["y"].to_numpy(),
     ).astype("int32")

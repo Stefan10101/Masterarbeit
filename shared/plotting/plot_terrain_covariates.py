@@ -14,7 +14,7 @@ background remains visible.
 
 Covariates (matching the DEM section of the thesis):
   elev, smooth_elev, slope, northness, tpi,
-  signed_dist_to_ridge, dist_to_coast, basin_continuity, elev_above_valley
+  signed_dist_to_ridge, dist_to_coast, basin_id, elev_above_valley
 
 Output: Plots/terrain/<covariate>_<res>m.png  (and optional PDF)
 """
@@ -57,7 +57,7 @@ COVARIATES = [
     ("tpi", "Topographic Position Index", "m", "RdBu_r", True, ""),
     ("signed_dist_to_ridge", "Signed Distance to Ridge", "m", "RdBu_r", True, ""),
     ("dist_to_coast", "Distance to Coast", "m", "viridis", False, ""),
-    ("basin_continuity", "Basin Continuity", "m", "viridis", False, ""),
+    ("basin_id", "Basin ID", "", "tab20", False, ""),
     ("elev_above_valley", "Elevation above Valley Floor", "m", "terrain", False, ""),
 ]
 

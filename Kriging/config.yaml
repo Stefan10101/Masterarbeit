@@ -76,5 +76,5 @@ covariates:
   clc: true
   dist_to_coast: true
   signed_dist_to_ridge: true
-  basin_continuity: true
+  basin_id: true
   elev_above_valley: true

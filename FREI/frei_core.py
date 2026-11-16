@@ -197,15 +197,14 @@ class FreiInterpolator:
     def _regions(self, x, y):
         if self.pack is None:
             return np.ones(len(x), dtype=int)
-        from shared.watersheds import sample_region
-        return sample_region(self.pack["regions"], self.pack["xs"], self.pack["ys"], x, y)
+        return self._sample(self.pack.get("basin_id"), x, y)
 
     def _cold(self, x, y):
         if self.pack is None or "coldpool" not in self.pack:
             return np.zeros(len(x), dtype=bool)
-        from shared.watersheds import sample_region
-        return sample_region(self.pack["coldpool"].astype(int),
-                             self.pack["xs"], self.pack["ys"], x, y) > 0
+        # cold-pool from TPI covariate (threshold)
+        tpi = self._sample(self.pack.get("tpi"), x, y)
+        return tpi < float(self.cfg.coldpool_tpi)
 
     def _weights(self, x, y):
         n = len(np.asarray(x))
@@ -218,7 +217,6 @@ class FreiInterpolator:
             reg = self._regions(x, y)
             w[np.arange(n), np.clip(reg - 1, 0, n_r - 1)] = 1.0
             return w, reg
-        from shared.watersheds import sample_blend_weights
         dx = float(self.pack.get("dx", 1000.0))
         blend_cells = max(float(self.cfg.blend_km) * 1000.0 / max(dx, 1.0), 1.0)
         w = sample_blend_weights(
@@ -262,20 +260,40 @@ class FreiInterpolator:
             out += w[:, r] * eval_profile(zq, p)
         return out
 
-    def _horiz_m(self, x0, y0, x1, y1):
-        if self.pack is None:
-            return np.hypot(x1 - x0, y1 - y0)
-        from shared.watersheds import cost_between
+
+    def _sample(self, field, x, y):
+        if field is None or self.pack is None:
+            return np.zeros(len(x), dtype=np.float64)
         xs, ys = self.pack["xs"], self.pack["ys"]
-        dx = float(self.pack.get("dx", abs(xs[1] - xs[0]) if len(xs) > 1 else 1000.0))
-        dy = float(ys[1] - ys[0]) if len(ys) > 1 else dx
-        c0 = np.clip(((x0 - xs[0]) / dx), 0, len(xs) - 1)
-        r0 = np.clip(((y0 - ys[0]) / dy), 0, len(ys) - 1)
-        c1 = np.clip(((x1 - xs[0]) / dx), 0, len(xs) - 1)
-        r1 = np.clip(((y1 - ys[0]) / dy), 0, len(ys) - 1)
-        cells = cost_between(r0, c0, r1, c1, self.pack["uy"], self.pack["ux"],
-                             self.pack["tpi"], self.cfg.across_w)
-        return cells * dx
+        ix = np.clip(((np.asarray(x) - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
+        iy = np.clip(((np.asarray(y) - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
+        return field[iy, ix]
+    def _horiz_m(self, x0, y0, z0, x1, y1, z1):
+        """Sightline cost: d_xy * (1 + beta * max_excess / H_ref).
+
+        Line of sight is the straight 3-D line from (x0,y0,z0) to (x1,y1,z1).
+        Blocking is the maximum height by which the DEM exceeds that line.
+        Clear line of sight -> blocking = 0, even if elevations differ.
+        """
+        dxy = np.hypot(x1 - x0, y1 - y0)
+        if self.pack is None or "elev" not in self.pack:
+            return dxy
+        # sample DEM along the line
+        n = max(int(dxy / 500.0), 2)  # ~500 m steps
+        t = np.linspace(0.0, 1.0, n)
+        xs = x0 + t * (x1 - x0)
+        ys = y0 + t * (y1 - y0)
+        line = z0 + t * (z1 - z0)
+        # nearest-cell sample of elev
+        gx, gy = self.pack["xs"], self.pack["ys"]
+        elev = self.pack["elev"]
+        ix = np.clip(((xs - gx[0]) / (gx[1] - gx[0])).astype(int), 0, len(gx) - 1)
+        iy = np.clip(((ys - gy[0]) / (gy[1] - gy[0])).astype(int), 0, len(gy) - 1)
+        dem = elev[iy, ix]
+        excess = np.maximum(0.0, dem - line)
+        blocking = float(excess.max()) / 500.0  # H_ref = 500 m
+        beta = float(getattr(self.cfg, "sight_beta", 2.0))
+        return dxy * (1.0 + beta * blocking)
 
     def _residual_idw(self, x, y, z, resid, xq, yq, zq, across_w, ix=None):
         """Modified IDW: w = (1-Fz)*w_horiz + Fz*w_z, horiz = valley cost."""
@@ -293,7 +311,7 @@ class FreiInterpolator:
         horiz = np.empty((len(xq), k), dtype=np.float64)
         dz = np.empty((len(xq), k), dtype=np.float64)
         for j in range(k):
-            horiz[:, j] = self._horiz_m(xq, yq, x[ix[:, j]], y[ix[:, j]])
+            horiz[:, j] = self._horiz_m(xq, yq, zq, x[ix[:, j]], y[ix[:, j]], z[ix[:, j]])
             dz[:, j] = np.abs(zq - z[ix[:, j]])
         self.cfg.across_w = old
 

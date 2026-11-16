@@ -59,7 +59,7 @@ def _covar_arrays(df, keys):
         "elev": "elev", "smooth_elev": "smooth_elev", "slope": "slope",
         "northness": "northness", "tpi": "tpi", "clc": "clc_level2",
         "dist_to_coast": "dist_to_coast", "signed_dist_to_ridge": "signed_dist_to_ridge",
-        "basin_continuity": "basin_continuity", "elev_above_valley": "elev_above_valley",
+        "basin_id": "basin_id", "elev_above_valley": "elev_above_valley",
     }
     out = []
     for k in keys or []:
@@ -110,82 +110,35 @@ def _base_cache_path(res: int) -> Path:
     return get_watershed_base_path(res)
 
 
-def pack_from_master(cfg, n_regions: int = 6):
-    """Watershed pack. DEM-derived fields are cached; only the n_regions merge is redone."""
+def pack_from_master(cfg, n_regions: int = 11):
+    """Load basin_id + elev + tpi from the terrain cache. No watersheds.py."""
     try:
         import xarray as xr
     except ImportError:
         return None
-    from shared.watersheds import (
-        WatershedConfig, d8_flow, flow_accum, label_basins, merge_basins,
-        tpi, flags_from_tpi, valley_unit, region_distance,
-    )
+    from paths import get_grid_terrain_path
     _, _, grid_method = data_sources(cfg)
     res = int(cfg.get("resolutions_to_process", [1000])[0])
-    path = get_master_grid_path(grid_method, res)
+    path = get_grid_terrain_path(res)
     if not path.exists():
         return None
     g = xr.open_dataset(path)
-    if "elev" not in g:
-        return None
-    f = cfg.get("frei", {})
-    wcfg = WatershedConfig(
-        n_regions=int(n_regions),
-        accum_pct=float(f.get("accum_pct", 96.0)),
-        summit_tpi=float(f.get("summit_tpi", 80.0)),
-        coldpool_tpi=float(f.get("coldpool_tpi", -60.0)),
-    )
-    cache = _base_cache_path(res)
-    if cache.exists():
-        print(f"    loading cached watershed base {cache.name}", flush=True)
-        z = np.load(cache)
-        raw = z["raw"]
-        tpi_map = z["tpi"]
-        summit = z["summit"]
-        cold = z["coldpool"]
-        uy = z["uy"]
-        ux = z["ux"]
-        xs = z["xs"]
-        ys = z["ys"]
-        dx = float(z["dx"])
-    else:
-        dem = g["elev"].values.astype(np.float64)
-        xs = g["x"].values.astype(np.float64)
-        ys = g["y"].values.astype(np.float64)
-        dx = abs(float(xs[1] - xs[0])) if len(xs) > 1 else 1000.0
-        print(f"    watershed base: grid {dem.shape} (cached after this run)", flush=True)
-        print("    D8 flow …", flush=True)
-        direc = d8_flow(dem)
-        print("    accumulation …", flush=True)
-        acc = flow_accum(direc)
-        print("    basins …", flush=True)
-        raw = label_basins(direc, acc, wcfg.accum_pct, wcfg.min_basin_cells)
-        print("    TPI / valley axis …", flush=True)
-        radius = max(int(wcfg.tpi_radius_m / max(dx, 1.0)), 1)
-        tpi_map = tpi(dem, radius)
-        summit, cold = flags_from_tpi(tpi_map, wcfg.summit_tpi, wcfg.coldpool_tpi)
-        uy, ux = valley_unit(direc)
-        np.savez_compressed(
-            cache, raw=raw, tpi=tpi_map, summit=summit, coldpool=cold,
-            uy=uy, ux=ux, xs=xs, ys=ys, dx=np.array(dx),
-        )
-        print(f"    cached {cache}", flush=True)
-    print(f"    merge to n_regions={n_regions}", flush=True)
-    regions = merge_basins(raw, g["elev"].values.astype(np.float64), xs, ys, int(n_regions))
+    xs = g["x"].values.astype(np.float64)
+    ys = g["y"].values.astype(np.float64)
+    dx = abs(float(xs[1] - xs[0])) if len(xs) > 1 else 1000.0
+    basin = g["basin_id"].values.astype(np.int32) if "basin_id" in g else np.zeros(g["elev"].shape, dtype=np.int32)
+    elev = g["elev"].values.astype(np.float64) if "elev" in g else np.full(basin.shape, np.nan)
+    tpi = g["tpi"].values.astype(np.float64) if "tpi" in g else np.zeros(basin.shape)
     return {
-        "regions": regions,
-        "region_dist": region_distance(regions),
-        "tpi": tpi_map,
-        "summit": summit,
-        "coldpool": cold,
-        "uy": uy,
-        "ux": ux,
-        "xs": np.asarray(xs, dtype=np.float64),
-        "ys": np.asarray(ys, dtype=np.float64),
-        "dx": float(dx),
-        "n_regions": int(max(int(regions.max()), 1)),
-        "cfg": wcfg,
+        "basin_id": basin,
+        "elev": elev,
+        "tpi": tpi,
+        "xs": xs,
+        "ys": ys,
+        "dx": dx,
+        "n_regions": int(max(int(basin.max()), 1)),
     }
+
 
 
 def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, pack=None, jobs: int = 1):

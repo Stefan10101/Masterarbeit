@@ -1,0 +1,785 @@
+diff --git a/CNN/cnn_core.py b/CNN/cnn_core.py
+index beca875..df11a9d 100644
+--- a/CNN/cnn_core.py
++++ b/CNN/cnn_core.py
+@@ -75,7 +75,7 @@ def clip_var(var: str, pred) -> np.ndarray:
+ # elev, CLC, slope, sinasp, cosasp, northness are in the base pack.
+ CNN_EXTRA_COVARIATES = (
+     "smooth_elev", "tpi", "dist_to_coast", "signed_dist_to_ridge",
+-    "basin_continuity", "elev_above_valley",
++    "basin_id", "elev_above_valley",
+ )
+ 
+ 
+diff --git a/CNN/config.yaml b/CNN/config.yaml
+index 2369ca5..ec96e8b 100644
+--- a/CNN/config.yaml
++++ b/CNN/config.yaml
+@@ -54,5 +54,5 @@ covariates:
+   clc: true
+   dist_to_coast: true
+   signed_dist_to_ridge: true
+-  basin_continuity: true
++  basin_id: true
+   elev_above_valley: true
+diff --git a/FREI/frei_core.py b/FREI/frei_core.py
+index 6ac2a66..e637cc1 100644
+--- a/FREI/frei_core.py
++++ b/FREI/frei_core.py
+@@ -197,15 +197,14 @@ class FreiInterpolator:
+     def _regions(self, x, y):
+         if self.pack is None:
+             return np.ones(len(x), dtype=int)
+-        from shared.watersheds import sample_region
+-        return sample_region(self.pack["regions"], self.pack["xs"], self.pack["ys"], x, y)
++        return self._sample(self.pack.get("basin_id"), x, y)
+ 
+     def _cold(self, x, y):
+         if self.pack is None or "coldpool" not in self.pack:
+             return np.zeros(len(x), dtype=bool)
+-        from shared.watersheds import sample_region
+-        return sample_region(self.pack["coldpool"].astype(int),
+-                             self.pack["xs"], self.pack["ys"], x, y) > 0
++        # cold-pool from TPI covariate (threshold)
++        tpi = self._sample(self.pack.get("tpi"), x, y)
++        return tpi < float(self.cfg.coldpool_tpi)
+ 
+     def _weights(self, x, y):
+         n = len(np.asarray(x))
+@@ -218,7 +217,6 @@ class FreiInterpolator:
+             reg = self._regions(x, y)
+             w[np.arange(n), np.clip(reg - 1, 0, n_r - 1)] = 1.0
+             return w, reg
+-        from shared.watersheds import sample_blend_weights
+         dx = float(self.pack.get("dx", 1000.0))
+         blend_cells = max(float(self.cfg.blend_km) * 1000.0 / max(dx, 1.0), 1.0)
+         w = sample_blend_weights(
+@@ -262,20 +260,40 @@ class FreiInterpolator:
+             out += w[:, r] * eval_profile(zq, p)
+         return out
+ 
+-    def _horiz_m(self, x0, y0, x1, y1):
+-        if self.pack is None:
+-            return np.hypot(x1 - x0, y1 - y0)
+-        from shared.watersheds import cost_between
++
++    def _sample(self, field, x, y):
++        if field is None or self.pack is None:
++            return np.zeros(len(x), dtype=np.float64)
+         xs, ys = self.pack["xs"], self.pack["ys"]
+-        dx = float(self.pack.get("dx", abs(xs[1] - xs[0]) if len(xs) > 1 else 1000.0))
+-        dy = float(ys[1] - ys[0]) if len(ys) > 1 else dx
+-        c0 = np.clip(((x0 - xs[0]) / dx), 0, len(xs) - 1)
+-        r0 = np.clip(((y0 - ys[0]) / dy), 0, len(ys) - 1)
+-        c1 = np.clip(((x1 - xs[0]) / dx), 0, len(xs) - 1)
+-        r1 = np.clip(((y1 - ys[0]) / dy), 0, len(ys) - 1)
+-        cells = cost_between(r0, c0, r1, c1, self.pack["uy"], self.pack["ux"],
+-                             self.pack["tpi"], self.cfg.across_w)
+-        return cells * dx
++        ix = np.clip(((np.asarray(x) - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
++        iy = np.clip(((np.asarray(y) - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
++        return field[iy, ix]
++    def _horiz_m(self, x0, y0, z0, x1, y1, z1):
++        """Sightline cost: d_xy * (1 + beta * max_excess / H_ref).
++
++        Line of sight is the straight 3-D line from (x0,y0,z0) to (x1,y1,z1).
++        Blocking is the maximum height by which the DEM exceeds that line.
++        Clear line of sight -> blocking = 0, even if elevations differ.
++        """
++        dxy = np.hypot(x1 - x0, y1 - y0)
++        if self.pack is None or "elev" not in self.pack:
++            return dxy
++        # sample DEM along the line
++        n = max(int(dxy / 500.0), 2)  # ~500 m steps
++        t = np.linspace(0.0, 1.0, n)
++        xs = x0 + t * (x1 - x0)
++        ys = y0 + t * (y1 - y0)
++        line = z0 + t * (z1 - z0)
++        # nearest-cell sample of elev
++        gx, gy = self.pack["xs"], self.pack["ys"]
++        elev = self.pack["elev"]
++        ix = np.clip(((xs - gx[0]) / (gx[1] - gx[0])).astype(int), 0, len(gx) - 1)
++        iy = np.clip(((ys - gy[0]) / (gy[1] - gy[0])).astype(int), 0, len(gy) - 1)
++        dem = elev[iy, ix]
++        excess = np.maximum(0.0, dem - line)
++        blocking = float(excess.max()) / 500.0  # H_ref = 500 m
++        beta = float(getattr(self.cfg, "sight_beta", 2.0))
++        return dxy * (1.0 + beta * blocking)
+ 
+     def _residual_idw(self, x, y, z, resid, xq, yq, zq, across_w, ix=None):
+         """Modified IDW: w = (1-Fz)*w_horiz + Fz*w_z, horiz = valley cost."""
+@@ -293,7 +311,7 @@ class FreiInterpolator:
+         horiz = np.empty((len(xq), k), dtype=np.float64)
+         dz = np.empty((len(xq), k), dtype=np.float64)
+         for j in range(k):
+-            horiz[:, j] = self._horiz_m(xq, yq, x[ix[:, j]], y[ix[:, j]])
++            horiz[:, j] = self._horiz_m(xq, yq, zq, x[ix[:, j]], y[ix[:, j]], z[ix[:, j]])
+             dz[:, j] = np.abs(zq - z[ix[:, j]])
+         self.cfg.across_w = old
+ 
+diff --git a/FREI/llocv_frei.py b/FREI/llocv_frei.py
+index c3edc89..5ae35eb 100644
+--- a/FREI/llocv_frei.py
++++ b/FREI/llocv_frei.py
+@@ -59,7 +59,7 @@ def _covar_arrays(df, keys):
+         "elev": "elev", "smooth_elev": "smooth_elev", "slope": "slope",
+         "northness": "northness", "tpi": "tpi", "clc": "clc_level2",
+         "dist_to_coast": "dist_to_coast", "signed_dist_to_ridge": "signed_dist_to_ridge",
+-        "basin_continuity": "basin_continuity", "elev_above_valley": "elev_above_valley",
++        "basin_id": "basin_id", "elev_above_valley": "elev_above_valley",
+     }
+     out = []
+     for k in keys or []:
+@@ -110,84 +110,37 @@ def _base_cache_path(res: int) -> Path:
+     return get_watershed_base_path(res)
+ 
+ 
+-def pack_from_master(cfg, n_regions: int = 6):
+-    """Watershed pack. DEM-derived fields are cached; only the n_regions merge is redone."""
++def pack_from_master(cfg, n_regions: int = 11):
++    """Load basin_id + elev + tpi from the terrain cache. No watersheds.py."""
+     try:
+         import xarray as xr
+     except ImportError:
+         return None
+-    from shared.watersheds import (
+-        WatershedConfig, d8_flow, flow_accum, label_basins, merge_basins,
+-        tpi, flags_from_tpi, valley_unit, region_distance,
+-    )
++    from paths import get_grid_terrain_path
+     _, _, grid_method = data_sources(cfg)
+     res = int(cfg.get("resolutions_to_process", [1000])[0])
+-    path = get_master_grid_path(grid_method, res)
++    path = get_grid_terrain_path(res)
+     if not path.exists():
+         return None
+     g = xr.open_dataset(path)
+-    if "elev" not in g:
+-        return None
+-    f = cfg.get("frei", {})
+-    wcfg = WatershedConfig(
+-        n_regions=int(n_regions),
+-        accum_pct=float(f.get("accum_pct", 96.0)),
+-        summit_tpi=float(f.get("summit_tpi", 80.0)),
+-        coldpool_tpi=float(f.get("coldpool_tpi", -60.0)),
+-    )
+-    cache = _base_cache_path(res)
+-    if cache.exists():
+-        print(f"    loading cached watershed base {cache.name}", flush=True)
+-        z = np.load(cache)
+-        raw = z["raw"]
+-        tpi_map = z["tpi"]
+-        summit = z["summit"]
+-        cold = z["coldpool"]
+-        uy = z["uy"]
+-        ux = z["ux"]
+-        xs = z["xs"]
+-        ys = z["ys"]
+-        dx = float(z["dx"])
+-    else:
+-        dem = g["elev"].values.astype(np.float64)
+-        xs = g["x"].values.astype(np.float64)
+-        ys = g["y"].values.astype(np.float64)
+-        dx = abs(float(xs[1] - xs[0])) if len(xs) > 1 else 1000.0
+-        print(f"    watershed base: grid {dem.shape} (cached after this run)", flush=True)
+-        print("    D8 flow …", flush=True)
+-        direc = d8_flow(dem)
+-        print("    accumulation …", flush=True)
+-        acc = flow_accum(direc)
+-        print("    basins …", flush=True)
+-        raw = label_basins(direc, acc, wcfg.accum_pct, wcfg.min_basin_cells)
+-        print("    TPI / valley axis …", flush=True)
+-        radius = max(int(wcfg.tpi_radius_m / max(dx, 1.0)), 1)
+-        tpi_map = tpi(dem, radius)
+-        summit, cold = flags_from_tpi(tpi_map, wcfg.summit_tpi, wcfg.coldpool_tpi)
+-        uy, ux = valley_unit(direc)
+-        np.savez_compressed(
+-            cache, raw=raw, tpi=tpi_map, summit=summit, coldpool=cold,
+-            uy=uy, ux=ux, xs=xs, ys=ys, dx=np.array(dx),
+-        )
+-        print(f"    cached {cache}", flush=True)
+-    print(f"    merge to n_regions={n_regions}", flush=True)
+-    regions = merge_basins(raw, g["elev"].values.astype(np.float64), xs, ys, int(n_regions))
++    xs = g["x"].values.astype(np.float64)
++    ys = g["y"].values.astype(np.float64)
++    dx = abs(float(xs[1] - xs[0])) if len(xs) > 1 else 1000.0
++    basin = g["basin_id"].values.astype(np.int32) if "basin_id" in g else np.zeros(g["elev"].shape, dtype=np.int32)
++    elev = g["elev"].values.astype(np.float64) if "elev" in g else np.full(basin.shape, np.nan)
++    tpi = g["tpi"].values.astype(np.float64) if "tpi" in g else np.zeros(basin.shape)
+     return {
+-        "regions": regions,
+-        "region_dist": region_distance(regions),
+-        "tpi": tpi_map,
+-        "summit": summit,
+-        "coldpool": cold,
+-        "uy": uy,
+-        "ux": ux,
+-        "xs": np.asarray(xs, dtype=np.float64),
+-        "ys": np.asarray(ys, dtype=np.float64),
+-        "dx": float(dx),
+-        "n_regions": int(max(int(regions.max()), 1)),
+-        "cfg": wcfg,
++        "basin_id": basin,
++        "elev": elev,
++        "tpi": tpi,
++        "xs": xs,
++        "ys": ys,
++        "dx": dx,
++        "n_regions": int(max(int(basin.max()), 1)),
+     }
+ 
+ 
++
+ def run_llocv(panel, var, fcfg: FreiConfig, n_folds, fit_splits, score_splits, pack=None, jobs: int = 1):
+     """
+     Protocol-aware LLOCV.
+diff --git a/GAM/config.yaml b/GAM/config.yaml
+index 169dd07..0db8ed2 100644
+--- a/GAM/config.yaml
++++ b/GAM/config.yaml
+@@ -58,5 +58,5 @@ covariates:
+   clc: true
+   dist_to_coast: true
+   signed_dist_to_ridge: true
+-  basin_continuity: true
++  basin_id: true
+   elev_above_valley: true
+diff --git a/GAM/gam_data.py b/GAM/gam_data.py
+index c971cfa..24f905d 100644
+--- a/GAM/gam_data.py
++++ b/GAM/gam_data.py
+@@ -18,6 +18,12 @@ DEFAULT_TRACE = {"half_hourly": 0.05, "daily": 0.1, "weekly": 0.7, "monthly": 1.
+ DEFAULT_TRACE_SNOW = {"half_hourly": 0.5, "daily": 0.5, "weekly": 1.0, "monthly": 1.0}
+ 
+ 
++def _sample_field(field, xs, ys, x, y):
++    ix = np.clip(((np.asarray(x) - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
++    iy = np.clip(((np.asarray(y) - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
++    return field[iy, ix]
++
++
+ def load_gam_config(path: Path | None = None) -> dict:
+     path = path or Path(__file__).resolve().parent / "config.yaml"
+     with open(path, "r", encoding="utf-8") as f:
+@@ -144,8 +150,7 @@ def attach_pack_terrain(panel: pd.DataFrame, pack=None) -> pd.DataFrame:
+     """
+     if pack is None or "regions" not in pack or panel.empty:
+         return panel
+-    from shared.watersheds import sample_region
+-    region = sample_region(
++        region = _sample_field(
+         pack["regions"], pack["xs"], pack["ys"],
+         panel["x"].to_numpy(), panel["y"].to_numpy(),
+     )
+@@ -154,32 +159,27 @@ def attach_pack_terrain(panel: pd.DataFrame, pack=None) -> pd.DataFrame:
+     return out
+ 
+ 
+-def pack_from_master(cfg, n_regions: int = 6):
+-    """Build watershed pack for wind (and any other use). Returns None if grid missing."""
++def pack_from_master(cfg, n_regions: int = 11):
++    """Load basin_id from the terrain cache. No watersheds.py."""
+     try:
+         import xarray as xr
+     except ImportError:
+         return None
+-    from paths import get_master_grid_path
+-    from shared.watersheds import WatershedConfig, build_pack
+-
+-    _, _, grid_method = data_sources(cfg)
++    from paths import get_grid_terrain_path
+     res = int(cfg.get("resolutions_to_process", [1000])[0])
+-    path = get_master_grid_path(grid_method, res)
++    path = get_grid_terrain_path(res)
+     if not path.exists():
+         return None
+     g = xr.open_dataset(path)
+-    if "elev" not in g:
+-        return None
+-    gblock = cfg.get("gam", {})
+-    wcfg = WatershedConfig(
+-        n_regions=int(n_regions),
+-        accum_pct=float(gblock.get("accum_pct", 96.0)),
+-        summit_tpi=float(gblock.get("summit_tpi", 80.0)),
+-        coldpool_tpi=float(gblock.get("coldpool_tpi", -60.0)),
+-    )
+-    dem = g["elev"].values.astype(np.float64)
+-    return build_pack(dem, g["x"].values, g["y"].values, wcfg)
++    basin = g["basin_id"].values.astype(np.int32) if "basin_id" in g else np.zeros((g.y.size, g.x.size), dtype=np.int32)
++    return {
++        "regions": basin,
++        "basin_id": basin,
++        "xs": g["x"].values.astype(np.float64),
++        "ys": g["y"].values.astype(np.float64),
++        "n_regions": int(max(int(basin.max()), 1)),
++    }
++
+ 
+ 
+ def subset_times(panel: pd.DataFrame, spec) -> pd.DataFrame:
+diff --git a/GAM/produce_gam_maps.py b/GAM/produce_gam_maps.py
+index 32173fe..cb93fea 100644
+--- a/GAM/produce_gam_maps.py
++++ b/GAM/produce_gam_maps.py
+@@ -46,6 +46,12 @@ except ImportError:
+     xr = None
+ 
+ 
++def _sample_field(field, xs, ys, x, y):
++    ix = np.clip(((np.asarray(x) - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
++    iy = np.clip(((np.asarray(y) - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
++    return field[iy, ix]
++
++
+ def grid_terrain(elev, gx, gy):
+     dx = float(gx[1] - gx[0]) if len(gx) > 1 else 1.0
+     dy = float(gy[1] - gy[0]) if len(gy) > 1 else 1.0
+@@ -202,8 +208,7 @@ def main():
+                 region = sl["region"].to_numpy() if "region" in sl.columns else None
+                 region_q = None
+                 if pack is not None and "regions" in pack:
+-                    from shared.watersheds import sample_region
+-                    region_q = sample_region(pack["regions"], pack["xs"], pack["ys"], xq, yq)
++                                        region_q = _sample_field(pack["regions"], pack["xs"], pack["ys"], xq, yq)
+                 hat = model.predict_timestamp(
+                     sl["x"].to_numpy(), sl["y"].to_numpy(), sl["elev"].to_numpy(),
+                     sl[var].to_numpy(), xq, yq, zq,
+diff --git a/Kriging/config.yaml b/Kriging/config.yaml
+index a355a65..4ab9ffc 100644
+--- a/Kriging/config.yaml
++++ b/Kriging/config.yaml
+@@ -76,5 +76,5 @@ covariates:
+   clc: true
+   dist_to_coast: true
+   signed_dist_to_ridge: true
+-  basin_continuity: true
++  basin_id: true
+   elev_above_valley: true
+diff --git a/Kriging/kriging_core.py b/Kriging/kriging_core.py
+index 1095954..cd61d0e 100644
+--- a/Kriging/kriging_core.py
++++ b/Kriging/kriging_core.py
+@@ -353,7 +353,7 @@ class KrigingInterpolator:
+             "elev": "elev", "smooth_elev": "smooth_elev", "slope": "slope",
+             "northness": "northness", "tpi": "tpi", "clc": "clc_level2",
+             "dist_to_coast": "dist_to_coast", "signed_dist_to_ridge": "signed_dist_to_ridge",
+-            "basin_continuity": "basin_continuity", "elev_above_valley": "elev_above_valley",
++            "basin_id": "basin_id", "elev_above_valley": "elev_above_valley",
+         }
+         keys = [colmap.get(k, k) for k in (self.cfg.enabled_covariates or [])]
+         # elev is already in the main trend; do not double-count
+diff --git a/Kriging/kriging_data.py b/Kriging/kriging_data.py
+index 30ed74d..f2dfb45 100644
+--- a/Kriging/kriging_data.py
++++ b/Kriging/kriging_data.py
+@@ -42,6 +42,12 @@ DEFAULT_TRACE_SNOW = {
+ }
+ 
+ 
++def _sample_field(field, xs, ys, x, y):
++    ix = np.clip(((np.asarray(x) - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
++    iy = np.clip(((np.asarray(y) - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
++    return field[iy, ix]
++
++
+ def _label_times(times):
+     _splits_path = CODE_DIR / "shared" / "splits" / "splits.py"
+     _spec = _ilu.spec_from_file_location("thesis_time_splits", _splits_path)
+@@ -167,13 +173,12 @@ def attach_pack_terrain(panel: pd.DataFrame, pack) -> pd.DataFrame:
+                 panel[c] = fill
+         return panel
+     pack = ensure_pack_terrain(pack)
+-    from shared.watersheds import sample_region
+-    xs, ys = pack["xs"], pack["ys"]
++        xs, ys = pack["xs"], pack["ys"]
+     out = panel.copy()
+-    out["slope"] = sample_region(pack["slope"], xs, ys, out["x"], out["y"]).astype(np.float64)
+-    out["northness"] = sample_region(pack["northness"], xs, ys, out["x"], out["y"]).astype(np.float64)
++    out["slope"] = _sample_field(pack["slope"], xs, ys, out["x"], out["y"]).astype(np.float64)
++    out["northness"] = _sample_field(pack["northness"], xs, ys, out["x"], out["y"]).astype(np.float64)
+     if "regions" in pack:
+-        out["region"] = sample_region(pack["regions"], xs, ys, out["x"], out["y"]).astype(np.int32)
++        out["region"] = _sample_field(pack["regions"], xs, ys, out["x"], out["y"]).astype(np.int32)
+     else:
+         out["region"] = 1
+     return out
+@@ -219,76 +224,27 @@ def subset_splits(panel: pd.DataFrame, splits) -> pd.DataFrame:
+     return panel.loc[panel["split"].isin(splits)].copy()
+ 
+ 
+-def pack_from_master(cfg, n_regions: int = 6):
++def pack_from_master(cfg, n_regions: int = 11):
++    """Load basin_id from the terrain cache. No watersheds.py."""
+     try:
+         import xarray as xr
+     except ImportError:
+         return None
+-    from paths import get_master_grid_path, get_watershed_base_path
+-    from shared.watersheds import (
+-        WatershedConfig, d8_flow, flow_accum, label_basins,
+-        merge_basins, tpi, flags_from_tpi, valley_unit, region_distance,
+-    )
+-
+-    _, _, grid_method = data_sources(cfg)
++    from paths import get_grid_terrain_path
+     res = int(cfg.get("resolutions_to_process", [1000])[0])
+-    path = get_master_grid_path(grid_method, res)
++    path = get_grid_terrain_path(res)
+     if not path.exists():
+         return None
+     g = xr.open_dataset(path)
+-    if "elev" not in g:
+-        return None
+-    k = cfg.get("kriging", {})
+-    wcfg = WatershedConfig(
+-        n_regions=int(n_regions),
+-        accum_pct=float(k.get("accum_pct", 96.0)),
+-        summit_tpi=float(k.get("summit_tpi", 80.0)),
+-        coldpool_tpi=float(k.get("coldpool_tpi", -60.0)),
+-    )
+-    dem = g["elev"].values.astype(np.float64)
+-    cache = get_watershed_base_path(res)
+-    if cache.exists():
+-        z = np.load(cache)
+-        raw = z["raw"]
+-        tpi_map = z["tpi"]
+-        summit = z["summit"]
+-        cold = z["coldpool"]
+-        uy = z["uy"]
+-        ux = z["ux"]
+-        xs = z["xs"]
+-        ys = z["ys"]
+-        dx = float(z["dx"])
+-    else:
+-        xs = g["x"].values.astype(np.float64)
+-        ys = g["y"].values.astype(np.float64)
+-        dx = abs(float(xs[1] - xs[0])) if len(xs) > 1 else 1000.0
+-        direc = d8_flow(dem)
+-        acc = flow_accum(direc)
+-        raw = label_basins(direc, acc, wcfg.accum_pct, wcfg.min_basin_cells)
+-        radius = max(int(wcfg.tpi_radius_m / max(dx, 1.0)), 1)
+-        tpi_map = tpi(dem, radius)
+-        summit, cold = flags_from_tpi(tpi_map, wcfg.summit_tpi, wcfg.coldpool_tpi)
+-        uy, ux = valley_unit(direc)
+-        np.savez_compressed(
+-            cache, raw=raw, tpi=tpi_map, summit=summit, coldpool=cold,
+-            uy=uy, ux=ux, xs=xs, ys=ys, dx=np.array(dx),
+-        )
+-    regions = merge_basins(raw, dem, xs, ys, int(n_regions))
+-    pack = {
+-        "regions": regions,
+-        "region_dist": region_distance(regions),
+-        "tpi": tpi_map,
+-        "summit": summit,
+-        "coldpool": cold,
+-        "uy": uy,
+-        "ux": ux,
+-        "xs": np.asarray(xs, dtype=np.float64),
+-        "ys": np.asarray(ys, dtype=np.float64),
+-        "dx": float(dx),
+-        "n_regions": int(max(int(regions.max()), 1)),
+-        "cfg": wcfg,
++    basin = g["basin_id"].values.astype(np.int32) if "basin_id" in g else np.zeros((g.y.size, g.x.size), dtype=np.int32)
++    return {
++        "regions": basin,
++        "basin_id": basin,
++        "xs": g["x"].values.astype(np.float64),
++        "ys": g["y"].values.astype(np.float64),
++        "n_regions": int(max(int(basin.max()), 1)),
+     }
+-    return ensure_pack_terrain(pack, dem=dem)
++
+ 
+ 
+ def compute_block(cfg: dict) -> dict:
+diff --git a/RFSI/config.yaml b/RFSI/config.yaml
+index 2104bdf..44578fa 100755
+--- a/RFSI/config.yaml
++++ b/RFSI/config.yaml
+@@ -47,5 +47,5 @@ covariates:
+   clc: true
+   dist_to_coast: true
+   signed_dist_to_ridge: true
+-  basin_continuity: true
++  basin_id: true
+   elev_above_valley: true
+diff --git a/RFSI/produce_rfsi_maps.py b/RFSI/produce_rfsi_maps.py
+index 7e4a17b..8ecc0ca 100755
+--- a/RFSI/produce_rfsi_maps.py
++++ b/RFSI/produce_rfsi_maps.py
+@@ -36,6 +36,12 @@ from paths import (
+     get_master_grid_path,
+     get_rfsi_model_path,
+ )
++def _sample_field(field, xs, ys, x, y):
++    ix = np.clip(((np.asarray(x) - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
++    iy = np.clip(((np.asarray(y) - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
++    return field[iy, ix]
++
++
+ def subset_times(panel, spec):
+     """Local copy. Months filter for prediction only."""
+     if spec is None or spec == "" or str(spec).lower() in ("all", "none"):
+@@ -336,8 +342,7 @@ def main():
+             except Exception as exc:
+                 print(f"  grid terrain cache missing: {exc}")
+             if pack is not None:
+-                from shared.watersheds import sample_region
+-                grid_df["region"] = sample_region(
++                                grid_df["region"] = _sample_field(
+                     pack["regions"], pack["xs"], pack["ys"],
+                     grid_points[:, 0], grid_points[:, 1],
+                 ).astype(np.int32)
+diff --git a/RFSI/rfsi_core.py b/RFSI/rfsi_core.py
+index 56178f8..33a825c 100755
+--- a/RFSI/rfsi_core.py
++++ b/RFSI/rfsi_core.py
+@@ -24,6 +24,12 @@ warnings.filterwarnings("ignore")
+ DIST_SCALE = 1000.0  # m → km in the distance features
+ 
+ 
++def _sample_field(field, xs, ys, x, y):
++    ix = np.clip(((np.asarray(x) - xs[0]) / (xs[1] - xs[0])).astype(int), 0, len(xs) - 1)
++    iy = np.clip(((np.asarray(y) - ys[0]) / (ys[1] - ys[0])).astype(int), 0, len(ys) - 1)
++    return field[iy, ix]
++
++
+ def neighbor_width(n_obs: int) -> int:
+     """z_1..z_n + d_km_1..d_n + idw."""
+     return int(n_obs) * 2 + 1
+@@ -59,7 +65,7 @@ def clip_var(var: str, pred) -> np.ndarray:
+ _EXTRA_KEYS = (
+     "slope", "northness", "tpi", "smooth_elev",
+     "dist_to_coast", "signed_dist_to_ridge",
+-    "basin_continuity", "elev_above_valley", "tmean",
++    "basin_id", "elev_above_valley", "tmean",
+ )
+ _EXTRA_SCALE = {
+     "slope": 45.0,            # degrees
+@@ -67,7 +73,7 @@ _EXTRA_SCALE = {
+     "smooth_elev": 1000.0,    # m -> km
+     "dist_to_coast": 1.0e5,   # m
+     "signed_dist_to_ridge": 1.0e5,
+-    "basin_continuity": 1.0e4,    # m
++    "basin_id": 1.0,    # m
+     "elev_above_valley": 1000.0,  # m -> km
+     "tmean": 10.0,            # C
+ }
+@@ -463,7 +469,7 @@ def extras_for_var(df, var: str, rh_t_mode: str = "none", cfg: dict | None = Non
+     out = {}
+     for c in ("slope", "northness", "tpi", "smooth_elev",
+               "dist_to_coast", "signed_dist_to_ridge",
+-              "basin_continuity", "elev_above_valley"):
++              "basin_id", "elev_above_valley"):
+         if allowed is not None and c not in allowed:
+             continue
+         if c in df.columns:
+@@ -476,23 +482,27 @@ def extras_for_var(df, var: str, rh_t_mode: str = "none", cfg: dict | None = Non
+     return out or None
+ 
+ 
+-def build_region_pack(cfg, n_regions: int = 6):
+-    """Watershed region labels on the master grid. None if the grid is missing."""
++def build_region_pack(cfg, n_regions: int = 11):
++    """Load basin_id from the terrain cache. No watersheds.py."""
+     try:
+         import xarray as xr
+     except ImportError:
+         return None
+-    from paths import get_master_grid_path
+-    from shared.watersheds import WatershedConfig, build_pack
++    from paths import get_grid_terrain_path
+     res = int(cfg.get("resolutions_to_process", [1000])[0])
+-    path = get_master_grid_path("RFSI", res)
++    path = get_grid_terrain_path(res)
+     if not path.exists():
+         return None
+     g = xr.open_dataset(path)
+-    if "elev" not in g:
+-        return None
+-    wcfg = WatershedConfig(n_regions=int(n_regions))
+-    return build_pack(g["elev"].values.astype("float64"), g["x"].values, g["y"].values, wcfg)
++    basin = g["basin_id"].values.astype(np.int32) if "basin_id" in g else np.zeros((g.y.size, g.x.size), dtype=np.int32)
++    return {
++        "regions": basin,
++        "basin_id": basin,
++        "xs": g["x"].values.astype(np.float64),
++        "ys": g["y"].values.astype(np.float64),
++        "n_regions": int(max(int(basin.max()), 1)),
++    }
++
+ 
+ 
+ def attach_region(df, pack):
+@@ -501,9 +511,8 @@ def attach_region(df, pack):
+         return df
+     if "x" not in df.columns or "y" not in df.columns:
+         return df
+-    from shared.watersheds import sample_region
+-    out = df.copy()
+-    out["region"] = sample_region(
++        out = df.copy()
++    out["region"] = _sample_field(
+         pack["regions"], pack["xs"], pack["ys"],
+         out["x"].to_numpy(), out["y"].to_numpy(),
+     ).astype("int32")
+diff --git a/RGI/config.yaml b/RGI/config.yaml
+index a02be22..7ad7f42 100644
+--- a/RGI/config.yaml
++++ b/RGI/config.yaml
+@@ -58,5 +58,5 @@ covariates:
+   clc: true
+   dist_to_coast: true
+   signed_dist_to_ridge: true
+-  basin_continuity: true
++  basin_id: true
+   elev_above_valley: true
+diff --git a/SMACNP/config.yaml b/SMACNP/config.yaml
+index 155cca1..d7d6f3b 100644
+--- a/SMACNP/config.yaml
++++ b/SMACNP/config.yaml
+@@ -52,5 +52,5 @@ covariates:
+   clc: true
+   dist_to_coast: true
+   signed_dist_to_ridge: true
+-  basin_continuity: true
++  basin_id: true
+   elev_above_valley: true
+diff --git a/shared/build_terrain_features.py b/shared/build_terrain_features.py
+index 27687d9..930b359 100644
+--- a/shared/build_terrain_features.py
++++ b/shared/build_terrain_features.py
+@@ -28,6 +28,7 @@ CODE_DIR = Path(__file__).resolve().parents[1]
+ sys.path.insert(0, str(CODE_DIR))
+ 
+ from paths import (
++    get_source_root,
+     get_dem_path,
+     get_landcover_path,
+     get_domain_stations_path,
+@@ -87,6 +88,32 @@ def _alpine_masks(xs, ys, buffer_m: float = 100000.0):
+     return _rast(domain), _rast(geom)
+ 
+ 
++def _rasterize_basins(xs, ys, basins_path: Path) -> np.ndarray:
++    """Rasterize the 11 HydroBASINS polygons onto the grid. Returns int32 array."""
++    import geopandas as gpd
++    from rasterio.features import rasterize
++    from rasterio.transform import from_bounds
++
++    if not basins_path.exists():
++        raise FileNotFoundError(f"11-basin polygons not found: {basins_path}")
++    gdf = gpd.read_file(basins_path).to_crs("EPSG:31287")
++    xs = np.asarray(xs, dtype=np.float64)
++    ys = np.asarray(ys, dtype=np.float64)
++    dx = float(np.median(np.diff(xs))) if len(xs) > 1 else 1000.0
++    dy = float(np.median(np.diff(ys))) if len(ys) > 1 else 1000.0
++    ny, nx = len(ys), len(xs)
++    y_top = float(ys.max()) + abs(dy) / 2
++    y_bot = float(ys.min()) - abs(dy) / 2
++    x_left = float(xs.min()) - abs(dx) / 2
++    x_right = float(xs.max()) + abs(dx) / 2
++    transform = from_bounds(x_left, y_bot, x_right, y_top, nx, ny)
++    shapes = [(geom, int(i + 1)) for i, geom in enumerate(gdf.geometry)]
++    arr = rasterize(shapes, out_shape=(ny, nx), transform=transform, fill=0, dtype=np.int32)
++    if ys[0] < ys[-1]:
++        arr = arr[::-1]
++    return arr
++
++
+ # CLC level-2 grouping (first two digits of the 3-digit CLC code)
+ # 15 classes: 11,12,13,14,21,22,23,24,31,32,33,41,42,51,52
+ CLC_LEVEL2 = {
+@@ -227,6 +254,19 @@ def _basin_continuity(labels: np.ndarray, dx: float) -> np.ndarray:
+     return dist
+ 
+ 
++
++def _local_valley_floor(elev: np.ndarray, radius_m: float = 2000.0, dx: float = 1000.0) -> np.ndarray:
++    """Local valley floor: minimum elev inside a ~2 km window.
++
++    No basin restriction. A 2 km window stays inside one valley in most
++    of the Alps, so neighbouring valleys keep their own floors.
++    """
++    from scipy.ndimage import minimum_filter
++    filled = np.nan_to_num(elev, nan=np.nanmax(elev))
++    radius_cells = max(int(round(radius_m / max(dx, 1.0))), 1)
++    floor = minimum_filter(filled, size=radius_cells * 2 + 1)
++    return floor.astype(np.float32)
++
+ def compute_valley_fields(dem: np.ndarray, dx: float,
+                           accum_pct: float = 96.0,
+                           valley_pct: float = 90.0,
+@@ -284,15 +324,10 @@ def compute_valley_fields(dem: np.ndarray, dx: float,
+         basin = label_basins(direc, acc, accum_pct, min_cells=min_cells, force_edges=False)
+         basin = np.where(domain_mask, basin, 0).astype(np.int32)
+ 
+-    # Valley floor = minimum elev inside each basin (inside domain)
+-    floor = np.zeros_like(filled)
+-    for b in np.unique(basin):
+-        if b <= 0:
+-            continue
+-        m = (basin == b) & domain_mask
+-        if m.any():
+-            floor[m] = np.nanmin(filled[m])
+-    rel = np.where(domain_mask, filled - floor, np.nan).astype(np.float32)
++    # Valley floor = local minimum elev inside a ~2 km window.
++    # No basin restriction so multiple valleys per basin keep their own floors.
++    floor = _local_valley_floor(filled, radius_m=2000.0, dx=dx)
++    rel = np.where(domain_mask, np.maximum(0.0, filled - floor), np.nan).astype(np.float32)
+ 
+     # Valley axis: high accumulation AND low TPI AND low elev_above_valley.
+     # Restricted to elev >= elev_min so the Po plain cannot set the threshold.
+@@ -678,12 +713,18 @@ def build_grid_features(resolution: int = 1000, grid_method: str = "RFSI",
+         print(f"    alpine mask failed ({exc}); using full grid", flush=True)
+         domain_mask = peri_mask = None
+     n_basins = n_basins
+-    basin_id, elev_above, dist_valley = compute_valley_fields(
++    basins_path = get_source_root() / "Basins" / "basins_n11.geojson"
++    try:
++        basin_id = _rasterize_basins(grid.x.values, grid.y.values, basins_path)
++    except Exception as exc:
++        print(f"    basin rasterize failed ({exc}); falling back to zeros", flush=True)
++        basin_id = np.zeros((ny, nx), dtype=np.int32)
++    # elev_above_valley still from the old valley computation (kept for now)
++    _, elev_above, dist_valley = compute_valley_fields(
+         elev, dx, accum_pct, valley_pct, min_cells,
+         domain_mask=domain_mask, seed_mask=peri_mask,
+         elev_min=150.0, n_basins=n_basins,
+     )
+-    basin_cont = _basin_continuity(basin_id, dx)
+ 
+     # 1000 m radius at this resolution → window in cells
+     dx = float(np.median(np.diff(grid.x.values))) if nx > 1 else float(resolution)
+@@ -814,8 +855,7 @@ def build_grid_features(resolution: int = 1000, grid_method: str = "RFSI",
+             "signed_dist_to_ridge": (("y", "x"), ridge_full.astype(np.float32)),
+             "clc_level2": (("y", "x"), clc2),
+             "basin_id": (("y", "x"), basin_id.astype(np.int32)),
+-            "basin_continuity": (("y", "x"), basin_cont.astype(np.float32)),
+-            "elev_above_valley": (("y", "x"), elev_above.astype(np.float32)),
++                        "elev_above_valley": (("y", "x"), elev_above.astype(np.float32)),
+         },
+         coords={"y": grid.y.values, "x": grid.x.values},
+     )
+diff --git a/shared/terrain.py b/shared/terrain.py
+index c2dc5c4..5bdc6e5 100644
+--- a/shared/terrain.py
++++ b/shared/terrain.py
+@@ -61,7 +61,7 @@ CORE_COVARIATES = (
+     "clc",
+     "dist_to_coast",
+     "signed_dist_to_ridge",
+-    "basin_continuity",
++    "basin_id",
+     "elev_above_valley",
+ )
+ 
+@@ -75,7 +75,7 @@ _COVARIATE_COLS = {
+     "clc": ["clc_level2"],
+     "dist_to_coast": ["dist_to_coast"],
+     "signed_dist_to_ridge": ["signed_dist_to_ridge"],
+-    "basin_continuity": ["basin_continuity"],
++    "basin_id": ["basin_id"],
+     "elev_above_valley": ["elev_above_valley"],
+ }
+ 

@@ -61,7 +61,7 @@ CORE_COVARIATES = (
     "clc",
     "dist_to_coast",
     "signed_dist_to_ridge",
-    "basin_continuity",
+    "basin_id",
     "elev_above_valley",
 )
 
@@ -75,7 +75,7 @@ _COVARIATE_COLS = {
     "clc": ["clc_level2"],
     "dist_to_coast": ["dist_to_coast"],
     "signed_dist_to_ridge": ["signed_dist_to_ridge"],
-    "basin_continuity": ["basin_continuity"],
+    "basin_id": ["basin_id"],
     "elev_above_valley": ["elev_above_valley"],
 }
 
