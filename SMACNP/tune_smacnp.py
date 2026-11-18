@@ -196,8 +196,10 @@ def search_grid(cfg: dict, quick: bool) -> list[dict]:
 
 
 def train_one(cfg, feat_cols, two_step, device, y_scaler,
-              train_days, val_days, df, train_stations, val_tensors) -> tuple[float, list, dict]:
-    """Train one search cell. Returns (best val RMSE, history, state)."""
+              train_days, val_days, df, train_stations, val_tensors,
+              champion_rmse: float | None = None) -> tuple[float, list, dict]:
+    """Train one search cell. Returns (best val RMSE, history, state).
+    champion_rmse: abort after 40 % of epochs if still > 20 % above it and flat."""
     model = build_model(cfg, len(feat_cols), two_step).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -208,9 +210,11 @@ def train_one(cfg, feat_cols, two_step, device, y_scaler,
     best_state = None
     patience = 0
     max_patience = int(cfg["smacnp"]["early_stopping_patience"])
+    n_epochs = int(cfg["smacnp"]["num_epochs"])
+    min_epoch = int(0.40 * n_epochs)
     history = []
     t0 = time.time()
-    for epoch in range(int(cfg["smacnp"]["num_epochs"])):
+    for epoch in range(n_epochs):
         train_tensors = precompute_days(
             train_days, df, feat_cols, y_scaler, train_stations, cfg,
             on_grid=False, epoch=epoch,
@@ -232,6 +236,14 @@ def train_one(cfg, feat_cols, two_step, device, y_scaler,
             patience += 1
             if patience >= max_patience:
                 print(f"  early stop at epoch {epoch}")
+                break
+        if (champion_rmse is not None and epoch + 1 >= min_epoch
+                and len(history) >= 10
+                and rmse > champion_rmse * 1.20):
+            window = [h["val_rmse"] for h in history[-10:]]
+            if window[-1] >= window[0]:
+                print(f"  champion abort at epoch {epoch}  "
+                      f"rmse={rmse:.3f} > {champion_rmse:.3f}")
                 break
     wall = time.time() - t0
     return best_rmse, history, {"state": best_state, "epochs": len(history), "wall_s": wall}
@@ -344,6 +356,26 @@ def main():
     df["quarter"] = df["time"].map(quarter_of)
     train_days = df.loc[df["quarter"].isin(qsplits["train"]), "time"].unique()
     val_days = df.loc[df["quarter"].isin(qsplits["tune"]), "time"].unique()
+    # Early-stop protocol: score only the eval set (max 52). Training stays full.
+    from shared.splits.evaluation_sets import load_early_stop_times, early_stop_kind
+    kind = early_stop_kind("SMACNP")
+    eval_raw = load_early_stop_times(cfg["time_resolution"], kind, which="eval")
+    if eval_raw:
+        pt = pd.to_datetime(pd.Series(val_days), utc=True)
+        want = set(str(w) for w in eval_raw)
+        res = cfg["time_resolution"]
+        if res == "monthly":
+            key = pt.dt.strftime("%Y-%m")
+        elif res == "weekly":
+            key = pt.dt.strftime("%Y-W%W")
+        elif res == "daily":
+            key = pt.dt.strftime("%Y-%m-%d")
+        else:
+            key = pt.dt.strftime("%Y-%m-%dT%H:%M:%S")
+        matched = pt[key.isin(want)]
+        if len(matched):
+            val_days = matched.to_numpy()
+            print(f"  early-stop eval days={len(val_days)}", flush=True)
     print(f"train quarters={len(qsplits['train'])}  tune quarters={len(qsplits['tune'])}")
     print(f"train days={len(train_days)}  val days={len(val_days)}")
     # Validation split is fixed so cells are comparable. Training context
@@ -362,6 +394,7 @@ def main():
 
     trials = []
     best = None
+    champion_rmse = None
     for i, cell in enumerate(grid):
         for k, v in cell.items():
             cfg["smacnp"][k] = v
@@ -369,15 +402,23 @@ def main():
         rmse, history, info = train_one(
             cfg, feat_cols, two_step, device, y_scaler,
             train_days, val_days, df, train_stations, val_tensors,
+            champion_rmse=champion_rmse,
         )
-        row = {**cell, "val_rmse": rmse, "epochs": info["epochs"], "wall_s": round(info["wall_s"], 1)}
+        stopped = champion_rmse is not None and rmse > champion_rmse * 1.20
+        row = {**cell, "val_rmse": rmse, "epochs": info["epochs"],
+               "wall_s": round(info["wall_s"], 1),
+               "early_stopped": bool(stopped),
+               "stop_reason": "stalled_margin" if stopped else "full",
+               "score_at_stop": rmse, "n_units_scored": info["epochs"]}
         trials.append(row)
         pd.DataFrame(trials).to_csv(search_path, index=False)
         curve = ckpt_path.with_name(f"{var}_{cfg['time_resolution']}_curve_{i}.csv")
         pd.DataFrame(history).to_csv(curve, index=False)
-        print(f"  cell val_rmse={rmse:.3f}  epochs={info['epochs']}  wall={info['wall_s']:.0f}s")
-        if info["state"] is not None and (best is None or rmse < best["rmse"]):
+        print(f"  cell val_rmse={rmse:.3f}  epochs={info['epochs']}  wall={info['wall_s']:.0f}s"
+              f"{' STOP' if stopped else ''}")
+        if not stopped and info["state"] is not None and (best is None or rmse < best["rmse"]):
             best = {"rmse": rmse, "cell": dict(cell), "state": info["state"], "history": history}
+            champion_rmse = rmse
 
     if best is None:
         raise RuntimeError("no search cell produced a checkpoint")

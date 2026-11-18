@@ -44,11 +44,10 @@ gam:
       - te_xy_s_elev
       - te_xy_ti_elev
       - te_xyelev
-      - s_xy_s_elev
-    n_splines: [6, 8, 10, 14]
-    n_splines_tensor: [6, 8, 10]
+    n_splines: [8, 10]
+    n_splines_tensor: [8, 10]
     tensor_formulas: [te_xyelev, te_xy_ti_elev]
-    tau_wet: [0.3, 0.5, 0.7]
+    tau_wet: [0.5]
 covariates:
   elev: true
   smooth_elev: true

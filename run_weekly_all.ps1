@@ -53,16 +53,16 @@ function Run-Step($label, $cmd) {
 # =============================================================================
 # RFSI  — tune + nested LLOCV finished for all 5 (30 Oct); maps missing
 # =============================================================================
-# Run-Step "RFSI tune"    "python RFSI/tune_pooled.py --time-resolution weekly --max-times 0 --variables $vars"
-# Run-Step "RFSI llocv"   "python RFSI/llocv_pooled.py --time-resolution weekly --variables $vars"
+ Run-Step "RFSI tune"    "python RFSI/tune_pooled.py --time-resolution weekly --max-times 0 --variables $vars"
+ Run-Step "RFSI llocv"   "python RFSI/llocv_pooled.py --time-resolution weekly --variables $vars"
 # Run-Step "RFSI produce" "python RFSI/produce_rfsi_maps.py --time-resolution weekly --variables $vars"
 
 # =============================================================================
 # CNN  — only temp_mean params + IDW cache exist; rest unfinished
 # =============================================================================
-#Run-Step "CNN tune"    "python CNN/tune_cnn.py --time-resolution weekly"
-#Run-Step "CNN train"   "python CNN/train_cnn.py --time-resolution weekly"
-#Run-Step "CNN llocv"   "python CNN/llocv_cnn.py --time-resolution weekly --score test"
+Run-Step "CNN tune"    "python CNN/tune_cnn.py --time-resolution weekly"
+Run-Step "CNN train"   "python CNN/train_cnn.py --time-resolution weekly"
+Run-Step "CNN llocv"   "python CNN/llocv_cnn.py --time-resolution weekly --score test"
 # Run-Step "CNN produce" "python CNN/produce_cnn_maps.py --time-resolution weekly"
 
 # =============================================================================

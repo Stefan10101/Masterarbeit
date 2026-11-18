@@ -210,14 +210,14 @@ class GAMInterpolator:
         try:
             subprocess.run(
                 [self.cfg.rscript, str(pred_script), str(self._r_model), str(q), str(o)],
-                check=True, capture_output=False, text=True,
+                check=True, capture_output=True, text=True,
                 timeout=float(self.cfg.r_timeout),
             )
             return pd.read_parquet(o)["predicted"].to_numpy(dtype=np.float64)
         except Exception as exc:
             err = ""
-            if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
-                err = exc.stderr[-400:]
+            if isinstance(exc, subprocess.CalledProcessError):
+                err = (exc.stderr or exc.stdout or "")[-400:]
             print(f"  mgcv predict failed: {type(exc).__name__} {err}", flush=True)
             return None
 
@@ -504,49 +504,52 @@ class GAMInterpolator:
                 elev_bin=eb_q,
             ), 0.0, 1.0)
             wet_m = values > tr
-            if wet_m.sum() >= 5:
-                wet_vals = np.maximum(np.asarray(values)[wet_m], 0.0)
-                # Data-driven cap: wet p99 of this timestamp. Stops spline
-                # extrapolation (common on sparse high-elev snow donors) from
-                # producing expm1 of large linear predictors.
-                cap = float(np.quantile(wet_vals, 0.99)) if wet_vals.size else 1e3
-                cap = max(cap, 1.0)
-                use_log = bool(getattr(self.cfg, "log_amount", True))
-                log_cap = np.log1p(cap) if use_log else cap
-                amt_in = np.log1p(wet_vals) if use_log else wet_vals
-                # Subset pending extras to the wet donors so frame lengths match.
-                extra_wet = None
-                pending = getattr(self, "_pending_extra", None)
-                if pending:
-                    extra_wet = {k: np.asarray(v)[wet_m] for k, v in pending.items()
-                                 if v is not None and np.asarray(v).shape[0] == len(wet_m)}
-                self.fit_gaussian(
-                    np.asarray(x)[wet_m], np.asarray(y)[wet_m], np.asarray(elev)[wet_m],
-                    amt_in,
-                    None if clc is None else np.asarray(clc)[wet_m],
-                    None if slope is None else np.asarray(slope)[wet_m],
-                    None if sinasp is None else np.asarray(sinasp)[wet_m],
-                    None if cosasp is None else np.asarray(cosasp)[wet_m],
-                    family="gaussian",
-                    tmean=None if tmean is None else np.asarray(tmean)[wet_m],
-                    tpi=None if tpi is None else np.asarray(tpi)[wet_m],
-                    ridge=None if ridge is None else np.asarray(ridge)[wet_m],
-                    region=None if region is None else np.asarray(region)[wet_m],
-                    elev_bin=eb[wet_m],
-                    extra=extra_wet,
-                )
-                raw = self.predict_raw(
-                    xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q,
-                    tmean=tmean_q, tpi=tpi_q, ridge=ridge_q, region=region_q,
-                    elev_bin=eb_q,
-                )
-                raw = np.minimum(raw, log_cap)
-                amt = np.maximum(np.expm1(raw), 0.0) if use_log else np.maximum(raw, 0.0)
-                gate = p >= self.cfg.tau_wet
+            if wet_m.sum() < 5:
+                # Too few wet donors for an amount model. Occurrence is
+                # unusable; return a dry field of the query length.
+                return np.zeros(p.size, dtype=np.float64)
+            wet_vals = np.maximum(np.asarray(values)[wet_m], 0.0)
+            # Data-driven cap: wet p99 of this timestamp. Stops spline
+            # extrapolation (common on sparse high-elev snow donors) from
+            # producing expm1 of large linear predictors.
+            cap = float(np.quantile(wet_vals, 0.99)) if wet_vals.size else 1e3
+            cap = max(cap, 1.0)
+            use_log = bool(getattr(self.cfg, "log_amount", True))
+            log_cap = np.log1p(cap) if use_log else cap
+            amt_in = np.log1p(wet_vals) if use_log else wet_vals
+            # Subset pending extras to the wet donors so frame lengths match.
+            extra_wet = None
+            pending = getattr(self, "_pending_extra", None)
+            if pending:
+                extra_wet = {k: np.asarray(v)[wet_m] for k, v in pending.items()
+                             if v is not None and np.asarray(v).shape[0] == len(wet_m)}
+            self.fit_gaussian(
+                np.asarray(x)[wet_m], np.asarray(y)[wet_m], np.asarray(elev)[wet_m],
+                amt_in,
+                None if clc is None else np.asarray(clc)[wet_m],
+                None if slope is None else np.asarray(slope)[wet_m],
+                None if sinasp is None else np.asarray(sinasp)[wet_m],
+                None if cosasp is None else np.asarray(cosasp)[wet_m],
+                family="gaussian",
+                tmean=None if tmean is None else np.asarray(tmean)[wet_m],
+                tpi=None if tpi is None else np.asarray(tpi)[wet_m],
+                ridge=None if ridge is None else np.asarray(ridge)[wet_m],
+                region=None if region is None else np.asarray(region)[wet_m],
+                elev_bin=eb[wet_m],
+                extra=extra_wet,
+            )
+            raw = self.predict_raw(
+                xq, yq, zq, clc_q, slope_q, sinasp_q, cosasp_q,
+                tmean=tmean_q, tpi=tpi_q, ridge=ridge_q, region=region_q,
+                elev_bin=eb_q,
+            )
+            raw = np.minimum(raw, log_cap)
+            amt = np.maximum(np.expm1(raw), 0.0) if use_log else np.maximum(raw, 0.0)
+            gate = p >= self.cfg.tau_wet
             # Robust fallback: if the occurrence model never clears tau but
             # wet donors exist, open the gate on the highest-p fraction that
             # matches the donor wet rate. Prevents constant-zero fields.
-            if not gate.any() and wet_m.sum() >= 5 and p.size > 0:
+            if not gate.any() and p.size > 0:
                 wet_frac = float(wet_m.mean())
                 k = max(1, int(np.ceil(wet_frac * p.size)))
                 thr = np.partition(p, -k)[-k]

@@ -32,7 +32,10 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from paths import get_kriging_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_timestamps
 from kriging_core import KrigingConfig, KrigingInterpolator
-from shared.splits.evaluation_sets import apply_evaluation_protocol, load_tune_targets
+from shared.splits.evaluation_sets import (
+    apply_evaluation_protocol, load_tune_targets,
+    load_early_stop_times, early_stop_kind,
+)
 from kriging_data import (
     attach_pack_terrain,
     attach_temperature,
@@ -47,11 +50,28 @@ from kriging_data import (
 from llocv_kriging import cfg_to_kriging, station_folds
 
 
-def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None, jobs: int = 1) -> float:
-    """Train+tune quarters. Score fixed tune-targets; donors exclude them."""
+PREFIX_MARGIN = 0.20
+
+
+def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None, jobs: int = 1,
+                prefix_times=None, champion_prefix=None) -> dict:
+    """Train+tune quarters. Score fixed tune-targets; donors exclude them.
+
+    If prefix_times and champion_prefix are given, abort after the prefix
+    when the partial RMSE exceeds the champion's prefix RMSE by > 20 %.
+    Returns {rmse, early_stopped, stop_reason, score_at_stop, n_units}.
+    """
+    def _ret(rmse, stopped=False, reason="full", at=None, n=0):
+        return {
+            "rmse": float(rmse) if np.isfinite(rmse) else np.inf,
+            "early_stopped": bool(stopped),
+            "stop_reason": reason,
+            "score_at_stop": float(at) if at is not None and np.isfinite(at) else np.nan,
+            "n_units_scored": int(n),
+        }
     if "is_tune_target" not in panel.columns or not panel["is_tune_target"].any():
         print("    early inf (no tune-targets tagged)")
-        return np.inf
+        return _ret(np.inf, reason="no_targets")
     score = panel[(~panel["is_heldout"]) & panel["is_tune_target"]
                   & (panel["split"].isin(["train", "tune"]))]
     train = panel[(~panel["is_heldout"]) & (~panel["is_tune_target"])
@@ -59,12 +79,12 @@ def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None, j
     if score.empty or train["station_name"].nunique() < kcfg.min_stations:
         reason = "score empty" if score.empty else f"train stations {train['station_name'].nunique()} < {kcfg.min_stations}"
         print(f"    early inf ({reason})")
-        return np.inf
+        return _ret(np.inf, reason="insufficient")
     model = KrigingInterpolator(kcfg)
     model.pack = pack
-    # Global variogram from the donor stations on train+tune
     model.fit(train, var, cfg["time_resolution"], cfg)
     groups = list(score.groupby("time", sort=False))
+    prefix_set = set(pd.to_datetime(list(prefix_times), utc=True)) if prefix_times else set()
 
     def one(item):
         t, sc_t = item
@@ -73,19 +93,32 @@ def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None, j
         if len(donors) < kcfg.min_stations:
             return None
         yhat = model.predict_frame(donors, sc_t, var)
-        return sc_t[var].to_numpy(), np.asarray(yhat, dtype=float)
+        return t, sc_t[var].to_numpy(), np.asarray(yhat, dtype=float)
 
-    if jobs == 1:
-        parts = [one(g) for g in groups]
-    else:
-        parts = Parallel(n_jobs=jobs, backend="threading")(delayed(one)(g) for g in groups)
-    parts = [p for p in parts if p is not None]
+    # sequential so we can abort after the prefix
+    parts = []
+    prefix_parts = []
+    for g in groups:
+        p = one(g)
+        if p is None:
+            continue
+        parts.append(p)
+        if prefix_set and pd.to_datetime(p[0], utc=True) in prefix_set:
+            prefix_parts.append(p)
+        if (champion_prefix is not None and prefix_set
+                and len(prefix_parts) >= len(prefix_set)):
+            obs_p = np.concatenate([x[1] for x in prefix_parts])
+            pred_p = np.concatenate([x[2] for x in prefix_parts])
+            partial = float(compute_metrics(obs_p, pred_p)["rmse"])
+            if partial > champion_prefix * (1.0 + PREFIX_MARGIN):
+                return _ret(partial, stopped=True, reason="prefix_margin",
+                            at=partial, n=len(prefix_parts))
     if not parts:
-        return np.inf
-    obs = np.concatenate([p[0] for p in parts])
-    pred = np.concatenate([p[1] for p in parts])
-    met = compute_metrics(obs, pred)
-    return float(met["rmse"])
+        return _ret(np.inf, reason="no_parts")
+    obs = np.concatenate([p[1] for p in parts])
+    pred = np.concatenate([p[2] for p in parts])
+    rmse = float(compute_metrics(obs, pred)["rmse"])
+    return _ret(rmse, n=len(parts), at=rmse)
 
 
 def _load_tuned(var, time_res) -> dict:
@@ -117,33 +150,46 @@ def _keys_from(best_over: dict, base: KrigingConfig) -> dict:
     }
 
 
-def _eval_grid(panel, var, cfg, n_folds, locked: dict, varying: list[dict], label: str, pack=None, jobs: int = 1):
+def _eval_grid(panel, var, cfg, n_folds, locked: dict, varying: list[dict], label: str,
+               pack=None, jobs: int = 1, prefix_times=None):
     print(f"\n{var} {label}  {len(varying)} combos  jobs={jobs}")
     rows = []
+    champion = None
+    champion_prefix = None
 
-    def one(extra):
+    def one(extra, champ_pref):
         over = {**locked, **extra}
         kcfg = cfg_to_kriging(cfg, over)
         t0 = time.perf_counter()
-        rmse = score_combo(panel, var, kcfg, n_folds, cfg, pack=pack, jobs=1)
+        res = score_combo(panel, var, kcfg, n_folds, cfg, pack=pack, jobs=1,
+                          prefix_times=prefix_times, champion_prefix=champ_pref)
         sec = time.perf_counter() - t0
-        return extra, rmse, sec
+        return extra, res, sec
 
-    if jobs == 1 or len(varying) == 1:
-        results = [one(extra) for extra in varying]
-    else:
-        # Parallel over combos; each combo scores its times sequentially
-        # so the process/thread pool is not nested.
-        results = Parallel(n_jobs=min(jobs, len(varying)), backend="threading")(
-            delayed(one)(extra) for extra in varying
-        )
-    best = (np.inf, dict(locked))
-    for extra, rmse, sec in results:
+    # First combo is always fully scored (establishes the champion).
+    # Later combos may be aborted against the champion's prefix score.
+    # Sequential within a phase so the champion is known; phases stay ordered.
+    for i, extra in enumerate(varying):
+        champ_pref = None if i == 0 else champion_prefix
+        extra, res, sec = one(extra, champ_pref)
         pretty = " ".join(f"{k}={v}" for k, v in extra.items())
-        print(f"  {pretty}  DEV RMSE={rmse:.4f}  ({sec:.0f}s)")
-        rows.append({**extra, "rmse": rmse, "seconds": round(sec, 1), "phase": label})
-        if rmse < best[0]:
-            best = (rmse, {**locked, **extra})
+        flag = " STOP" if res["early_stopped"] else ""
+        print(f"  {pretty}  DEV RMSE={res['rmse']:.4f}  ({sec:.0f}s){flag}")
+        rows.append({**extra, **res, "seconds": round(sec, 1), "phase": label})
+        # only fully scored combos can become champion or lock the phase
+        if not res["early_stopped"] and res["rmse"] < (champion if champion is not None else np.inf):
+            champion = res["rmse"]
+            # recompute prefix score of the new champion for later comparisons
+            if prefix_times:
+                pref_panel = panel[panel["time"].isin(prefix_times)]
+                pref_res = score_combo(pref_panel, var, cfg_to_kriging(cfg, {**locked, **extra}),
+                                       n_folds, cfg, pack=pack, jobs=1)
+                champion_prefix = pref_res["rmse"]
+    finished = [r for r in rows if not r["early_stopped"]]
+    if not finished:
+        return (np.inf, dict(locked)), rows
+    best_row = min(finished, key=lambda r: r["rmse"])
+    best = (best_row["rmse"], {**locked, **{k: best_row[k] for k in varying[0].keys()}})
     return best, rows
 
 
@@ -157,8 +203,32 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
     if months:
         panel = subset_times(panel, months)
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
-    if args_max:
-        panel = cap_timestamps(panel, args_max, cfg["time_resolution"],
+    # Early-stop protocol: score only the eval set (max 52).
+    time_res = cfg["time_resolution"]
+    kind = early_stop_kind("Kriging")
+    eval_raw = load_early_stop_times(time_res, kind, which="eval")
+    prefix_raw = load_early_stop_times(time_res, kind, which="prefix")
+    prefix_times = None
+    if eval_raw:
+        pt = pd.to_datetime(panel["time"], utc=True)
+        want_eval = set(str(w) for w in eval_raw)
+        want_pref = set(str(w) for w in prefix_raw)
+        if time_res == "monthly":
+            key = pt.dt.strftime("%Y-%m")
+        elif time_res == "weekly":
+            key = pt.dt.strftime("%Y-W%W")
+        elif time_res == "daily":
+            key = pt.dt.strftime("%Y-%m-%d")
+        else:
+            key = pt.dt.strftime("%Y-%m-%dT%H:%M:%S")
+        eval_mask = key.isin(want_eval)
+        pref_mask = key.isin(want_pref)
+        if eval_mask.any():
+            prefix_times = set(pt[pref_mask].unique())
+            panel = panel.loc[eval_mask].copy()
+            print(f"  early-stop eval={panel['time'].nunique()} prefix={len(prefix_times)}")
+    elif args_max:
+        panel = cap_timestamps(panel, args_max, time_res,
                                seed=int(cfg.get("kriging", {}).get("seed", 22)))
     if str(var).lower().startswith("rh") and (rh_t_mode or cfg.get("kriging", {}).get("rh_t_mode", "none")) in ("predicted", "observed"):
         panel = attach_temperature(panel, cfg)
@@ -193,7 +263,10 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
 
     def _take(label, grid):
         nonlocal best
-        best, rows = _eval_grid(panel, var, cfg, n_folds, locked, grid, pack=pack, label=label, jobs=jobs)
+        best, rows = _eval_grid(
+            panel, var, cfg, n_folds, locked, grid, pack=pack, label=label,
+            jobs=jobs, prefix_times=prefix_times,
+        )
         search_rows.extend(rows)
         return dict(best[1])
 

@@ -231,7 +231,10 @@ class RGI:
         val_df=None,
         log=print,
         force_log_amount: bool | None = None,
+        on_epoch=None,
     ) -> dict:
+        # on_epoch(model, epoch, val_mse) -> bool. Return True to abort.
+        # Used by the tune script for the champion-relative early stop.
         # Amount models for precip/snow train in log1p. The indicator instance
         # must stay on the raw 0/1 scale; otherwise expm1 maps it to ~1 and the
         # gate never closes.
@@ -277,6 +280,7 @@ class RGI:
         best_val = np.inf
         stale = 0
         history = []
+        aborted = False
         use_amp = bool(self.cfg.use_amp and self.device.type == "cuda")
         try:
             scaler_amp = torch.amp.GradScaler("cuda", enabled=use_amp)
@@ -362,6 +366,11 @@ class RGI:
                 if log:
                     log(f"  early stop epoch {epoch}  val_mse={best_val:.4f}")
                 break
+            if on_epoch is not None and on_epoch(self, epoch, va):
+                aborted = True
+                if log:
+                    log(f"  champion abort at epoch {epoch}")
+                break
         if best_state is not None:
             self.net.load_state_dict(best_state)
         self.net.eval()
@@ -376,7 +385,11 @@ class RGI:
                 val_ind[var] = (np.asarray(val_df[var], dtype=np.float64) > self.cfg.trace).astype(np.float32)
             # Indicator stays on the 0/1 scale — never log1p.
             self.ind.fit(ind_df, var, val_df=val_ind, log=None, force_log_amount=False)
-        return {"best_val_mse": best_val, "epochs": history[-1]["epoch"] if history else 0}
+        return {
+            "best_val_mse": best_val,
+            "epochs": history[-1]["epoch"] if history else 0,
+            "early_stopped": aborted,
+        }
 
     @torch.no_grad()
     def predict_frame(self, obs_df, query_df, var: str) -> np.ndarray:

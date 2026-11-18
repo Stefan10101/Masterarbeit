@@ -433,6 +433,95 @@ def write_quarter_splits(splits: Dict[str, List[str]], meta: dict, path: Path = 
         yaml.safe_dump(payload, f, sort_keys=False, allow_unicode=True)
 
 
+# ---------------------------------------------------------------------------
+# Early-stop prefix timestamps
+# ---------------------------------------------------------------------------
+EARLY_STOP_TIMES_PATH = _HERE / "early_stop_times.yaml"
+EARLY_STOP_N = 20          # prefix used for the early-stop decision
+EARLY_STOP_EVAL_N = 52     # max timestamps any finished candidate is scored on
+EARLY_STOP_SEED = 22
+POOLED_METHODS = {"RFSI", "CNN", "RGI", "SMACNP"}
+
+
+def early_stop_kind(method: str) -> str:
+    """invariant methods score on train+tune; pooled methods score on tune only."""
+    return "pooled" if method in POOLED_METHODS else "invariant"
+
+
+def _quarter_of(ts) -> str:
+    t = pd.to_datetime(ts)
+    q = (t.month - 1) // 3 + 1
+    return f"{t.year}-Q{q}"
+
+
+def sample_early_stop_times(
+    times,
+    quarter_splits: Dict[str, List[str]],
+    kind: str,
+    n_eval: int = EARLY_STOP_EVAL_N,
+    n_prefix: int = EARLY_STOP_N,
+    seed: int = EARLY_STOP_SEED,
+) -> Dict[str, List[str]]:
+    """Seeded sample for the early-stop protocol.
+
+    Returns {"eval": [...52...], "prefix": [...20...]}.
+    prefix is a subset of eval so the partial score is comparable
+    to the champion's score on the same timestamps.
+    Finished candidates (including the champion) are scored only on eval.
+
+    kind='invariant': train + tune quarters
+    kind='pooled':    tune quarters only
+    """
+    if kind == "pooled":
+        allowed = set(quarter_splits.get("tune", []))
+    else:
+        allowed = set(quarter_splits.get("train", [])) | set(quarter_splits.get("tune", []))
+    pool = [t for t in pd.unique(pd.to_datetime(list(times))) if _quarter_of(t) in allowed]
+    if not pool:
+        return {"eval": [], "prefix": []}
+    rng = np.random.default_rng(int(seed))
+    take = min(int(n_eval), len(pool))
+    chosen = rng.choice(np.asarray(pool), size=take, replace=False)
+    chosen = pd.to_datetime(chosen)
+    # prefix = first n_prefix of a second seeded shuffle so it is stable and inside eval
+    order = rng.permutation(len(chosen))
+    prefix_idx = order[: min(int(n_prefix), len(chosen))]
+    iso = chosen.strftime("%Y-%m-%dT%H:%M:%S")
+    return {
+        "eval": sorted(iso.tolist()),
+        "prefix": sorted(iso[prefix_idx].tolist()),
+    }
+
+
+def write_early_stop_times(payload: dict, path: Path = EARLY_STOP_TIMES_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(payload, f, sort_keys=False, allow_unicode=True)
+
+
+def load_early_stop_times(
+    time_res: str,
+    kind: str = "invariant",
+    which: str = "prefix",
+    path: Path = EARLY_STOP_TIMES_PATH,
+) -> List[str]:
+    """Load prefix (20) or eval (52) timestamps.
+
+    which: 'prefix' for the early-stop probe, 'eval' for the full candidate score.
+    """
+    if not path.exists():
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    block = (raw.get("times") or {}).get(str(time_res), {})
+    entry = block.get(kind, {}) or {}
+    if isinstance(entry, dict):
+        return list(entry.get(which, []) or [])
+    # backward compat: old files stored a flat list (= prefix)
+    return list(entry) if which == "prefix" else []
+
+
+
 def select_tune_targets(
     pool_stations: pd.DataFrame,
     fraction: float = 0.15,

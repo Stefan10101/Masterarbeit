@@ -165,60 +165,87 @@ def load_medoid_times(cfg, var, cluster_method: str):
 
 def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
                 min_stations, n_splits, primary, rh_t_mode="none", two_step=False, tau_wet=0.5,
-                cfg=None):
+                cfg=None, champion_rmse=None):
     """Fit on full pool × train; score fixed tune-targets on tune quarters.
-    Donors exclude tune-targets only at prediction time."""
+    Donors exclude tune-targets only at prediction time.
+    If champion_rmse is set, probe with 40 % of trees and abort if still
+    > 20 % worse and not improving."""
     if "is_tune_target" not in panel.columns or not panel["is_tune_target"].any():
         return None
-    # Fit includes the tune-target stations (they re-enter after selection)
     train = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
     hold = panel[(~panel["is_heldout"]) & panel["is_tune_target"]
                  & (panel["split"] == "tune")]
     if train["station_name"].nunique() < min_stations or hold.empty:
         return None
-    X_train, _ = prepare_covariates(
-        train, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-        extras=extras_for_var(train, var, rh_t_mode, cfg),
-    )
-    model = RFSI(
-        n_obs=n_obs, rf_params=rf_params,
-        two_step=two_step, tau_wet=tau_wet, var_name=var,
-    )
+
+    def _score(model):
+        obs_all, pred_all = [], []
+        for t, hold_t in hold.groupby("time", sort=False):
+            others = panel[(~panel["is_heldout"]) & (~panel["is_tune_target"])
+                           & (panel["time"] == t)]
+            if len(others) < max(min_stations, n_obs):
+                continue
+            X_hold, _ = prepare_covariates(
+                hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
+                extras=extras_for_var(hold_t, var, rh_t_mode, cfg),
+            )
+            pred = model.predict_field(
+                others[["x", "y"]].to_numpy(),
+                others[var].to_numpy(),
+                hold_t[["x", "y"]].to_numpy(),
+                X_hold,
+            )
+            obs_all.append(hold_t[var].to_numpy())
+            pred_all.append(np.asarray(pred, dtype=float))
+        if not obs_all:
+            return None
+        met = compute_metrics(np.concatenate(obs_all), np.concatenate(pred_all))
+        met["n"] = int(sum(len(a) for a in obs_all))
+        return met
+
+    n_full = int(rf_params.get("n_estimators", 100))
+    n_probe = max(50, int(0.40 * n_full))
+    # Probe with 40 % of trees when a champion exists.
+    if champion_rmse is not None and n_probe < n_full:
+        probe_params = {**rf_params, "n_estimators": n_probe}
+        model = RFSI(n_obs=n_obs, rf_params=probe_params,
+                     two_step=two_step, tau_wet=tau_wet, var_name=var)
+        try:
+            model.fit_pooled(
+                times=train["time"].to_numpy(), coords=train[["x", "y"]].to_numpy(),
+                z=train[var].to_numpy(),
+                X_cov=prepare_covariates(train, encoder=encoder, use_elev=use_elev,
+                                         use_lc=use_lc, extras=extras_for_var(train, var, rh_t_mode, cfg))[0],
+                min_stations=min_stations,
+            )
+        except RuntimeError:
+            return None
+        probe = _score(model)
+        if probe and probe["rmse"] > champion_rmse * 1.20:
+            probe["early_stopped"] = True
+            probe["stop_reason"] = "stalled_margin"
+            probe["score_at_stop"] = probe["rmse"]
+            probe["n_units_scored"] = n_probe
+            return probe
+    # Full forest
+    model = RFSI(n_obs=n_obs, rf_params=rf_params,
+                 two_step=two_step, tau_wet=tau_wet, var_name=var)
     try:
         model.fit_pooled(
-            times=train["time"].to_numpy(),
-            coords=train[["x", "y"]].to_numpy(),
+            times=train["time"].to_numpy(), coords=train[["x", "y"]].to_numpy(),
             z=train[var].to_numpy(),
-            X_cov=X_train,
+            X_cov=prepare_covariates(train, encoder=encoder, use_elev=use_elev,
+                                     use_lc=use_lc, extras=extras_for_var(train, var, rh_t_mode, cfg))[0],
             min_stations=min_stations,
         )
     except RuntimeError:
         return None
-    obs_all, pred_all = [], []
-    for t, hold_t in hold.groupby("time", sort=False):
-        # Temporary donors: exclude the tune-targets
-        others = panel[(~panel["is_heldout"]) & (~panel["is_tune_target"])
-                       & (panel["time"] == t)]
-        if len(others) < max(min_stations, n_obs):
-            continue
-        X_hold, _ = prepare_covariates(
-            hold_t, encoder=encoder, use_elev=use_elev, use_lc=use_lc,
-            extras=extras_for_var(hold_t, var, rh_t_mode, cfg),
-        )
-        pred = model.predict_field(
-            others[["x", "y"]].to_numpy(),
-            others[var].to_numpy(),
-            hold_t[["x", "y"]].to_numpy(),
-            X_hold,
-        )
-        obs_all.append(hold_t[var].to_numpy())
-        pred_all.append(np.asarray(pred, dtype=float))
-    if not obs_all:
-        return None
-    o = np.concatenate(obs_all)
-    p = np.concatenate(pred_all)
-    met = compute_metrics(o, p)
-    met["n"] = int(len(o))
+    met = _score(model)
+    if met:
+        met["early_stopped"] = False
+        met["stop_reason"] = "full"
+        met["score_at_stop"] = met["rmse"]
+        met["n_units_scored"] = n_full
     return met
 
 
@@ -256,8 +283,29 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
     if months or quick:
         panel = _subset_times(panel, months or "seasonal4")
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
-    if max_times:
-        panel = cap_timestamps(panel, max_times, cfg["time_resolution"],
+    # Early-stop protocol: score only the eval set (max 52). Training stays full.
+    from shared.splits.evaluation_sets import load_early_stop_times, early_stop_kind
+    time_res = cfg["time_resolution"]
+    eval_raw = load_early_stop_times(time_res, early_stop_kind("RFSI"), which="eval")
+    if eval_raw:
+        pt = pd.to_datetime(panel["time"], utc=True)
+        want = set(str(w) for w in eval_raw)
+        if time_res == "monthly":
+            key = pt.dt.strftime("%Y-%m")
+        elif time_res == "weekly":
+            key = pt.dt.strftime("%Y-W%W")
+        elif time_res == "daily":
+            key = pt.dt.strftime("%Y-%m-%d")
+        else:
+            key = pt.dt.strftime("%Y-%m-%dT%H:%M:%S")
+        is_tune = panel["split"] == "tune"
+        keep = (~is_tune) | key.isin(want)
+        if keep.any():
+            panel = panel.loc[keep].copy()
+            print(f"  early-stop eval tune times="
+                  f"{panel.loc[panel['split']=='tune','time'].nunique()}", flush=True)
+    elif max_times:
+        panel = cap_timestamps(panel, max_times, time_res,
                                seed=int(rfsi.get("seed", 31)))
     print(f"  tune panel: {len(panel):,} rows | "
           f"{panel['station_name'].nunique()} stations | "
@@ -309,6 +357,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
     rows = []
     t0 = time.perf_counter()
     n_grid = len(grid)
+    champion_rmse = None
     for i, (n_obs, depth, leaf, feat) in enumerate(grid, start=1):
         depth = _depth(depth)
         print(f"  [{i}/{n_grid}] n={n_obs} depth={depth} leaf={leaf} feat={feat}", flush=True)
@@ -324,6 +373,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
             panel, var, int(n_obs), rf_params, encoder,
             use_elev, use_lc, min_stations, n_splits, primary,
             rh_t_mode=rh_t_mode, two_step=two_step, tau_wet=tau_wet, cfg=cfg,
+            champion_rmse=champion_rmse,
         )
         if met is None:
             print(f"    [{i}/{n_grid}] no score", flush=True)
@@ -335,6 +385,8 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
             "max_features": feat,
             **met,
         })
+        if not met.get("early_stopped") and (champion_rmse is None or met["rmse"] < champion_rmse):
+            champion_rmse = met["rmse"]
         elapsed = time.perf_counter() - t0
         eta = elapsed / i * (n_grid - i)
         print(
@@ -347,6 +399,10 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
         raise RuntimeError(f"Search produced no scores for {var}")
 
     table = pd.DataFrame(rows)
+    if "early_stopped" in table.columns:
+        finished = table[~table["early_stopped"].fillna(False)]
+        if not finished.empty:
+            table = finished
     ascending = primary in {"rmse", "mae"}
     table = table.sort_values(primary, ascending=ascending)
     best = table.iloc[0].to_dict()

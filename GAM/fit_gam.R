@@ -19,13 +19,12 @@ if (!is.finite(n_splines) || n_splines < 4L) {
   n_splines <- 10L
 }
 
-suppressPackageStartupMessages({
+options(warn = -1)
+suppressPackageStartupMessages(suppressWarnings({
   library(mgcv)
-})
-
-if (!requireNamespace("arrow", quietly = TRUE)) {
-  stop("install.packages('arrow') required")
-}
+  library(arrow)
+}))
+options(warn = 0)
 
 df <- arrow::read_parquet(train_path)
 names(df) <- tolower(names(df))

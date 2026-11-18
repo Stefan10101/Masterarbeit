@@ -682,7 +682,9 @@ def _tiles_direct(frames, fi, model, rng, mask_frac, tile, n_tiles):
 
 def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp=None, cosasp=None,
               time_res: str | None = None, trace: float = 0.1, jobs: int = 1,
-              cfg: dict | None = None):
+              cfg: dict | None = None, champion_rmse: float | None = None):
+    """champion_rmse: final validation RMSE of the current champion.
+    After 40 % of epochs, abort if still > 20 % above it and flat over last 10."""
     subdaily = is_subdaily(panel, time_res)
     use_two = bool(ccfg.two_step) and two_step_var(var)
     if use_two:
@@ -770,6 +772,8 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
             scaler = torch.cuda.amp.GradScaler(enabled=True)
     rng = np.random.default_rng(ccfg.seed)
     best_state, best_loss, wait = None, np.inf, 0
+    dev_hist: list[float] = []
+    min_epoch = int(0.40 * ccfg.epochs)
     two = out_ch == 2
     n = len(train_fr)
     tile = int(getattr(ccfg, "tile_size", 128) or 128)
@@ -922,6 +926,8 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
             f"{time.perf_counter()-t_ep:.1f}s",
             flush=True,
         )
+        dev_rmse = float(np.sqrt(max(dev, 0.0)))
+        dev_hist.append(dev_rmse)
         if dev < best_loss:
             best_loss = dev
             best_state = {k: v.detach().cpu().clone() for k, v in model.net.state_dict().items()}
@@ -929,6 +935,16 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
         else:
             wait += 1
             if wait >= ccfg.patience:
+                break
+        # Champion-relative abort: after 40 % of epochs, still > 20 % above
+        # champion and flat/rising over the last 10 epochs.
+        if (champion_rmse is not None and epoch + 1 >= min_epoch
+                and len(dev_hist) >= 10
+                and dev_rmse > champion_rmse * 1.20):
+            window = dev_hist[-10:]
+            if window[-1] >= window[0]:
+                print(f"  champion abort at epoch {epoch}  "
+                      f"dev_rmse={dev_rmse:.3f} > {champion_rmse:.3f}", flush=True)
                 break
     if best_state is not None:
         model.net.load_state_dict(best_state)

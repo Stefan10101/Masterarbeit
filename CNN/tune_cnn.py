@@ -86,12 +86,31 @@ def main():
         panel = load_panel(cfg, var)
         # Fit on full pool × train. Score fixed tune-targets on tune.
         # train_one reads split=='dev' as the score set.
-        from shared.splits.evaluation_sets import apply_evaluation_protocol
+        from shared.splits.evaluation_sets import (
+            apply_evaluation_protocol, load_early_stop_times, early_stop_kind,
+        )
         tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)
         train = tagged[(~tagged["is_heldout"]) & (tagged["split"] == "train")].copy()
         # Score set: fixed tune-targets on tune quarters
         dev = tagged[(~tagged["is_heldout"]) & tagged["is_tune_target"]
                      & (tagged["split"] == "tune")].copy()
+        # Early-stop protocol: score only the eval set (max 52). Training stays full.
+        kind = early_stop_kind("CNN")
+        eval_raw = load_early_stop_times(time_res, kind, which="eval")
+        if eval_raw:
+            pt = pd.to_datetime(dev["time"], utc=True)
+            want = set(str(w) for w in eval_raw)
+            if time_res == "monthly":
+                key = pt.dt.strftime("%Y-%m")
+            elif time_res == "weekly":
+                key = pt.dt.strftime("%Y-W%W")
+            elif time_res == "daily":
+                key = pt.dt.strftime("%Y-%m-%d")
+            else:
+                key = pt.dt.strftime("%Y-%m-%dT%H:%M:%S")
+            if key.isin(want).any():
+                dev = dev.loc[key.isin(want)].copy()
+                print(f"  early-stop eval times={dev['time'].nunique()}", flush=True)
         dev["split"] = "dev"
         # Temporary donors for prediction: pool minus tune-targets
         pool_tune = tagged[(~tagged["is_heldout"]) & (~tagged["is_tune_target"])
@@ -109,6 +128,7 @@ def main():
             panel = cap_timestamps(panel, args.max_times, time_res, seed=int(block.get("seed", 22)))
         trace = precip_trace(cfg, time_res, var)
         best = None
+        champion_rmse = None
         trials = []
         for levels, ch in itertools.product(
             search.get("n_levels", [block.get("n_levels", 4)]),
@@ -118,19 +138,27 @@ def main():
             _, dev = train_one(
                 panel, var, ccfg, elev, clc, gx, gy,
                 slope, sinasp, cosasp, time_res=time_res, trace=trace, jobs=max(1, args.jobs),
-                cfg=cfg,
+                cfg=cfg, champion_rmse=champion_rmse,
             )
-            print(f"{var} levels={levels} ch={ch} dev={dev:.4f}", flush=True)
+            dev_rmse = float(dev) ** 0.5
+            stopped = (champion_rmse is not None and dev_rmse > champion_rmse * 1.20)
+            print(f"{var} levels={levels} ch={ch} dev={dev:.4f}"
+                  f"{' STOP' if stopped else ''}", flush=True)
             trial = {
                 "n_levels": int(levels),
                 "base_ch": int(ch),
                 "dev_mse": float(dev),
-                "dev_rmse": float(dev) ** 0.5,
+                "dev_rmse": dev_rmse,
                 "dev": float(dev),
+                "early_stopped": bool(stopped),
+                "stop_reason": "stalled_margin" if stopped else "full",
+                "score_at_stop": dev_rmse,
+                "n_units_scored": int(ccfg.epochs),
             }
             trials.append(trial)
-            if best is None or dev < best["dev"]:
+            if not stopped and (best is None or dev < best["dev"]):
                 best = dict(trial)
+                champion_rmse = dev_rmse
         path = get_cnn_tuned_params_path(var, time_res)
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(best, f)

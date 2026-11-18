@@ -42,6 +42,12 @@ from shared.splits.evaluation_sets import (
     write_holdout,
     write_quarter_splits,
     write_tune_targets,
+    sample_early_stop_times,
+    write_early_stop_times,
+    EARLY_STOP_TIMES_PATH,
+    EARLY_STOP_N,
+    EARLY_STOP_EVAL_N,
+    EARLY_STOP_SEED,
     holdout_path,
     tune_targets_path,
     stations_measuring,
@@ -216,6 +222,69 @@ def main() -> None:
     print(f"\nwrote quarter splits → {QUARTER_SPLITS_PATH}")
     for name, qs in qsplits.items():
         print(f"  {name:5s}: {len(qs):2d} quarters  {qs}")
+
+    # Early-stop protocol timestamps.
+    # eval  = up to 52 timestamps; every finished candidate (incl. champion) is scored only on these.
+    # prefix = 20 of those 52; used for the early-stop decision.
+    # invariant: train+tune window; pooled: tune window only.
+    # Stored values match the native time column of the aggregated parquet.
+    TIME_COL = {
+        "monthly": "year_month",
+        "weekly": "year_week",
+        "daily": "date",
+        "half_hourly": "timestamp",
+    }
+
+    def _to_dt(series: pd.Series, res: str) -> pd.Series:
+        s = series.astype(str)
+        if res == "weekly":
+            return pd.to_datetime(s + "-1", format="%Y-W%W-%w", errors="coerce")
+        if res == "monthly":
+            s = s.where(s.str.len() > 7, s + "-01")
+            return pd.to_datetime(s, errors="coerce")
+        return pd.to_datetime(s, errors="coerce")
+
+    times_payload = {
+        "n_prefix": EARLY_STOP_N,
+        "n_eval": EARLY_STOP_EVAL_N,
+        "seed": EARLY_STOP_SEED,
+        "note": (
+            "invariant: sampled from train+tune; pooled: sampled from tune only. "
+            "prefix (20) is a subset of eval (52). "
+            "Values match the native time column of the aggregated parquet. "
+            "Finished candidates are scored only on eval; the rest of the window is not used. "
+            "Final reported number remains LLOCV on held-out x test."
+        ),
+        "times": {},
+    }
+    for res in ("monthly", "weekly", "daily", "half_hourly"):
+        path = get_aggregated_data_path("Source", res)
+        if not path.exists():
+            print(f"  early-stop times: skip {res} (no {path.name})")
+            continue
+        col = TIME_COL[res]
+        raw = pd.read_parquet(path, columns=[col])[col].drop_duplicates()
+        parsed = _to_dt(raw, res)
+        ok = parsed.notna()
+        uniq = parsed[ok]
+        # map parsed datetime -> original native value
+        native = dict(zip(uniq, raw[ok].astype(str)))
+        inv = sample_early_stop_times(uniq, qsplits, "invariant")
+        pol = sample_early_stop_times(uniq, qsplits, "pooled")
+        # replace ISO with native labels so tune scripts can match the panel
+        def _native(lst):
+            return [native.get(pd.to_datetime(t), t) for t in lst]
+        times_payload["times"][res] = {
+            "invariant": {"eval": _native(inv["eval"]), "prefix": _native(inv["prefix"])},
+            "pooled": {"eval": _native(pol["eval"]), "prefix": _native(pol["prefix"])},
+        }
+        print(
+            f"  early-stop {res}: "
+            f"invariant eval/prefix={len(inv['eval'])}/{len(inv['prefix'])}  "
+            f"pooled eval/prefix={len(pol['eval'])}/{len(pol['prefix'])}"
+        )
+    write_early_stop_times(times_payload, EARLY_STOP_TIMES_PATH)
+    print(f"wrote early-stop times → {EARLY_STOP_TIMES_PATH}")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ import sys
 import time
 
 import numpy as np
+import pandas as pd
 import yaml
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -29,38 +30,81 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_rgi_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_timestamps
-from shared.splits.evaluation_sets import apply_evaluation_protocol
+from shared.splits.evaluation_sets import (
+    apply_evaluation_protocol, load_early_stop_times, early_stop_kind,
+)
 from rgi_core import RGI, RGIConfig
 from rgi_data import attach_extras, compute_metrics, extra_cols_for_var, load_config, load_panel, subset_times
 from llocv_rgi import cfg_to_rgi, station_folds
 
 
-def score_combo(panel, var, rcfg: RGIConfig, n_folds: int) -> float:
+def score_combo(panel, var, rcfg: RGIConfig, n_folds: int,
+                champion_rmse: float | None = None) -> dict:
     """Fit on full pool × train; score fixed tune-targets on tune quarters.
-    Donors exclude tune-targets only at prediction time."""
+    Donors exclude tune-targets only at prediction time.
+
+    champion_rmse: after 40 % of epochs, abort if the original-unit probe
+    is still > 20 % above the champion and flat over the last 10 probes.
+    Returns {rmse, early_stopped, stop_reason, score_at_stop, n_units_scored}.
+    """
+    def _ret(rmse, stopped=False, reason="full", at=None, n=0):
+        return {
+            "rmse": float(rmse) if np.isfinite(rmse) else np.inf,
+            "early_stopped": bool(stopped),
+            "stop_reason": reason,
+            "score_at_stop": float(at) if at is not None and np.isfinite(at) else np.nan,
+            "n_units_scored": int(n),
+        }
     if "is_tune_target" not in panel.columns or not panel["is_tune_target"].any():
-        return np.inf
+        return _ret(np.inf, reason="no_targets")
     train = panel[(~panel["is_heldout"]) & (panel["split"] == "train")]
     hold = panel[(~panel["is_heldout"]) & panel["is_tune_target"]
                  & (panel["split"] == "tune")]
     if hold.empty or train["station_name"].nunique() < rcfg.min_stations:
-        return np.inf
+        return _ret(np.inf, reason="insufficient")
+
+    def _probe(model) -> float:
+        """Original-unit RMSE of the current net on the hold set."""
+        was_training = model.net.training
+        model.net.eval()
+        obs, pred = [], []
+        try:
+            for t, ho_t in hold.groupby("time", sort=False):
+                others = panel[(panel["time"] == t) & (~panel["is_heldout"])
+                               & (~panel["is_tune_target"])]
+                if len(others) < rcfg.min_stations:
+                    continue
+                yhat = model.predict_frame(others, ho_t, var)
+                obs.append(ho_t[var].to_numpy())
+                pred.append(np.asarray(yhat, dtype=float))
+        finally:
+            model.net.train(was_training)
+        if not obs:
+            return np.inf
+        return float(compute_metrics(np.concatenate(obs), np.concatenate(pred))["rmse"])
+
     model = RGI(rcfg)
-    model.fit(train, var, val_df=None, log=None)
-    obs, pred = [], []
-    for t, ho_t in hold.groupby("time", sort=False):
-        # Temporary donors: exclude the tune-targets
-        others = panel[(panel["time"] == t) & (~panel["is_heldout"])
-                       & (~panel["is_tune_target"])]
-        if len(others) < rcfg.min_stations:
-            continue
-        yhat = model.predict_frame(others, ho_t, var)
-        obs.append(ho_t[var].to_numpy())
-        pred.append(yhat)
-    if not obs:
-        return np.inf
-    met = compute_metrics(np.concatenate(obs), np.concatenate(pred))
-    return float(met["rmse"])
+    probe_hist: list[float] = []
+    min_epoch = int(0.40 * rcfg.epochs)
+
+    def on_epoch(m, epoch, _va):
+        if champion_rmse is None or epoch < min_epoch:
+            return False
+        rmse = _probe(m)
+        probe_hist.append(rmse)
+        if (len(probe_hist) >= 10
+                and rmse > champion_rmse * 1.20
+                and probe_hist[-1] >= probe_hist[-10]):
+            return True
+        return False
+
+    info = model.fit(train, var, val_df=None, log=None, on_epoch=on_epoch)
+    if info.get("early_stopped"):
+        at = probe_hist[-1] if probe_hist else np.inf
+        return _ret(at, stopped=True, reason="stalled_margin",
+                    at=at, n=info.get("epochs", 0))
+    full = _probe(model)
+    return _ret(full, n=info.get("epochs", rcfg.epochs), at=full)
 
 
 def _load_tuned(var, time_res) -> dict:
@@ -89,8 +133,30 @@ def run_variable(cfg, var, phase: str):
     if cfg.get("_quick_months"):
         panel = subset_times(panel, cfg["_quick_months"])
     panel, _hours = apply_hour_cut(panel, cfg["time_resolution"], cfg.get("_hours"))
-    if cfg.get("_max_times"):
-        panel = cap_timestamps(panel, cfg["_max_times"], cfg["time_resolution"],
+    # Early-stop protocol: score only the eval set (max 52). Training stays full.
+    time_res = cfg["time_resolution"]
+    kind = early_stop_kind("RGI")
+    eval_raw = load_early_stop_times(time_res, kind, which="eval")
+    if eval_raw:
+        pt = pd.to_datetime(panel["time"], utc=True)
+        want = set(str(w) for w in eval_raw)
+        if time_res == "monthly":
+            key = pt.dt.strftime("%Y-%m")
+        elif time_res == "weekly":
+            key = pt.dt.strftime("%Y-W%W")
+        elif time_res == "daily":
+            key = pt.dt.strftime("%Y-%m-%d")
+        else:
+            key = pt.dt.strftime("%Y-%m-%dT%H:%M:%S")
+        # keep all train rows; restrict tune rows to the eval set
+        is_tune = panel["split"] == "tune"
+        keep = (~is_tune) | key.isin(want)
+        if keep.any():
+            panel = panel.loc[keep].copy()
+            print(f"  early-stop eval tune times="
+                  f"{panel.loc[panel['split']=='tune','time'].nunique()}", flush=True)
+    elif cfg.get("_max_times"):
+        panel = cap_timestamps(panel, cfg["_max_times"], time_res,
                                seed=int(cfg.get("rgi", {}).get("seed", 22)))
     rgi_cfg = cfg.get("rgi", {})
     search = rgi_cfg.get("search", {})
@@ -106,23 +172,26 @@ def run_variable(cfg, var, phase: str):
         ))
         print(f"\n{var} phase 1  {len(combos)} combos  (k × layers)")
         best = (np.inf, {"k": base.k, "n_layers": base.n_layers})
+        champion = None
         for k, L in combos:
             rcfg = cfg_to_rgi(cfg, {"k": k, "n_layers": L, "alpha": 0.2, "alpha_z": 10.0})
             t0 = time.perf_counter()
-            rmse = score_combo(panel, var, rcfg, n_folds)
+            res = score_combo(panel, var, rcfg, n_folds, champion_rmse=champion)
             wall = time.perf_counter() - t0
-            print(f"  k={k:2d} L={L}  DEV RMSE={rmse:.4f}  ({wall:.0f}s)")
+            flag = " STOP" if res["early_stopped"] else ""
+            print(f"  k={k:2d} L={L}  DEV RMSE={res['rmse']:.4f}  ({wall:.0f}s){flag}")
             cfg["_trials"].append({
                 "phase": 1,
                 "k": int(k),
                 "n_layers": int(L),
                 "alpha": 0.2,
                 "alpha_z": 10.0,
-                "rmse": float(rmse),
+                **res,
                 "wall_s": round(wall, 1),
             })
-            if rmse < best[0]:
-                best = (rmse, {"k": int(k), "n_layers": int(L)})
+            if not res["early_stopped"] and res["rmse"] < best[0]:
+                best = (res["rmse"], {"k": int(k), "n_layers": int(L)})
+                champion = res["rmse"]
         phase1 = best
     else:
         phase1 = (existing.get("dev_rmse", np.nan), {
@@ -140,25 +209,28 @@ def run_variable(cfg, var, phase: str):
         print(f"\n{var} phase 2  {len(combos)} combos  (alpha × alpha_z)  "
               f"k={phase1[1]['k']} L={phase1[1]['n_layers']}")
         best = (np.inf, dict(phase1[1]))
+        champion = None
         for a, az in combos:
             over = {**phase1[1], "alpha": float(a), "alpha_z": float(az)}
             rcfg = cfg_to_rgi(cfg, over)
             t0 = time.perf_counter()
-            rmse = score_combo(panel, var, rcfg, n_folds)
+            res = score_combo(panel, var, rcfg, n_folds, champion_rmse=champion)
             wall = time.perf_counter() - t0
-            print(f"  alpha={a:.2f} az={az:4.0f}  DEV RMSE={rmse:.4f}  "
-                  f"({wall:.0f}s)")
+            flag = " STOP" if res["early_stopped"] else ""
+            print(f"  alpha={a:.2f} az={az:4.0f}  DEV RMSE={res['rmse']:.4f}  "
+                  f"({wall:.0f}s){flag}")
             cfg["_trials"].append({
                 "phase": 2,
                 "k": int(over["k"]),
                 "n_layers": int(over["n_layers"]),
                 "alpha": float(a),
                 "alpha_z": float(az),
-                "rmse": float(rmse),
+                **res,
                 "wall_s": round(wall, 1),
             })
-            if rmse < best[0]:
-                best = (rmse, over)
+            if not res["early_stopped"] and res["rmse"] < best[0]:
+                best = (res["rmse"], over)
+                champion = res["rmse"]
     else:
         best = phase1
 
@@ -175,27 +247,33 @@ def run_variable(cfg, var, phase: str):
         print(f"\n{var} phase 3a  {len(combos)} combos  (alpha × alpha_z beyond corner)  "
               f"k={locked['k']} L={locked['n_layers']}")
         best = (np.inf, dict(locked))
+        champion = None
         for a, az in combos:
             over = {**locked, "alpha": float(a), "alpha_z": float(az)}
             rcfg = cfg_to_rgi(cfg, over)
             t0 = time.perf_counter()
-            rmse = score_combo(panel, var, rcfg, n_folds)
-            print(f"  alpha={a:.2f} az={az:4.0f}  DEV RMSE={rmse:.4f}  "
-                  f"({time.perf_counter()-t0:.0f}s)")
-            if rmse < best[0]:
-                best = (rmse, over)
+            res = score_combo(panel, var, rcfg, n_folds, champion_rmse=champion)
+            flag = " STOP" if res["early_stopped"] else ""
+            print(f"  alpha={a:.2f} az={az:4.0f}  DEV RMSE={res['rmse']:.4f}  "
+                  f"({time.perf_counter()-t0:.0f}s){flag}")
+            if not res["early_stopped"] and res["rmse"] < best[0]:
+                best = (res["rmse"], over)
+                champion = res["rmse"]
         k_grid = expand.get("k", [5, 10, 15, 20])
         print(f"\n{var} phase 3b  {len(k_grid)} combos  (re-search k)  "
               f"alpha={best[1]['alpha']:.2f} az={best[1]['alpha_z']:.0f} L={best[1]['n_layers']}")
         locked_al = dict(best[1])
+        champion = best[0] if np.isfinite(best[0]) else None
         for k in k_grid:
             over = {**locked_al, "k": int(k)}
             rcfg = cfg_to_rgi(cfg, over)
             t0 = time.perf_counter()
-            rmse = score_combo(panel, var, rcfg, n_folds)
-            print(f"  k={k:2d}  DEV RMSE={rmse:.4f}  ({time.perf_counter()-t0:.0f}s)")
-            if rmse < best[0]:
-                best = (rmse, over)
+            res = score_combo(panel, var, rcfg, n_folds, champion_rmse=champion)
+            flag = " STOP" if res["early_stopped"] else ""
+            print(f"  k={k:2d}  DEV RMSE={res['rmse']:.4f}  ({time.perf_counter()-t0:.0f}s){flag}")
+            if not res["early_stopped"] and res["rmse"] < best[0]:
+                best = (res["rmse"], over)
+                champion = res["rmse"]
 
     out = {
         **best[1],

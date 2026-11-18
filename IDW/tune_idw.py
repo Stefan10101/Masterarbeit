@@ -43,6 +43,8 @@ from shared.splits.evaluation_sets import (
     load_holdout,
     load_tune_targets,
     protocol_masks,
+    load_early_stop_times,
+    early_stop_kind,
 )
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res, variables_from_cfg, cap_timestamps
 
@@ -52,6 +54,31 @@ TRACE = {
     "snow_mean": {"half_hourly": 0.5, "daily": 0.5, "weekly": 1.0, "monthly": 1.0},
 }
 MAX_TIMES_DEFAULT = 400
+PREFIX_MARGIN = 0.20  # drop combos > 20 % worse than best after the prefix
+
+
+def _match_times(panel_times: pd.Series, wanted: list[str], time_res: str) -> list:
+    """Return panel timestamps that match the yaml early-stop list.
+
+    yaml stores native aggregated values (year_month, year_week, date, timestamp).
+    panel time is UTC datetime.
+    """
+    if not wanted:
+        return []
+    pt = pd.to_datetime(panel_times, utc=True)
+    want = set(str(w) for w in wanted)
+    if time_res == "monthly":
+        key = pt.dt.strftime("%Y-%m")
+    elif time_res == "weekly":
+        # match the year_week strings stored in the yaml (e.g. 2020-W03)
+        key = pt.dt.strftime("%Y-W%W")
+    elif time_res == "daily":
+        key = pt.dt.strftime("%Y-%m-%d")
+    else:
+        key = pt.dt.strftime("%Y-%m-%dT%H:%M:%S")
+    mask = key.isin(want)
+    return sorted(pt[mask].unique())
+
 
 
 def _predict_loo(dists, idxs, elev, vals, p, Fz):
@@ -121,11 +148,15 @@ def _score_targets(donors, targets, p, Fz, k, var, trace):
 
 
 def optimize_on_targets(donors, targets, param_grid, primary="rmse", n_jobs=1,
-                        var: str = "", trace: float = 1.0):
+                        var: str = "", trace: float = 1.0, allowed=None):
     p_list = param_grid.get("p", [2.0])
     Fz_list = param_grid.get("Fz", [0.0, 0.5])
     k_list = param_grid.get("k_neighbors", [16])
     combos = [(p, Fz, k) for p in p_list for Fz in Fz_list for k in k_list]
+    if allowed is not None:
+        combos = [c for c in combos if c in allowed]
+    if not combos:
+        return {"p": 2.0, "Fz": 0.5, "k": 16}, {"rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan}, pd.DataFrame()
     def one(c):
         p, Fz, k = c
         return {"p": p, "Fz": Fz, "k": k, **_score_targets(donors, targets, p, Fz, k, var, trace)}
@@ -134,7 +165,7 @@ def optimize_on_targets(donors, targets, param_grid, primary="rmse", n_jobs=1,
     else:
         results = Parallel(n_jobs=n_jobs, backend="threading")(delayed(one)(c) for c in combos)
     df = pd.DataFrame(results)
-    if df[primary].isna().all():
+    if df.empty or df[primary].isna().all():
         return {"p": 2.0, "Fz": 0.5, "k": 16}, {"rmse": np.nan, "mae": np.nan, "nse": np.nan, "kge": np.nan}, df
     best_idx = df[primary].idxmax() if primary in ("kge", "nse") else df[primary].idxmin()
     row = df.loc[best_idx]
@@ -202,10 +233,21 @@ def main():
             continue
 
         times = sorted(panel["time"].unique())
-        if args.max_times and len(times) > args.max_times:
+        # Early-stop protocol: score only the eval set (max 52). Prefix (20) filters combos.
+        kind = early_stop_kind("IDW")
+        eval_raw = load_early_stop_times(time_res, kind, which="eval")
+        prefix_raw = load_early_stop_times(time_res, kind, which="prefix")
+        eval_times = _match_times(pd.Series(times), eval_raw, time_res)
+        prefix_times = _match_times(pd.Series(times), prefix_raw, time_res)
+        prefix_set = {pd.Timestamp(t).isoformat() for t in prefix_times}
+        if eval_times:
+            times = eval_times
+            print(f"  early-stop eval={len(times)}  prefix={len(prefix_set)}")
+        elif args.max_times and len(times) > args.max_times:
             capped = cap_timestamps(panel, args.max_times, time_res,
                                     seed=int(cfg.get("idw", {}).get("seed", 31)))
             times = sorted(capped["time"].unique())
+            print(f"  no early-stop yaml; capped to {len(times)}")
         print(f"\n----- {var}  {len(times)} timestamps  "
               f"{panel['station_name'].nunique()} stations -----")
 
@@ -215,14 +257,17 @@ def main():
         print(f"  grid={n_combos} combos/timestamp  jobs={n_jobs}")
         rows = []
         search_parts = []
-        # Daily and finer: stop once the most common (p, Fz, k) has not changed.
+        combo_scores: dict[tuple, list] = {}
+        alive = None  # None = all combos; set = survivors after prefix filter
+        prefix_done = False
+        # Mode-stability patience stays active independently of the combo filter.
         early = args.early_stop or time_res in ("daily", "half_hourly")
         patience = args.patience
         min_times = max(30, patience)
         stable = None
         stable_for = 0
         if early:
-            print(f"  early stop on, patience={patience} after {min_times} timestamps", flush=True)
+            print(f"  mode-stability patience={patience} after {min_times} timestamps", flush=True)
         for i, ts in enumerate(tqdm(times, desc=f"  {var}"), 1):
             field = build_field(panel, ts, min_stations, held_set)
             if field is None:
@@ -233,12 +278,30 @@ def main():
                 continue
             best_params, best_scores, combo_df = optimize_on_targets(
                 donors, targets, param_grid, primary=primary, n_jobs=n_jobs,
-                var=var, trace=trace,
+                var=var, trace=trace, allowed=alive,
             )
             rows.append({**best_params, **best_scores, "time": str(ts)})
-            combo_df = combo_df.copy()
-            combo_df["time"] = str(ts)
-            search_parts.append(combo_df)
+            if not combo_df.empty:
+                combo_df = combo_df.copy()
+                combo_df["time"] = str(ts)
+                search_parts.append(combo_df)
+                for _, r in combo_df.iterrows():
+                    if np.isfinite(r["rmse"]):
+                        combo_scores.setdefault((r["p"], r["Fz"], r["k"]), []).append(float(r["rmse"]))
+            # Prefix filter: once all prefix timestamps are scored, drop bad combos.
+            scored_prefix = sum(
+                1 for r in rows
+                if pd.to_datetime(r["time"], utc=True).isoformat() in prefix_set
+            )
+            if not prefix_done and prefix_set and scored_prefix >= len(prefix_set) and combo_scores:
+                means = {k: float(np.mean(v)) for k, v in combo_scores.items() if v}
+                if means:
+                    best_mean = min(means.values())
+                    alive = {k for k, m in means.items() if m <= best_mean * (1.0 + PREFIX_MARGIN)}
+                    dropped = set(means) - alive
+                    prefix_done = True
+                    print(f"    prefix filter: kept {len(alive)} / {len(means)}  "
+                          f"dropped {len(dropped)}  best_mean={best_mean:.3f}", flush=True)
             if early and len(rows) >= min_times:
                 keys = [(r["p"], r["Fz"], r["k"]) for r in rows]
                 mode = max(set(keys), key=keys.count)
@@ -247,7 +310,7 @@ def main():
                 else:
                     stable, stable_for = mode, 1
                 if stable_for >= patience:
-                    print(f"    early stop at {i}/{len(times)}  "
+                    print(f"    mode-stability stop at {i}/{len(times)}  "
                           f"winner p={mode[0]} Fz={mode[1]} k={mode[2]} "
                           f"unchanged for {patience}", flush=True)
                     break
@@ -274,11 +337,26 @@ def main():
             "n_times_used": int(len(df)),
         }
         path = save_global_params(time_res, var, result)
-        search = pd.concat(search_parts, ignore_index=True)
-        summary = (search.groupby(["p", "Fz", "k"], as_index=False)
-                   .agg(rmse=("rmse", "median"), mae=("mae", "median"),
-                        nse=("nse", "median"), kge=("kge", "median"),
-                        n_times=("rmse", "size")))
+        search = pd.concat(search_parts, ignore_index=True) if search_parts else pd.DataFrame()
+        if not search.empty:
+            summary = (search.groupby(["p", "Fz", "k"], as_index=False)
+                       .agg(rmse=("rmse", "median"), mae=("mae", "median"),
+                            nse=("nse", "median"), kge=("kge", "median"),
+                            n_times=("rmse", "size")))
+            # mark combos dropped by the prefix filter
+            if alive is not None:
+                summary["early_stopped"] = [
+                    (r.p, r.Fz, r.k) not in alive for r in summary.itertuples()
+                ]
+                summary["stop_reason"] = summary["early_stopped"].map(
+                    lambda x: "prefix_margin" if x else "full"
+                )
+            else:
+                summary["early_stopped"] = False
+                summary["stop_reason"] = "full"
+            summary["n_units_scored"] = summary["n_times"]
+        else:
+            summary = pd.DataFrame()
         search_path = path.with_name(f"{var}_search.csv")
         summary.to_csv(search_path, index=False)
         print(f"  p={result['p']:.2f}  Fz={result['Fz']:.2f}  k={result['k']}  "

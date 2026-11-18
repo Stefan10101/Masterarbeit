@@ -27,7 +27,10 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_frei_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs, variables_from_cfg, cap_timestamps
-from shared.splits.evaluation_sets import apply_evaluation_protocol, load_tune_targets
+from shared.splits.evaluation_sets import (
+    apply_evaluation_protocol, load_tune_targets,
+    load_early_stop_times, early_stop_kind,
+)
 from frei_data import (
     load_idw_residual_params,
     attach_temperature,
@@ -45,6 +48,26 @@ _CFG = None
 _PACKS = None
 _N_FOLDS = 5
 _VAR = None
+PREFIX_MARGIN = 0.20
+
+
+def _match_times(panel_times: pd.Series, wanted: list, time_res: str) -> set:
+    """Panel timestamps matching the yaml early-stop list."""
+    if not wanted:
+        return set()
+    import pandas as pd
+    pt = pd.to_datetime(panel_times, utc=True)
+    want = set(str(w) for w in wanted)
+    if time_res == "monthly":
+        key = pt.dt.strftime("%Y-%m")
+    elif time_res == "weekly":
+        key = pt.dt.strftime("%Y-W%W")
+    elif time_res == "daily":
+        key = pt.dt.strftime("%Y-%m-%d")
+    else:
+        key = pt.dt.strftime("%Y-%m-%dT%H:%M:%S")
+    return set(pt[key.isin(want)].unique())
+
 
 
 def _init(panel, cfg, packs, n_folds, var):
@@ -56,8 +79,9 @@ def _init(panel, cfg, packs, n_folds, var):
     _VAR = var
 
 
-def _eval_cell(nsec, sh, aw):
+def _eval_cell(nsec, sh, aw, panel=None):
     # Residual p/Fz/k come from IDW. n_regions is fixed at 11.
+    # panel overrides the global so the caller can pass a prefix or eval subset.
     idw = getattr(_eval_cell, "idw", {"power": 2.0, "Fz": 0.3, "k": 12})
     nr = 11
     fcfg = cfg_to_frei(_CFG, {
@@ -65,7 +89,8 @@ def _eval_cell(nsec, sh, aw):
         "power": idw["power"], "Fz": idw["Fz"], "k": idw["k"],
     })
     fcfg.select_metric = False
-    pred = run_llocv(_PANEL, _VAR, fcfg, _N_FOLDS, {"train"}, {"tune"}, _PACKS.get(nr))
+    use = panel if panel is not None else _PANEL
+    pred = run_llocv(use, _VAR, fcfg, _N_FOLDS, {"train"}, {"tune"}, _PACKS.get(nr))
     met = compute_metrics(pred["observed"], pred["predicted"])
     nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0
     return {
@@ -82,18 +107,64 @@ def _eval_cell(nsec, sh, aw):
     }
 
 
-def _run_cells(cells, jobs):
-    if jobs == 1:
-        return [_eval_cell(*c) for c in cells]
+def _score_cells(cells, jobs, panel):
+    """Score cells on a given panel. Sequential if jobs==1, else process pool."""
+    if not cells:
+        return []
+    if jobs == 1 or panel is not _PANEL:
+        # filtered panel must be passed explicitly; workers only see the global
+        return [_eval_cell(*c, panel=panel) for c in cells]
+    return _run_cells(cells, jobs)
+
+
+def _early_stop_search(cells, jobs, var, eval_panel, prefix_panel):
+    """Score cells with the prefix/eval early-stop protocol.
+
+    First cell is always scored on the full eval set (becomes champion).
+    Later cells are probed on the prefix; aborted if > 20 % worse than
+    the champion's prefix score. Survivors are scored on the eval set.
+    """
     results = []
-    with ProcessPoolExecutor(
-        max_workers=jobs,
-        initializer=_init,
-        initargs=(_PANEL, _CFG, _PACKS, _N_FOLDS, _VAR),
-    ) as ex:
-        futs = {ex.submit(_eval_cell, *c): c for c in cells}
-        for fut in as_completed(futs):
-            results.append(fut.result())
+    champion = None          # full eval rmse
+    champion_prefix = None   # prefix rmse of the champion
+    for i, cell in enumerate(cells):
+        if champion is None:
+            full = _eval_cell(*cell, panel=eval_panel)
+            full["early_stopped"] = False
+            full["stop_reason"] = "full"
+            full["score_at_stop"] = full["rmse"]
+            full["n_units_scored"] = full["n"]
+            results.append(full)
+            champion = full["rmse"]
+            # champion's prefix score for later comparisons
+            pref = _eval_cell(*cell, panel=prefix_panel)
+            champion_prefix = pref["rmse"]
+            print(f"  {var} champion nsec={full['n_sections']} shrink={full['shrink']} "
+                  f"across={full['across_w']} rmse={champion:.3f}", flush=True)
+            continue
+        pref = _eval_cell(*cell, panel=prefix_panel)
+        if (np.isfinite(pref["rmse"]) and np.isfinite(champion_prefix)
+                and pref["rmse"] > champion_prefix * (1.0 + PREFIX_MARGIN)):
+            pref["early_stopped"] = True
+            pref["stop_reason"] = "prefix_margin"
+            pref["score_at_stop"] = pref["rmse"]
+            pref["n_units_scored"] = pref["n"]
+            results.append(pref)
+            print(f"  {var} early-stop nsec={pref['n_sections']} shrink={pref['shrink']} "
+                  f"across={pref['across_w']} prefix={pref['rmse']:.3f} "
+                  f"> {champion_prefix:.3f}", flush=True)
+            continue
+        full = _eval_cell(*cell, panel=eval_panel)
+        full["early_stopped"] = False
+        full["stop_reason"] = "full"
+        full["score_at_stop"] = full["rmse"]
+        full["n_units_scored"] = full["n"]
+        results.append(full)
+        if np.isfinite(full["rmse"]) and full["rmse"] < champion:
+            champion = full["rmse"]
+            champion_prefix = pref["rmse"]
+            print(f"  {var} new champion nsec={full['n_sections']} shrink={full['shrink']} "
+                  f"across={full['across_w']} rmse={champion:.3f}", flush=True)
     return results
 
 
@@ -111,7 +182,7 @@ def _print_rows(var, results, best):
     return best
 
 
-def _coord_search(nsecs, shrinks, aws, jobs, var, defaults):
+def _coord_search(nsecs, shrinks, aws, jobs, var, defaults, eval_panel, prefix_panel):
     locked = dict(defaults)
     best = None
     seen = set()
@@ -126,14 +197,16 @@ def _coord_search(nsecs, shrinks, aws, jobs, var, defaults):
         if not cells:
             continue
         print(f"{var} coord phase {name} cells={len(cells)} locked={locked}", flush=True)
-        rows = _run_cells(cells, jobs)
+        rows = _early_stop_search(cells, jobs, var, eval_panel, prefix_panel)
         for c in cells:
             seen.add(c)
         all_rows.extend(rows)
-        best = _print_rows(var, rows, best)
-        locked["n_sections"] = best["n_sections"]
-        locked["shrink"] = best["shrink"]
-        locked["across_w"] = best["across_w"]
+        finished = [r for r in rows if not r.get("early_stopped")]
+        best = _print_rows(var, finished, best)
+        if best is not None:
+            locked["n_sections"] = best["n_sections"]
+            locked["shrink"] = best["shrink"]
+            locked["across_w"] = best["across_w"]
     return best, all_rows
 
 
@@ -177,13 +250,28 @@ def main():
         panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
         panel = subset_times(panel, months)
         panel, hours = apply_hour_cut(panel, time_res, args.hours)
-        if args.max_times:
-            panel = cap_timestamps(panel, args.max_times, time_res, seed=int(block.get("seed", 22)))
-        jobs = cap_jobs(jobs, len(panel))
+        # Early-stop protocol: score only the eval set (max 52). Prefix (20) probes.
+        kind = early_stop_kind("Frei")
+        eval_raw = load_early_stop_times(time_res, kind, which="eval")
+        prefix_raw = load_early_stop_times(time_res, kind, which="prefix")
+        eval_set = _match_times(panel["time"], eval_raw, time_res)
+        prefix_set = _match_times(panel["time"], prefix_raw, time_res)
+        if eval_set:
+            eval_panel = panel[panel["time"].isin(eval_set)].copy()
+            prefix_panel = panel[panel["time"].isin(prefix_set)].copy()
+            print(f"  early-stop eval={eval_panel['time'].nunique()} "
+                  f"prefix={prefix_panel['time'].nunique()}", flush=True)
+        else:
+            if args.max_times:
+                panel = cap_timestamps(panel, args.max_times, time_res, seed=int(block.get("seed", 22)))
+            eval_panel = panel
+            prefix_panel = panel
+            print("  no early-stop yaml; scoring full window", flush=True)
+        jobs = cap_jobs(jobs, len(eval_panel))
         print(
-            f"{var} rows={len(panel)} times={panel['time'].nunique()} "
-            f"splits={panel.groupby('split').size().to_dict()} "
-            f"tune-targets={int(panel['is_tune_target'].sum())} "
+            f"{var} rows={len(eval_panel)} times={eval_panel['time'].nunique()} "
+            f"splits={eval_panel.groupby('split').size().to_dict()} "
+            f"tune-targets={int(eval_panel['is_tune_target'].sum())} "
             f"mode={mode} months={months} hours={hours} folds={n_folds} jobs={jobs}",
             flush=True,
         )
@@ -195,7 +283,7 @@ def main():
         nr = int(block.get("n_regions", 11))
         print(f"building pack n_regions={nr}", flush=True)
         packs = {nr: pack_from_master(cfg, nr)}
-        _init(panel, cfg, packs, n_folds, var)
+        _init(eval_panel, cfg, packs, n_folds, var)
         defaults = {
             "n_sections": int(block.get("n_sections", nsecs[0])),
             "shrink": float(block.get("shrink", shrinks[0])),
@@ -204,11 +292,14 @@ def main():
         if mode == "grid":
             cells = list(itertools.product(nsecs, shrinks, aws))
             print(f"{var} grid cells={len(cells)}", flush=True)
-            results = _run_cells(cells, jobs)
-            best = _print_rows(var, results, None)
+            results = _early_stop_search(cells, jobs, var, eval_panel, prefix_panel)
+            finished = [r for r in results if not r.get("early_stopped")]
+            best = _print_rows(var, finished, None)
             all_rows = results
         else:
-            best, all_rows = _coord_search(nsecs, shrinks, aws, jobs, var, defaults)
+            best, all_rows = _coord_search(
+                nsecs, shrinks, aws, jobs, var, defaults, eval_panel, prefix_panel,
+            )
         if best is None:
             print(f"{var} no finite DEV result", flush=True)
             continue

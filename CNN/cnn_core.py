@@ -194,6 +194,9 @@ class SmallUNet(nn.Module):
         self.out = nn.Conv2d(chs[0], out_ch, 1)
         nn.init.zeros_(self.out.weight)
         nn.init.zeros_(self.out.bias)
+        # Scaled tanh saturates at ±bound_scale (residual units before y_std).
+        # 2.0 ≈ ±2 MAD. Indicator channel of two-step stays unbounded.
+        self.bound_scale = 2.0
 
     def forward(self, x):
         skips = []
@@ -207,7 +210,15 @@ class SmallUNet(nn.Module):
             skip = skips[-(i + 2)]
             h = F.interpolate(h, size=skip.shape[-2:], mode="bilinear", align_corners=False)
             h = blk(torch.cat([h, skip], dim=1))
-        return self.out(h)
+        raw = self.out(h)
+        s = float(getattr(self, "bound_scale", 2.0))
+        s = max(s, 1e-3)
+        if raw.shape[1] == 2:
+            # channel 0 = occurrence logit (free), channel 1 = amount/residual
+            ind = raw[:, :1]
+            amt = s * torch.tanh(raw[:, 1:] / s)
+            return torch.cat([ind, amt], dim=1)
+        return s * torch.tanh(raw / s)
 
 
 
@@ -407,12 +418,14 @@ class CNNInterpolator:
         self.cfg = cfg
         self.device = pick_device(cfg.device)
         self.net = SmallUNet(in_ch=in_ch, base=cfg.base_ch, n_levels=cfg.n_levels, out_ch=out_ch).to(self.device)
+        self.net.bound_scale = 2.0
         self.y_mean = 0.0
         self.y_std = 1.0
         self.z_mean = 0.0
         self.z_std = 1.0
         self.log_amount = False
         self.log_residual = False
+        self.bound_scale = 2.0
         self.in_mean = 0.0
         self.in_std = 1.0
         self.in_ch = in_ch
@@ -427,6 +440,7 @@ class CNNInterpolator:
             "log_residual": bool(self.log_residual),
             "in_mean": float(self.in_mean), "in_std": float(self.in_std),
             "amt_clip": float(getattr(self, "_amt_clip", 1e3)),
+            "bound_scale": float(getattr(self, "bound_scale", 2.0)),
             "in_ch": self.in_ch, "out_ch": self.out_ch,
             "cfg": self.cfg.__dict__,
         }
@@ -458,6 +472,9 @@ class CNNInterpolator:
         self.in_mean = float(blob.get("in_mean", self.y_mean))
         self.in_std = float(blob.get("in_std", self.y_std))
         self._amt_clip = float(blob.get("amt_clip", 1e3))
+        self.bound_scale = float(blob.get("bound_scale", 2.0))
+        if hasattr(self, "net"):
+            self.net.bound_scale = self.bound_scale
 
     def pack_channels(self, value, mask, elev, clc, slope=None, sinasp=None, cosasp=None,
                       time_ch=None, extras=None, dx_m: float = 1000.0, dy_m: float = 1000.0):

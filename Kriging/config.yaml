@@ -58,15 +58,14 @@ kriging:
     monthly: 1.0
     seasonal: 2.0
   search:
-    k: [4, 8, 16, 32, 64, 128]
-    family: [spherical, exponential, matern15, gaussian]
-    theta_deg: [0.0, 45.0, 90.0]
-    aniso_ratio: [1.0, 0.5, 0.3]
-    alpha_z: [1.0, 10.0, 50.0, 200.0, 500.0, 1000.0]
-    interactions: [none, elev_xy, elev_clc, both]
-  search_expand:
-    alpha_z: [1.0, 10.0, 50.0, 200.0, 500.0, 1000.0]
-    k: [4, 8, 16, 32, 64, 128]
+    # reduced: keep knobs that move DEV RMSE; drop flat or expensive tails
+    k: [8, 16, 32, 64]
+    family: [spherical, exponential, gaussian]
+    theta_deg: [0.0, 45.0]
+    aniso_ratio: [1.0, 0.5]
+    alpha_z: [10.0, 50.0, 200.0, 500.0]
+    interactions: [both]
+
 covariates:
   elev: true
   smooth_elev: true

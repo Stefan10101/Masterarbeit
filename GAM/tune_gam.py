@@ -29,7 +29,10 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from paths import get_gam_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs, variables_from_cfg, cap_timestamps
-from shared.splits.evaluation_sets import apply_evaluation_protocol
+from shared.splits.evaluation_sets import (
+    apply_evaluation_protocol,
+    load_early_stop_times, early_stop_kind,
+)
 from gam_data import (
     attach_pack_terrain,
     attach_temperature,
@@ -128,7 +131,29 @@ def main():
         panel = tagged[(~tagged["is_heldout"]) & (tagged["split"].isin(["train", "tune"]))].copy()
         panel = subset_times(panel, months)
         panel, hours = apply_hour_cut(panel, time_res, args.hours)
-        if args.max_times:
+        # Early-stop protocol: score only the eval set (max 52).
+        kind = early_stop_kind("GAM")
+        eval_raw = load_early_stop_times(time_res, kind, which="eval")
+        prefix_raw = load_early_stop_times(time_res, kind, which="prefix")
+        prefix_panel = None
+        if eval_raw:
+            pt = pd.to_datetime(panel["time"], utc=True)
+            want_e = set(str(w) for w in eval_raw)
+            want_p = set(str(w) for w in prefix_raw)
+            if time_res == "monthly":
+                key = pt.dt.strftime("%Y-%m")
+            elif time_res == "weekly":
+                key = pt.dt.strftime("%Y-W%W")
+            elif time_res == "daily":
+                key = pt.dt.strftime("%Y-%m-%d")
+            else:
+                key = pt.dt.strftime("%Y-%m-%dT%H:%M:%S")
+            if key.isin(want_e).any():
+                prefix_panel = panel.loc[key.isin(want_p)].copy()
+                panel = panel.loc[key.isin(want_e)].copy()
+                print(f"  early-stop eval={panel['time'].nunique()} "
+                      f"prefix={prefix_panel['time'].nunique()}", flush=True)
+        elif args.max_times:
             panel = cap_timestamps(panel, args.max_times, time_res, seed=int(block.get("seed", 22)))
         rh_mode = args.rh_t_mode or block.get("rh_t_mode", "none")
         if str(var).lower().startswith("rh") and rh_mode in ("predicted", "observed"):
@@ -169,6 +194,46 @@ def main():
         )
         for i, c in enumerate(cells, start=1):
             print(f"  queued {i}/{len(cells)} form={c[0]} ns={c[1]} tau={c[2]}", flush=True)
+        # Prefix pass (sequential, in main). Drop cells > 20 % worse than best prefix.
+        # Parallel section below only sees survivors. Champion updated only from full cells.
+        PREFIX_MARGIN = 0.20
+        if prefix_panel is not None and not prefix_panel.empty and len(cells) > 1:
+            prefix_scores = []
+            for ci, (form, ns, tau) in enumerate(cells):
+                tr = precip_trace(cfg, cfg["time_resolution"], var)
+                gcfg = cfg_to_gam(cfg, {
+                    "formula": form, "n_splines": ns, "tau_wet": tau, "trace": tr,
+                })
+                payloads = build_score_payloads(
+                    prefix_panel, var, gcfg, n_folds, {"train"}, {"tune"},
+                )
+                parts = []
+                for pl in payloads:
+                    try:
+                        _, _, _, _, part = _score_one(pl)
+                        parts.append(part)
+                    except Exception:
+                        pass
+                if parts:
+                    pred = pd.concat(parts, ignore_index=True)
+                    rmse = float(compute_metrics(pred["observed"], pred["predicted"])["rmse"])
+                else:
+                    rmse = np.inf
+                prefix_scores.append(rmse)
+                print(f"  prefix cell {ci+1}/{len(cells)} form={form} ns={ns} "
+                      f"tau={tau} rmse={rmse:.3f}", flush=True)
+            finite = [s for s in prefix_scores if np.isfinite(s)]
+            if finite:
+                best_pref = min(finite)
+                keep = [i for i, s in enumerate(prefix_scores)
+                        if np.isfinite(s) and s <= best_pref * (1.0 + PREFIX_MARGIN)]
+                # first cell always kept (champion seed)
+                if 0 not in keep:
+                    keep = [0] + keep
+                dropped = [i for i in range(len(cells)) if i not in keep]
+                print(f"  prefix filter: kept {len(keep)} / {len(cells)} "
+                      f"dropped {len(dropped)}", flush=True)
+                cells = [cells[i] for i in keep]
         # One pool over (cell, timestamp). Same structure on every timescale.
         work = []
         for ci, (form, ns, tau) in enumerate(cells):
