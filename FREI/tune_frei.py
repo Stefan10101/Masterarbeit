@@ -82,7 +82,7 @@ def _init(panel, cfg, packs, n_folds, var):
 def _eval_cell(nsec, sh, aw, panel=None):
     # Residual p/Fz/k come from IDW. n_regions is fixed at 11.
     # panel overrides the global so the caller can pass a prefix or eval subset.
-    idw = getattr(_eval_cell, "idw", {"power": 2.0, "Fz": 0.3, "k": 12})
+    idw = getattr(_eval_cell, "idw", {"power": 2.0, "Fz": 0.25, "k": 16})
     nr = 11
     fcfg = cfg_to_frei(_CFG, {
         "n_regions": nr, "n_sections": nsec, "shrink": sh, "across_w": aw,

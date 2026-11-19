@@ -127,10 +127,10 @@ def _idw_baseline(var, time_res):
         if path.exists():
             d = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             print(f"  baseline IDW from {path}", flush=True)
-            return float(d.get("p", 1.5)), float(d.get("Fz", 1.0)), int(d.get("k", 40))
-    print(f"  [WARN] no IDW yaml for {var} {res}, fallback p=1.5 Fz=1.0 k=40", flush=True)
+            return float(d.get("p", 2.0)), float(d.get("Fz", 0.25)), int(d.get("k", 16))
+    print(f"  [WARN] no IDW yaml for {var} {res}, fallback p=2.0 Fz=0.25 k=16", flush=True)
     print(f"         looked in {candidates[0]}", flush=True)
-    return 1.5, 1.0, 40
+    return 2.0, 0.25, 16
 
 
 

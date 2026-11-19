@@ -1,0 +1,248 @@
+diff --git a/CNN/train_cnn.py b/CNN/train_cnn.py
+index 0b9c135..36e10f6 100644
+--- a/CNN/train_cnn.py
++++ b/CNN/train_cnn.py
+@@ -127,10 +127,10 @@ def _idw_baseline(var, time_res):
+         if path.exists():
+             d = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+             print(f"  baseline IDW from {path}", flush=True)
+-            return float(d.get("p", 1.5)), float(d.get("Fz", 1.0)), int(d.get("k", 40))
+-    print(f"  [WARN] no IDW yaml for {var} {res}, fallback p=1.5 Fz=1.0 k=40", flush=True)
++            return float(d.get("p", 2.0)), float(d.get("Fz", 0.25)), int(d.get("k", 16))
++    print(f"  [WARN] no IDW yaml for {var} {res}, fallback p=2.0 Fz=0.25 k=16", flush=True)
+     print(f"         looked in {candidates[0]}", flush=True)
+-    return 1.5, 1.0, 40
++    return 2.0, 0.25, 16
+ 
+ 
+ 
+diff --git a/FREI/config.yaml b/FREI/config.yaml
+index dce93af..2a4be43 100644
+--- a/FREI/config.yaml
++++ b/FREI/config.yaml
+@@ -27,7 +27,7 @@ frei:
+   accum_pct: 96.0
+   k: 16
+   power: 2.0
+-  Fz: 0.3
++  Fz: 0.25
+   across_w: 4.0
+   select_metric: true
+   two_step: true
+diff --git a/FREI/frei_data.py b/FREI/frei_data.py
+index ad2bc22..8a2ad95 100644
+--- a/FREI/frei_data.py
++++ b/FREI/frei_data.py
+@@ -225,7 +225,7 @@ def load_idw_residual_params(time_res: str, var: str) -> dict:
+     Does not import IDW code; only reads the yaml path from paths.py.
+     """
+     from paths import get_idw_tuned_params_path
+-    fallback = {"power": 2.0, "Fz": 0.3, "k": 12}
++    fallback = {"power": 2.0, "Fz": 0.25, "k": 16}
+     path = get_idw_tuned_params_path(var, time_res)
+     if not path.exists():
+         print(f"  [WARN] no IDW params for {var}/{time_res} — using {fallback}", flush=True)
+diff --git a/FREI/tune_frei.py b/FREI/tune_frei.py
+index 0a1afe9..3fbd8c1 100644
+--- a/FREI/tune_frei.py
++++ b/FREI/tune_frei.py
+@@ -82,7 +82,7 @@ def _init(panel, cfg, packs, n_folds, var):
+ def _eval_cell(nsec, sh, aw, panel=None):
+     # Residual p/Fz/k come from IDW. n_regions is fixed at 11.
+     # panel overrides the global so the caller can pass a prefix or eval subset.
+-    idw = getattr(_eval_cell, "idw", {"power": 2.0, "Fz": 0.3, "k": 12})
++    idw = getattr(_eval_cell, "idw", {"power": 2.0, "Fz": 0.25, "k": 16})
+     nr = 11
+     fcfg = cfg_to_frei(_CFG, {
+         "n_regions": nr, "n_sections": nsec, "shrink": sh, "across_w": aw,
+diff --git a/GAM/config.yaml b/GAM/config.yaml
+index 72608bb..4890d42 100644
+--- a/GAM/config.yaml
++++ b/GAM/config.yaml
+@@ -32,10 +32,10 @@ gam:
+   seed: 22
+   n_folds: 5
+   predict_tile: 50000
+-  r_timeout: 3600
++  r_timeout: 900   # 15 min; a hanging te_xyelev must not burn an hour per timestamp
+   rh_t_mode: predicted
+-  wind_watershed: true
+-  n_regions: 6
++  wind_watershed: false   # wind uses the same single-fit path as other variables
++  n_regions: 11
+   compute:
+     tune_months: seasonal4
+     tune_folds: 5
+@@ -47,7 +47,6 @@ gam:
+     n_splines: [8, 10]
+     n_splines_tensor: [8, 10]
+     tensor_formulas: [te_xyelev, te_xy_ti_elev]
+-    tau_wet: [0.5]
+ covariates:
+   elev: true
+   smooth_elev: true
+diff --git a/IDW/config.yaml b/IDW/config.yaml
+index 52699ad..b4d6e75 100755
+--- a/IDW/config.yaml
++++ b/IDW/config.yaml
+@@ -23,7 +23,7 @@ idw:
+ 
+ param_grid:
+   power:
+-    # Full factorial: 5 x 5 x 6 = 150.
++    # Full factorial: 5 x 5 x 4 = 100.
+     p: [1.0, 1.5, 2.0, 3.0, 4.0]
+     Fz: [0.0, 0.25, 0.5, 0.75, 1.0]
+-    k_neighbors: [4, 8, 16, 32, 64, 128]
++    k_neighbors: [8, 16, 32, 64]
+diff --git a/IDW/idw_data.py b/IDW/idw_data.py
+index cb330a9..bbd510b 100644
+--- a/IDW/idw_data.py
++++ b/IDW/idw_data.py
+@@ -19,7 +19,7 @@ import yaml
+ SCRIPT_DIR = Path(__file__).resolve().parent
+ 
+ FALLBACK_PARAMS = {
+-    "p": 2.0, "Fz": 0.3, "k": 12,
++    "p": 2.0, "Fz": 0.25, "k": 16,
+     "rmse": float("nan"), "mae": float("nan"),
+     "nse": float("nan"), "kge": float("nan"),
+ }
+@@ -155,7 +155,7 @@ def global_params_path(time_res: str, var: str) -> Path:
+ def load_global_params(time_res: str, var: str) -> dict:
+     path = global_params_path(time_res, var)
+     if not path.exists():
+-        print(f"  [WARN] no global params for {var} — using fallback p=2 Fz=0.3 k=12")
++        print(f"  [WARN] no global params for {var} — using fallback p=2 Fz=0.25 k=16")
+         return dict(FALLBACK_PARAMS)
+     with open(path, "r", encoding="utf-8") as f:
+         raw = yaml.safe_load(f) or {}
+diff --git a/Kriging/config.yaml b/Kriging/config.yaml
+index 3ac3e47..3ac2c54 100644
+--- a/Kriging/config.yaml
++++ b/Kriging/config.yaml
+@@ -39,7 +39,7 @@ kriging:
+   wind_watershed: true
+   across_w: 4.0
+   per_timestamp_vgm: true
+-  n_regions: 6
++  n_regions: 11
+   compute:
+     tune_months: seasonal4
+     tune_folds: 5
+diff --git a/RFSI/config.yaml b/RFSI/config.yaml
+index 44578fa..a0fba48 100755
+--- a/RFSI/config.yaml
++++ b/RFSI/config.yaml
+@@ -20,10 +20,10 @@ aggregation:
+ 
+ rfsi:
+   architecture: pooled
+-  n_obs: 10
+-  n_obs_list: [4, 8, 16, 32, 64]
++  n_obs: 16
++  n_obs_list: [8, 16, 32, 64]
+   seed: 31
+-  n_regions: 6
++  n_regions: 11
+   rh_t_mode: none
+   two_step: true
+   tau_wet: 0.5
+diff --git a/RFSI/tune_pooled.py b/RFSI/tune_pooled.py
+index a43dd09..becf3dc 100644
+--- a/RFSI/tune_pooled.py
++++ b/RFSI/tune_pooled.py
+@@ -251,7 +251,7 @@ def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
+ 
+ def param_grid(cfg):
+     rfsi = cfg.get("rfsi", {})
+-    n_obs_list = [int(x) for x in rfsi.get("n_obs_list", [5, 10, 20])]
++    n_obs_list = [int(x) for x in rfsi.get("n_obs_list", [8, 16, 32, 64])]
+     tun = rfsi.get("rf_tunable", {})
+     depths = tun.get("max_depth", [None])
+     leaves = tun.get("min_samples_leaf", [1])
+@@ -325,7 +325,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
+                  rfsi.get("rf_fixed", {}).get("max_features", "sqrt"))]
+     else:
+         # Coordinate descent: 4 parameters, so not a full product.
+-        n_obs_list = [int(x) for x in rfsi.get("n_obs_list", [8, 16, 32])]
++        n_obs_list = [int(x) for x in rfsi.get("n_obs_list", [8, 16, 32, 64])]
+         tun = rfsi.get("rf_tunable", {})
+         depths = tun.get("max_depth", [None])
+         leaves = tun.get("min_samples_leaf", [5])
+diff --git a/RGI/config.yaml b/RGI/config.yaml
+index 7ad7f42..778676b 100644
+--- a/RGI/config.yaml
++++ b/RGI/config.yaml
+@@ -22,7 +22,7 @@ rgi:
+   two_step: true
+   tau_wet: 0.5
+   rh_t_mode: predicted
+-  k: 10
++  k: 16
+   n_layers: 3
+   alpha: 0.2
+   alpha_z: 10.0
+@@ -41,14 +41,14 @@ rgi:
+   predict_tile: 120000
+   n_folds: 5
+   search:
+-    k: [4, 16, 32]
++    k: [8, 16, 32, 64]
+     n_layers: [2, 3, 4, 5]
+     alpha: [0.1, 0.2]
+-    alpha_z: [10.0, 50.0, 200.0]
++    alpha_z: [10.0, 50.0, 200.0, 500.0]
+   search_expand:
+-    k: [4, 16, 32, 64]
++    k: [8, 16, 32, 64]
+     alpha: [0.1, 0.2]
+-    alpha_z: [50.0, 200.0]
++    alpha_z: [50.0, 200.0, 500.0]
+ covariates:
+   elev: true
+   smooth_elev: true
+diff --git a/RGI/tune_rgi.py b/RGI/tune_rgi.py
+index 376747e..df25d03 100644
+--- a/RGI/tune_rgi.py
++++ b/RGI/tune_rgi.py
+@@ -242,7 +242,7 @@ def run_variable(cfg, var, phase: str):
+             "alpha_z": float(existing.get("alpha_z", best[1].get("alpha_z", base.alpha_z))),
+         }
+         a_grid = expand.get("alpha", [0.3, 0.4, 0.5, 0.6])
+-        az_grid = expand.get("alpha_z", [50.0, 100.0, 150.0, 200.0])
++        az_grid = expand.get("alpha_z", [50.0, 200.0, 500.0])
+         combos = list(itertools.product(a_grid, az_grid))
+         print(f"\n{var} phase 3a  {len(combos)} combos  (alpha × alpha_z beyond corner)  "
+               f"k={locked['k']} L={locked['n_layers']}")
+@@ -259,7 +259,7 @@ def run_variable(cfg, var, phase: str):
+             if not res["early_stopped"] and res["rmse"] < best[0]:
+                 best = (res["rmse"], over)
+                 champion = res["rmse"]
+-        k_grid = expand.get("k", [5, 10, 15, 20])
++        k_grid = expand.get("k", [8, 16, 32, 64])
+         print(f"\n{var} phase 3b  {len(k_grid)} combos  (re-search k)  "
+               f"alpha={best[1]['alpha']:.2f} az={best[1]['alpha_z']:.0f} L={best[1]['n_layers']}")
+         locked_al = dict(best[1])
+diff --git a/SMACNP/config.yaml b/SMACNP/config.yaml
+index d7d6f3b..78f729b 100644
+--- a/SMACNP/config.yaml
++++ b/SMACNP/config.yaml
+@@ -26,7 +26,7 @@ smacnp:
+   num_heads: 8
+   dropout_rate: 0.1
+   use_layer_norm: false
+-  k_localized: 15
++  k_localized: 16
+   use_positional_encoding: true
+   pe_dim: 32
+   variance_floor: 2.0e-4
+@@ -41,7 +41,7 @@ smacnp:
+   seed: 42
+   device: auto
+   search:
+-    k_localized: [8, 15, 32]
++    k_localized: [8, 16, 32, 64]
+     hidden_size: [256, 512]
+ covariates:
+   elev: true

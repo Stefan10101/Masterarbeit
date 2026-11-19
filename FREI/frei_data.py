@@ -225,7 +225,7 @@ def load_idw_residual_params(time_res: str, var: str) -> dict:
     Does not import IDW code; only reads the yaml path from paths.py.
     """
     from paths import get_idw_tuned_params_path
-    fallback = {"power": 2.0, "Fz": 0.3, "k": 12}
+    fallback = {"power": 2.0, "Fz": 0.25, "k": 16}
     path = get_idw_tuned_params_path(var, time_res)
     if not path.exists():
         print(f"  [WARN] no IDW params for {var}/{time_res} — using {fallback}", flush=True)

@@ -39,7 +39,7 @@ kriging:
   wind_watershed: true
   across_w: 4.0
   per_timestamp_vgm: true
-  n_regions: 6
+  n_regions: 11
   compute:
     tune_months: seasonal4
     tune_folds: 5

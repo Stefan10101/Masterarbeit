@@ -251,7 +251,7 @@ def score_combo(panel, var, n_obs, rf_params, encoder, use_elev, use_lc,
 
 def param_grid(cfg):
     rfsi = cfg.get("rfsi", {})
-    n_obs_list = [int(x) for x in rfsi.get("n_obs_list", [5, 10, 20])]
+    n_obs_list = [int(x) for x in rfsi.get("n_obs_list", [8, 16, 32, 64])]
     tun = rfsi.get("rf_tunable", {})
     depths = tun.get("max_depth", [None])
     leaves = tun.get("min_samples_leaf", [1])
@@ -325,7 +325,7 @@ def run_variable(cfg, var, cluster_method, n_splits, quick=False, months=None, m
                  rfsi.get("rf_fixed", {}).get("max_features", "sqrt"))]
     else:
         # Coordinate descent: 4 parameters, so not a full product.
-        n_obs_list = [int(x) for x in rfsi.get("n_obs_list", [8, 16, 32])]
+        n_obs_list = [int(x) for x in rfsi.get("n_obs_list", [8, 16, 32, 64])]
         tun = rfsi.get("rf_tunable", {})
         depths = tun.get("max_depth", [None])
         leaves = tun.get("min_samples_leaf", [5])

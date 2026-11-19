@@ -26,7 +26,7 @@ smacnp:
   num_heads: 8
   dropout_rate: 0.1
   use_layer_norm: false
-  k_localized: 15
+  k_localized: 16
   use_positional_encoding: true
   pe_dim: 32
   variance_floor: 2.0e-4
@@ -41,7 +41,7 @@ smacnp:
   seed: 42
   device: auto
   search:
-    k_localized: [8, 15, 32]
+    k_localized: [8, 16, 32, 64]
     hidden_size: [256, 512]
 covariates:
   elev: true

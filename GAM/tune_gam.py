@@ -273,17 +273,32 @@ def main():
                 "sec": float(time.time() - t0[ci]),
             }
 
+        # A single mgcv timeout/fail on one timestamp must not abort the search.
+        # The cell is scored on the timestamps that returned; a cell with zero
+        # successful timestamps is dropped (no row, so it cannot win).
+        def _on_fail(ci, payload, exc):
+            form, ns, tau = cells[ci]
+            ts = payload[2] if len(payload) > 2 else "?"
+            print(
+                f"    SKIP cell {ci+1} form={form} ns={ns} tau={tau} ts={ts} "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
         if jobs == 1 or len(work) <= 1:
             pending = {ci: sum(1 for c, _ in work if c == ci) for ci in range(len(cells))}
             for ci, payload in work:
-                i, ts, nd, nq, part = _score_one(payload)
-                results_parts[ci].append(part)
+                try:
+                    i, ts, nd, nq, part = _score_one(payload)
+                    results_parts[ci].append(part)
+                    print(
+                        f"    cell {ci+1} [{i}/{payload[1]}] {ts} "
+                        f"donors={nd} targets={nq}  left_in_cell={pending[ci]-1}",
+                        flush=True,
+                    )
+                except Exception as exc:
+                    _on_fail(ci, payload, exc)
                 pending[ci] -= 1
-                print(
-                    f"    cell {ci+1} [{i}/{payload[1]}] {ts} "
-                    f"donors={nd} targets={nq}  left_in_cell={pending[ci]}",
-                    flush=True,
-                )
                 if pending[ci] == 0:
                     row = _finish_cell(ci)
                     if row:
@@ -292,6 +307,12 @@ def main():
                             f"DONE  form={row['formula']} ns={row['n_splines']} "
                             f"tau={row['tau_wet']} RMSE={row['rmse']:.3f} "
                             f"n={row['n']} finite={row['finite']} {row['sec']:.0f}s",
+                            flush=True,
+                        )
+                    else:
+                        form, ns, tau = cells[ci]
+                        print(
+                            f"DONE  form={form} ns={ns} tau={tau} no successful timestamps",
                             flush=True,
                         )
         else:
@@ -309,22 +330,18 @@ def main():
                 for fut in as_completed(futs):
                     ci, payload = futs[fut]
                     try:
-                        i, ts, nd, nq, part = fut.result()
-                    except Exception as exc:
-                        form, ns, tau = cells[ci]
+                        # Hard cap so a worker that ignores the R timeout
+                        # cannot freeze the search. 2x r_timeout + margin.
+                        i, ts, nd, nq, part = fut.result(timeout=2000)
+                        results_parts[ci].append(part)
                         print(
-                            f"CELL FAILED form={form} ns={ns} tau={tau} "
-                            f"{type(exc).__name__}: {exc}",
+                            f"    cell {ci+1} [{i}/{payload[1]}] {ts} "
+                            f"donors={nd} targets={nq}  left_in_cell={pending[ci]-1}",
                             flush=True,
                         )
-                        raise
-                    results_parts[ci].append(part)
+                    except Exception as exc:
+                        _on_fail(ci, payload, exc)
                     pending[ci] -= 1
-                    print(
-                        f"    cell {ci+1} [{i}/{payload[1]}] {ts} "
-                        f"donors={nd} targets={nq}  left_in_cell={pending[ci]}",
-                        flush=True,
-                    )
                     if pending[ci] == 0:
                         row = _finish_cell(ci)
                         if row:
@@ -333,6 +350,12 @@ def main():
                                 f"DONE  form={row['formula']} ns={row['n_splines']} "
                                 f"tau={row['tau_wet']} RMSE={row['rmse']:.3f} "
                                 f"n={row['n']} finite={row['finite']} {row['sec']:.0f}s",
+                                flush=True,
+                            )
+                        else:
+                            form, ns, tau = cells[ci]
+                            print(
+                                f"DONE  form={form} ns={ns} tau={tau} no successful timestamps",
                                 flush=True,
                             )
         results.sort(key=lambda r: (r["formula"], r["n_splines"], r["tau_wet"]))

@@ -179,16 +179,40 @@ class GAMInterpolator:
             self.cfg.rscript, str(script), str(train), str(out),
             self.cfg.formula, family, str(int(self.cfg.n_splines)),
         ]
+        proc = None
         try:
-            subprocess.run(
-                cmd, check=True, capture_output=True, text=True,
-                timeout=float(self.cfg.r_timeout),
+            # Popen + explicit kill: subprocess.run(timeout=) on Windows can
+            # raise and then hang in communicate/cleanup if R still holds the
+            # temp dir, which freezes the process-pool worker forever.
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
+            try:
+                stdout, stderr = proc.communicate(timeout=float(self.cfg.r_timeout))
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.communicate(timeout=10)
+                except Exception:
+                    pass
+                raise
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    proc.returncode, cmd, output=stdout, stderr=stderr,
+                )
         except Exception as exc:
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
             err = ""
             if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
                 err = exc.stderr[-500:]
-            shutil.rmtree(tmp, ignore_errors=True)
+            try:
+                shutil.rmtree(tmp, ignore_errors=True)
+            except Exception:
+                pass
             raise RuntimeError(
                 f"mgcv fit failed ({type(exc).__name__}): {err}"
             ) from exc

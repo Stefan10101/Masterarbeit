@@ -32,10 +32,10 @@ gam:
   seed: 22
   n_folds: 5
   predict_tile: 50000
-  r_timeout: 3600
+  r_timeout: 900   # 15 min; a hanging te_xyelev must not burn an hour per timestamp
   rh_t_mode: predicted
-  wind_watershed: true
-  n_regions: 6
+  wind_watershed: false   # wind uses the same single-fit path as other variables
+  n_regions: 11
   compute:
     tune_months: seasonal4
     tune_folds: 5
@@ -47,7 +47,6 @@ gam:
     n_splines: [8, 10]
     n_splines_tensor: [8, 10]
     tensor_formulas: [te_xyelev, te_xy_ti_elev]
-    tau_wet: [0.5]
 covariates:
   elev: true
   smooth_elev: true

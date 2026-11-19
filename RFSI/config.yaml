@@ -20,10 +20,10 @@ aggregation:
 
 rfsi:
   architecture: pooled
-  n_obs: 10
-  n_obs_list: [4, 8, 16, 32, 64]
+  n_obs: 16
+  n_obs_list: [8, 16, 32, 64]
   seed: 31
-  n_regions: 6
+  n_regions: 11
   rh_t_mode: none
   two_step: true
   tau_wet: 0.5

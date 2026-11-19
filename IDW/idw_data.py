@@ -19,7 +19,7 @@ import yaml
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 FALLBACK_PARAMS = {
-    "p": 2.0, "Fz": 0.3, "k": 12,
+    "p": 2.0, "Fz": 0.25, "k": 16,
     "rmse": float("nan"), "mae": float("nan"),
     "nse": float("nan"), "kge": float("nan"),
 }
@@ -155,7 +155,7 @@ def global_params_path(time_res: str, var: str) -> Path:
 def load_global_params(time_res: str, var: str) -> dict:
     path = global_params_path(time_res, var)
     if not path.exists():
-        print(f"  [WARN] no global params for {var} — using fallback p=2 Fz=0.3 k=12")
+        print(f"  [WARN] no global params for {var} — using fallback p=2 Fz=0.25 k=16")
         return dict(FALLBACK_PARAMS)
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}

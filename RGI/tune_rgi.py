@@ -242,7 +242,7 @@ def run_variable(cfg, var, phase: str):
             "alpha_z": float(existing.get("alpha_z", best[1].get("alpha_z", base.alpha_z))),
         }
         a_grid = expand.get("alpha", [0.3, 0.4, 0.5, 0.6])
-        az_grid = expand.get("alpha_z", [50.0, 100.0, 150.0, 200.0])
+        az_grid = expand.get("alpha_z", [50.0, 200.0, 500.0])
         combos = list(itertools.product(a_grid, az_grid))
         print(f"\n{var} phase 3a  {len(combos)} combos  (alpha × alpha_z beyond corner)  "
               f"k={locked['k']} L={locked['n_layers']}")
@@ -259,7 +259,7 @@ def run_variable(cfg, var, phase: str):
             if not res["early_stopped"] and res["rmse"] < best[0]:
                 best = (res["rmse"], over)
                 champion = res["rmse"]
-        k_grid = expand.get("k", [5, 10, 15, 20])
+        k_grid = expand.get("k", [8, 16, 32, 64])
         print(f"\n{var} phase 3b  {len(k_grid)} combos  (re-search k)  "
               f"alpha={best[1]['alpha']:.2f} az={best[1]['alpha_z']:.0f} L={best[1]['n_layers']}")
         locked_al = dict(best[1])
