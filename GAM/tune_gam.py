@@ -70,7 +70,7 @@ def _eval_cell(form, ns, tau):
         gcfg = cfg_to_gam(_CFG, {
             "formula": form, "n_splines": ns, "tau_wet": tau, "trace": tr,
         })
-        pred = run_llocv(_PANEL, _VAR, gcfg, _N_FOLDS, {"train"}, {"tune"}, progress=tag)
+        pred = run_llocv(_PANEL, _VAR, gcfg, _N_FOLDS, {"train"}, {"train", "tune"}, progress=tag)
         met = compute_metrics(pred["observed"], pred["predicted"])
         nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0
         row = {
@@ -205,7 +205,7 @@ def main():
                     "formula": form, "n_splines": ns, "tau_wet": tau, "trace": tr,
                 })
                 payloads = build_score_payloads(
-                    prefix_panel, var, gcfg, n_folds, {"train"}, {"tune"},
+                    prefix_panel, var, gcfg, n_folds, {"train"}, {"train", "tune"},
                 )
                 parts = []
                 for pl in payloads:
@@ -242,7 +242,7 @@ def main():
                 "formula": form, "n_splines": ns, "tau_wet": tau, "trace": tr,
             })
             payloads = build_score_payloads(
-                panel, var, gcfg, n_folds, {"train"}, {"tune"},
+                panel, var, gcfg, n_folds, {"train"}, {"train", "tune"},
             )
             print(
                 f"  cell {ci+1}/{len(cells)} form={form} ns={ns} tau={tau} "

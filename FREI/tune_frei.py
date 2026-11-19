@@ -90,7 +90,7 @@ def _eval_cell(nsec, sh, aw, panel=None):
     })
     fcfg.select_metric = False
     use = panel if panel is not None else _PANEL
-    pred = run_llocv(use, _VAR, fcfg, _N_FOLDS, {"train"}, {"tune"}, _PACKS.get(nr))
+    pred = run_llocv(use, _VAR, fcfg, _N_FOLDS, {"train"}, {"train", "tune"}, _PACKS.get(nr))
     met = compute_metrics(pred["observed"], pred["predicted"])
     nfin = int(np.isfinite(pred["predicted"]).sum()) if len(pred) else 0
     return {
