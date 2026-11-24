@@ -284,7 +284,6 @@ def run_variable(cfg, var, phase: str):
     }
     _write_tuned(var, cfg["time_resolution"], out)
     if cfg.get("_trials"):
-        import pandas as pd
         sp = get_rgi_tuned_params_path(var, cfg["time_resolution"]).with_name(f"{var}_search.csv")
         pd.DataFrame(cfg["_trials"]).to_csv(sp, index=False)
         print(f"  wrote {sp}  ({len(cfg['_trials'])} trials)")

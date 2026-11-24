@@ -374,7 +374,10 @@ def main():
             key = pt.dt.strftime("%Y-%m-%dT%H:%M:%S")
         matched = pt[key.isin(want)]
         if len(matched):
-            val_days = matched.to_numpy()
+            # Drop tz so keys match df["time"] (naive datetime64[ns]).
+            # matched.to_numpy() on a tz-aware Series yields tz-aware Timestamps
+            # that never hit the groupby dict, producing zero validation tensors.
+            val_days = matched.dt.tz_convert(None).to_numpy()
             print(f"  early-stop eval days={len(val_days)}", flush=True)
     print(f"train quarters={len(qsplits['train'])}  tune quarters={len(qsplits['tune'])}")
     print(f"train days={len(train_days)}  val days={len(val_days)}")
@@ -384,6 +387,11 @@ def main():
         val_days, df, feat_cols, y_scaler, val_context, cfg, on_grid=False, epoch=0,
     )
     print(f"val tensors={len(val_tensors)}")
+    if not val_tensors:
+        raise RuntimeError(
+            f"no validation tensors for {var} {cfg['time_resolution']} "
+            "(early-stop timestamp mismatch or empty tune window)"
+        )
 
     grid = search_grid(cfg, args.quick)
     print(f"search cells={len(grid)}  {[tuple(c.items()) for c in grid]}")

@@ -48,17 +48,17 @@ function Run-Step($label, $cmd) {
 #}
 
 # RFSI
-Run-Step "RFSI tune"  "python RFSI/tune_pooled.py --time-resolution $res $cap --variables $($vars -join ' ')"
-Run-Step "RFSI llocv" "python RFSI/llocv_pooled.py --time-resolution $res --variables $($vars -join ' ')"
+#Run-Step "RFSI tune"  "python RFSI/tune_pooled.py --time-resolution $res $cap --variables $($vars -join ' ')"
+#Run-Step "RFSI llocv" "python RFSI/llocv_pooled.py --time-resolution $res --variables $($vars -join ' ')"
 # Run-Step "RFSI produce" "python RFSI/produce_rfsi_maps.py --time-resolution $res --variables $($vars -join ' ')"
 
 # CNN — tune + train capped; LLOCV full test year
-foreach ($v in $vars) {
-    Run-Step "CNN tune $v"  "python CNN/tune_cnn.py --time-resolution $res $cap --variable $v"
-    Run-Step "CNN train $v" "python CNN/train_cnn.py --time-resolution $res $cap --variable $v"
-    Run-Step "CNN llocv $v" "python CNN/llocv_cnn.py --time-resolution $res --score test --variable $v"
-    # Run-Step "CNN produce $v" "python CNN/produce_cnn_maps.py --time-resolution $res --variable $v"
-}
+#foreach ($v in $vars) {
+#    Run-Step "CNN tune $v"  "python CNN/tune_cnn.py --time-resolution $res $cap --variable $v"
+#    Run-Step "CNN train $v" "python CNN/train_cnn.py --time-resolution $res $cap --variable $v"
+#    Run-Step "CNN llocv $v" "python CNN/llocv_cnn.py --time-resolution $res --score test --variable $v"
+#    # Run-Step "CNN produce $v" "python CNN/produce_cnn_maps.py --time-resolution $res --variable $v"
+#}
 
 # RGI
 Run-Step "RGI tune"  "python RGI/tune_rgi.py --time-resolution $res $cap --variables $($vars -join ' ')"

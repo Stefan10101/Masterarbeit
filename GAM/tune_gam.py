@@ -194,8 +194,10 @@ def main():
         )
         for i, c in enumerate(cells, start=1):
             print(f"  queued {i}/{len(cells)} form={c[0]} ns={c[1]} tau={c[2]}", flush=True)
-        # Prefix pass (sequential, in main). Drop cells > 20 % worse than best prefix.
-        # Parallel section below only sees survivors. Champion updated only from full cells.
+        # Prefix pass. Cells stay sequential so a cell is only judged on
+        # its full prefix score. Timestamps inside a cell run in parallel.
+        # Drop cells > 20 % worse than the best prefix. The eval phase
+        # below only sees survivors.
         PREFIX_MARGIN = 0.20
         if prefix_panel is not None and not prefix_panel.empty and len(cells) > 1:
             prefix_scores = []
@@ -208,12 +210,22 @@ def main():
                     prefix_panel, var, gcfg, n_folds, {"train"}, {"train", "tune"},
                 )
                 parts = []
-                for pl in payloads:
-                    try:
-                        _, _, _, _, part = _score_one(pl)
-                        parts.append(part)
-                    except Exception:
-                        pass
+                if payloads and jobs > 1:
+                    with ProcessPoolExecutor(max_workers=jobs) as ex:
+                        futs = [ex.submit(_score_one, pl) for pl in payloads]
+                        for fut in as_completed(futs):
+                            try:
+                                _, _, _, _, part = fut.result(timeout=2000)
+                                parts.append(part)
+                            except Exception:
+                                pass
+                else:
+                    for pl in payloads:
+                        try:
+                            _, _, _, _, part = _score_one(pl)
+                            parts.append(part)
+                        except Exception:
+                            pass
                 if parts:
                     pred = pd.concat(parts, ignore_index=True)
                     rmse = float(compute_metrics(pred["observed"], pred["predicted"])["rmse"])
@@ -221,7 +233,7 @@ def main():
                     rmse = np.inf
                 prefix_scores.append(rmse)
                 print(f"  prefix cell {ci+1}/{len(cells)} form={form} ns={ns} "
-                      f"tau={tau} rmse={rmse:.3f}", flush=True)
+                      f"tau={tau} rmse={rmse:.3f} timestamps={len(payloads)}", flush=True)
             finite = [s for s in prefix_scores if np.isfinite(s)]
             if finite:
                 best_pref = min(finite)
