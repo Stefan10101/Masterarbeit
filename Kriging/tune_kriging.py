@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
-Staged search for Kriging.
+Kriging hyperparameter search.
 
-More than 3 interacting hyperparameters, so the search stays phased:
-  1 k, 2 family, 3 metric (theta, aniso, alpha_z), 4 interactions, 5 refine.
+Three knobs interact, so one factorial covers them. Same grid for every
+variable; children inherit the parent file and are not searched.
+  searched: k (8/16/32/64), family, alpha_z  -> 16 trials
+  locked:   trend=linear, interactions=both, k_indicator=k,
+            aniso_ratio=1, theta_deg=0
+One anisotropy check is scored against the factorial winner and kept
+only if it improves DEV RMSE. Total 17 trials.
 
 Protocol (per-timestamp): train + tune quarters, score on the fixed
 tune-targets (donors exclude those targets during scoring).
@@ -42,7 +47,6 @@ from kriging_data import (
     attach_temperature,
     compute_block,
     compute_metrics,
-    is_precip,
     load_config,
     load_panel,
     pack_from_master,
@@ -122,14 +126,6 @@ def score_combo(panel, var, kcfg: KrigingConfig, n_folds: int, cfg, pack=None, j
     return _ret(rmse, n=len(parts), at=rmse)
 
 
-def _load_tuned(var, time_res) -> dict:
-    path = get_kriging_tuned_params_path(var, time_res)
-    if not path.exists():
-        return {}
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
 def _write_tuned(var, time_res, payload: dict) -> Path:
     path = get_kriging_tuned_params_path(var, time_res)
     with open(path, "w", encoding="utf-8") as f:
@@ -138,54 +134,53 @@ def _write_tuned(var, time_res, payload: dict) -> Path:
     return path
 
 
-def _keys_from(best_over: dict, base: KrigingConfig) -> dict:
-    return {
-        "k": int(best_over.get("k", base.k)),
-        "k_indicator": int(best_over.get("k_indicator", base.k_indicator)),
-        "family": str(best_over.get("family", base.family)),
-        "theta_deg": float(best_over.get("theta_deg", base.theta_deg)),
-        "aniso_ratio": float(best_over.get("aniso_ratio", base.aniso_ratio)),
-        "alpha_z": float(best_over.get("alpha_z", base.alpha_z)),
-        "interactions": str(best_over.get("interactions", base.interactions)),
-        "trend": str(best_over.get("trend", base.trend)),
-    }
+def _score_one_combo(extra, locked, panel, var, n_folds, cfg, pack):
+    """One factorial cell. Top-level so joblib can ship it to a worker."""
+    over = {**locked, **extra}
+    kcfg = cfg_to_kriging(cfg, over)
+    t0 = time.perf_counter()
+    res = score_combo(panel, var, kcfg, n_folds, cfg, pack=pack, jobs=1)
+    return extra, res, time.perf_counter() - t0
 
 
 def _eval_grid(panel, var, cfg, n_folds, locked: dict, varying: list[dict], label: str,
                pack=None, jobs: int = 1, prefix_times=None):
     print(f"\n{var} {label}  {len(varying)} combos  jobs={jobs}")
     rows = []
-    champion = None
-    champion_prefix = None
 
-    def one(extra, champ_pref):
-        over = {**locked, **extra}
-        kcfg = cfg_to_kriging(cfg, over)
-        t0 = time.perf_counter()
-        res = score_combo(panel, var, kcfg, n_folds, cfg, pack=pack, jobs=1,
-                          prefix_times=prefix_times, champion_prefix=champ_pref)
-        sec = time.perf_counter() - t0
-        return extra, res, sec
-
-    # First combo is always fully scored (establishes the champion).
-    # Later combos may be aborted against the champion's prefix score.
-    # Sequential within a phase so the champion is known; phases stay ordered.
-    for i, extra in enumerate(varying):
-        champ_pref = None if i == 0 else champion_prefix
-        extra, res, sec = one(extra, champ_pref)
+    def _record(extra, res, sec):
         pretty = " ".join(f"{k}={v}" for k, v in extra.items())
         flag = " STOP" if res["early_stopped"] else ""
         print(f"  {pretty}  DEV RMSE={res['rmse']:.4f}  ({sec:.0f}s){flag}")
         rows.append({**extra, **res, "seconds": round(sec, 1), "phase": label})
-        # only fully scored combos can become champion or lock the phase
-        if not res["early_stopped"] and res["rmse"] < (champion if champion is not None else np.inf):
-            champion = res["rmse"]
-            # recompute prefix score of the new champion for later comparisons
-            if prefix_times:
-                pref_panel = panel[panel["time"].isin(prefix_times)]
-                pref_res = score_combo(pref_panel, var, cfg_to_kriging(cfg, {**locked, **extra}),
-                                       n_folds, cfg, pack=pack, jobs=1)
-                champion_prefix = pref_res["rmse"]
+
+    # Threads, not processes. loky workers crash on this Windows env while
+    # reimporting pyarrow (0xc0000139). Numpy linalg releases the GIL.
+    if jobs > 1 and len(varying) > 1:
+        raw = Parallel(n_jobs=min(jobs, len(varying)), backend="threading")(
+            delayed(_score_one_combo)(extra, locked, panel, var, n_folds, cfg, pack)
+            for extra in varying
+        )
+        for extra, res, sec in raw:
+            _record(extra, res, sec)
+    else:
+        champion = None
+        champion_prefix = None
+        for i, extra in enumerate(varying):
+            champ_pref = None if i == 0 else champion_prefix
+            over = {**locked, **extra}
+            kcfg = cfg_to_kriging(cfg, over)
+            t0 = time.perf_counter()
+            res = score_combo(panel, var, kcfg, n_folds, cfg, pack=pack, jobs=1,
+                              prefix_times=prefix_times, champion_prefix=champ_pref)
+            _record(extra, res, time.perf_counter() - t0)
+            if not res["early_stopped"] and res["rmse"] < (champion if champion is not None else np.inf):
+                champion = res["rmse"]
+                if prefix_times:
+                    pref_panel = panel[panel["time"].isin(prefix_times)]
+                    pref_res = score_combo(pref_panel, var, kcfg, n_folds, cfg, pack=pack, jobs=1)
+                    champion_prefix = pref_res["rmse"]
+
     finished = [r for r in rows if not r["early_stopped"]]
     if not finished:
         return (np.inf, dict(locked)), rows
@@ -260,19 +255,18 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
     search = kblock.get("search", {})
     n_folds = int(n_folds or kblock.get("n_folds", 5))
     base = cfg_to_kriging(cfg)
-    existing = _load_tuned(var, cfg["time_resolution"])
-    locked = _keys_from(existing, base) if existing else _keys_from({}, base)
-    # phase 0 freeze: linear main+interactions from config, isotropic exponential
-    if not existing and phase in ("1", "all"):
-        locked.update({
-            "family": "exponential",
-            "theta_deg": 0.0,
-            "aniso_ratio": 1.0,
-            "alpha_z": 0.0,
-            "interactions": "both",
-            "trend": "linear",
-        })
-    best = (existing.get("dev_rmse", np.inf), locked)
+    # Same locks for every variable. k_indicator follows k.
+    locked = {
+        "k": int(base.k),
+        "k_indicator": int(base.k),
+        "family": "exponential",
+        "theta_deg": 0.0,
+        "aniso_ratio": 1.0,
+        "alpha_z": 50.0,
+        "interactions": "both",
+        "trend": "linear",
+    }
+    best = (np.inf, locked)
     search_rows = []
 
     def _take(label, grid):
@@ -284,58 +278,37 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
         search_rows.extend(rows)
         return dict(best[1])
 
-    if phase in ("1", "all"):
-        grid = [{"k": int(k), "k_indicator": int(k)} for k in search.get("k", [base.k])]
-        locked = _take("phase 1a  k", grid)
-        # Snow stays continuous. Phase 1b used to pass only k_indicator, which
-        # stored k as NaN and spent ~47 min a trial without changing the score.
-        if str(var) == "precip_sum" and cfg["time_resolution"] != "monthly":
-            if locked.get("k") is None:
-                raise RuntimeError("phase 1b needs the k locked in phase 1a")
-            grid = [
-                {"k": int(locked["k"]), "k_indicator": int(k)}
-                for k in search.get("k", [base.k])
-            ]
-            locked = _take("phase 1b  k_indicator", grid)
-        elif is_precip(var):
-            print(f"{var} phase 1b skipped: indicator neighbourhood is only "
-                  f"searched for precip_sum", flush=True)
+    k_vals = [int(v) for v in search.get("k", [32, 64])]
+    fam_vals = [str(v) for v in search.get("family", ["exponential", "spherical"])]
+    az_vals = [float(v) for v in search.get("alpha_z", [50.0, 200.0])]
+    grid = [
+        {
+            "k": k, "k_indicator": k, "family": f, "alpha_z": az,
+            "aniso_ratio": 1.0, "theta_deg": 0.0,
+        }
+        for k, f, az in itertools.product(k_vals, fam_vals, az_vals)
+    ]
+    locked = _take("k x family x alpha_z", grid)
 
-    if phase in ("2", "all"):
-        grid = [{"family": str(f)} for f in search.get("family", [base.family])]
-        locked = _take("phase 2  family", grid)
-
-    if phase in ("3", "all"):
-        grid = [
-            {"theta_deg": float(th), "aniso_ratio": float(r), "alpha_z": float(az)}
-            for th, r, az in itertools.product(
-                search.get("theta_deg", [0.0]),
-                search.get("aniso_ratio", [1.0]),
-                search.get("alpha_z", [0.0]),
-            )
-        ]
-        locked = _take("phase 3  metric", grid)
-
-    if phase in ("4", "all"):
-        grid = [{"interactions": str(s)} for s in search.get("interactions", [base.interactions])]
-        locked = _take("phase 4  interactions", grid)
-
-    if phase in ("5", "all"):
-        expand = kblock.get("search_expand", {})
-        az_grid = [float(v) for v in expand.get("alpha_z", search.get("alpha_z", [locked["alpha_z"]]))]
-        if float(locked["alpha_z"]) not in az_grid:
-            az_grid.append(float(locked["alpha_z"]))
-        az_grid = sorted(set(az_grid))
-        locked = _take("phase 5a  alpha_z expand", [{"alpha_z": az} for az in az_grid])
-        k_grid = [int(v) for v in expand.get("k", search.get("k", [locked["k"]]))]
-        locked = _take("phase 5b  k re-search", [{"k": k, "k_indicator": k} for k in k_grid])
-        if str(var) == "precip_sum":
-            if locked.get("k") is None:
-                raise RuntimeError("phase 5c needs the k locked by the earlier phases")
-            locked = _take(
-                "phase 5c  k_indicator",
-                [{"k": int(locked["k"]), "k_indicator": int(k)} for k in k_grid],
-            )
+    # One anisotropy check. Adopt only if it beats the factorial winner.
+    check = search.get("aniso_check", {"aniso_ratio": 0.5, "theta_deg": 45.0})
+    before = best[0]
+    trial, rows = _eval_grid(
+        panel, var, cfg, n_folds, locked,
+        [{
+            "k": int(locked["k"]),
+            "k_indicator": int(locked["k"]),
+            "aniso_ratio": float(check.get("aniso_ratio", 0.5)),
+            "theta_deg": float(check.get("theta_deg", 45.0)),
+        }],
+        pack=pack, label="anisotropy check", jobs=jobs, prefix_times=prefix_times,
+    )
+    search_rows.extend(rows)
+    if trial[0] < before:
+        locked = dict(trial[1])
+        best = trial
+    else:
+        best = (before, locked)
 
     out = {
         **locked,
@@ -343,7 +316,7 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
         "variable": var,
         "time_resolution": cfg["time_resolution"],
         "n_folds": n_folds,
-        "phase": phase,
+        "phase": "factorial",
         "rh_t_mode": rh_t_mode or kblock.get("rh_t_mode", "none"),
         "tune_months": months or "all",
     }
@@ -359,16 +332,17 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
 def parse_args():
     p = argparse.ArgumentParser(description="Staged DEV search for Kriging")
     p.add_argument("--variables", nargs="*", default=None)
-    p.add_argument("--phase", choices=["1", "2", "3", "4", "5", "all"], default=None)
+    p.add_argument("--phase", default=None,
+                   help="ignored; search is always the 3-knob factorial")
     p.add_argument("--months", default=None)
     p.add_argument("--folds", type=int, default=None)
     p.add_argument("--max-times", type=int, default=400,
                    help="cap tune timestamps, sampled within the tune split")
     p.add_argument("--rh-t-mode", default=None, choices=["none", "predicted", "observed"])
     p.add_argument("--quick", action="store_true",
-                   help="force phase 1, seasonal4 months, 2 folds")
+                   help="seasonal4 months, 2 folds")
     p.add_argument("--jobs", type=int, default=None,
-                   help="parallel combos within a phase (default: half the logical cores)")
+                   help="parallel combos (default: config compute.jobs, else n-1)")
     add_hours_arg(p)
     add_time_res_arg(p)
     return p.parse_args()
@@ -381,14 +355,20 @@ def main():
     cfg["_hours"] = args.hours
     wanted = variables_from_cfg(cfg, args.variables)
     comp = compute_block(cfg)
-    phase = args.phase or ("1" if args.quick else comp.get("tune_phase", "all"))
+    phase = "factorial"
     months = args.months or ("seasonal4" if args.quick else comp.get("tune_months", "seasonal4"))
     n_folds = args.folds or (2 if args.quick else int(comp.get("tune_folds", 5)))
-    jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
+    n_cores = max(1, (os.cpu_count() or 2) - 1)
+    if args.jobs is not None:
+        jobs = max(1, int(args.jobs))
+    else:
+        raw = comp.get("jobs", "n-1")
+        jobs = n_cores if str(raw).strip().lower() in ("n-1", "n_1", "auto") else max(1, int(raw))
     pack = pack_from_master(cfg, int(cfg.get("kriging", {}).get("n_regions", 6)))
     print("=" * 72)
     print("Kriging DEV search")
-    print(f"  phase={phase}  months={months}  folds={n_folds}  jobs={jobs}  pack={'yes' if pack else 'no'}")
+    print(f"  search=k x family x alpha_z + 1 aniso check")
+    print(f"  months={months}  folds={n_folds}  jobs={jobs}  pack={'yes' if pack else 'no'}")
     print(f"  time_resolution={cfg['time_resolution']}")
     print("=" * 72)
     for var in wanted:
