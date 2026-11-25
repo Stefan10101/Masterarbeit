@@ -48,11 +48,11 @@ STEPS_PER_HOUR    = 60 // FREQ_MINUTES
 
 HARD_MIN          = 0.0
 HARD_MAX          = 50.0
-SPIKE_THRESHOLD   = 20.0
+SPIKE_THRESHOLD   = 30.0
 STUCK_HOURS       = 3.0
 STUCK_TOL         = 0.05
 
-NEIGHBOR_K        = 2          # NEW in v1.2
+NEIGHBOR_K        = 5          # majority vote
 
 LOG_FILE = PAKET_ROOT / f"precip_final_cleaner_v1.2.1_spatial_zero_qc_{datetime.now():%Y%m%d_%H%M%S}.log"
 logging.basicConfig(level=logging.INFO,
@@ -201,8 +201,9 @@ def apply_precip_qc(df: pd.DataFrame, logger=None, station_name: str = "") -> pd
     flagged["range"] = int(hard_mask.sum())
     df.loc[hard_mask, "value"] = np.nan
 
-    # === STEP 3: Rate / spike check ===
-    spike_mask = (df["value"] > SPIKE_THRESHOLD) & df["value"].notna()
+    # === STEP 3: Rate / spike check (true step) ===
+    df["diff"] = df["value"].diff().abs()
+    spike_mask = (df["diff"] > SPIKE_THRESHOLD) & df["value"].notna()
     flagged["spike"] = int(spike_mask.sum())
     df.loc[spike_mask, "value"] = np.nan
 
@@ -399,7 +400,7 @@ def main():
                     for sid in all_coords}
 
     # Identify suspicious zero months
-    logger.info("Identifying suspicious zero months (my sum==0 but â‰¥1 neighbour has >0)...")
+    logger.info("Identifying suspicious zero months (my sum==0 but majority of k=5 neighbours have >0)...")
     total_bad_months = 0
     stations_with_bad_months = 0
     for station_id, my_monthly in monthly_totals.items():
@@ -408,11 +409,11 @@ def main():
         for month_str, my_sum in my_monthly.items():
             if my_sum > 0:
                 continue
-            has_rain_nearby = any(
-                monthly_totals.get(nid, {}).get(month_str, 0.0) > 0
-                for nid in neighs
+            rain_neighs = sum(
+                1 for nid in neighs
+                if monthly_totals.get(nid, {}).get(month_str, 0.0) > 0
             )
-            if has_rain_nearby:
+            if neighs and rain_neighs > len(neighs) / 2:
                 bad.add(month_str)
         bad_months_map[station_id] = bad
         if bad:
@@ -443,6 +444,19 @@ def main():
     logger.info(f"Output: {OUTPUT_QC_DIR}")
     logger.info(f"Log: {LOG_FILE}")
 
+
+
+
+    # === SPATIAL QC (k=10, elev cap 800 m, precip isolated-wet rule) ===
+    try:
+        from shared.spatial_qc import apply_spatial_qc_to_directory
+        n_spatial = apply_spatial_qc_to_directory(
+            OUTPUT_QC_DIR, variable="precip", k=10, elev_cap_m=800.0,
+            min_valid=7, mad_multiplier=4.0, precip_mode=True, logger=logger,
+        )
+        logger.info(f"Spatial QC removed {n_spatial} precipitation values")
+    except Exception as e:
+        logger.error(f"Spatial QC failed: {e}")
 
 if __name__ == "__main__":
     main()

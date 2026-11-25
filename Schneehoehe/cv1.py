@@ -37,12 +37,14 @@ VARIABLE_SUFFIX = "_snow"
 
 TEMP_SEARCH_RADIUS_KM = 8.0
 ELEVATION_TOLERANCE_M = 400
-RATE_MAX = 0.001
+RATE_MAX = 10.0 / 3600.0   # 10 cm/h
 TUKEY_WINDOW = 11
 TUKEY_K = 1.8
-FLATLINE_DAYS = 21
+FLATLINE_DAYS = 3
 HIGH_ALTITUDE_THRESHOLD = 2900
 MIN_FLATLINE_VALUE = 2.0
+NEIGHBOR_K = 5
+FLATLINE_MAJORITY = True
 
 LOG_FILE = PAKET_ROOT / f"snowheight_final_cleaner_v2.38_pipeline3_{datetime.now():%Y%m%d_%H%M%S}.log"
 logging.basicConfig(level=logging.INFO,
@@ -53,6 +55,9 @@ logger = logging.getLogger(__name__)
 
 # ==================== FLATLINE FILTER (unchanged) ====================
 def flatline_filter(df, max_days=FLATLINE_DAYS, min_value=MIN_FLATLINE_VALUE):
+    """Flag constant non-zero runs longer than max_days (3 d).
+    Neighbour rule (applied in main): if majority of k=5 neighbours are 0 in the same window,
+    the stuck non-zero run is also invalidated and set to 0."""
     if df.empty or "value" not in df.columns:
         return pd.Series(True, index=df.index)
     s = df["value"]
@@ -220,13 +225,12 @@ def apply_snowheight_qc(df, temp_lookup, station_name, logger=None):
     df = df.sort_index()
     if df.empty:
         return df.reset_index(), False, None
+    # Flatline identification only; neighbour-aware decision is applied in the post-pass.
     flatline_mask = flatline_filter(df)
-    flatline_count = (~flatline_mask).sum()
+    flatline_count = int((~flatline_mask).sum())
     if flatline_count > 0 and logger:
-        logger.info(f"  [{station_name}] Flatline filter: {flatline_count:,} points set to NaN")
-    df = df[flatline_mask]
-    if df.empty:
-        return df.reset_index(), False, None
+        logger.info(f"  [{station_name}] Flatline candidates: {flatline_count:,} points (neighbour rule applied later)")
+    # do not drop here — post-pass sets to 0 only when majority of neighbours are 0
     YEARS = list(range(2020, 2026))
     total_summer_points = 0
     zero_summer_points = 0
@@ -284,22 +288,43 @@ def apply_snowheight_qc(df, temp_lookup, station_name, logger=None):
 
 
 # ==================== Helper functions (unchanged) ====================
-def rate_filter(values, times, max_rate=RATE_MAX):
+def rate_filter(values, times, max_rate=RATE_MAX, max_high_rate_hours=6.0, max_24h_cm=150.0):
+    """Hard cap: slope never > 10 cm/h.
+    Sustained rate at/near the cap longer than 6 h is invalid.
+    Total |change| over any 24 h window <= 150 cm.
+    """
     if len(values) == 0:
         return np.array([], dtype=bool)
     n = len(values)
     valid = np.ones(n, dtype=bool)
-    last_valid = 0
+    # stepwise absolute slopes (cm/s)
+    slopes = np.zeros(n)
     for i in range(1, n):
-        dt = (times[i] - times[last_valid]).total_seconds()
-        if dt <= 0:
-            valid[i] = False
-            continue
-        slope = (values[i] - values[last_valid]) / dt
-        if abs(slope) > max_rate:
-            valid[i] = False
-        else:
-            last_valid = i
+        dt = (times[i] - times[i-1]).total_seconds()
+        if dt > 0 and pd.notna(values[i]) and pd.notna(values[i-1]):
+            slopes[i] = abs(values[i] - values[i-1]) / dt
+    # 1) never exceed 10 cm/h
+    valid[slopes > max_rate] = False
+    # 2) sustained high-rate (> ~8 cm/h) runs longer than 6 h
+    high = slopes > (0.8 * max_rate)
+    if high.any():
+        groups = (high != np.roll(high, 1)).cumsum()
+        for g in np.unique(groups[high]):
+            idx = np.where(groups == g)[0]
+            if len(idx) < 2:
+                continue
+            duration_h = (times[idx[-1]] - times[idx[0]]).total_seconds() / 3600.0
+            if duration_h > max_high_rate_hours:
+                valid[idx] = False
+    # 3) 24 h accumulation limit
+    if n > 48:
+        # approximate with rolling 48-step (24 h) total absolute change
+        s = pd.Series(values)
+        # simple forward 24 h delta where possible
+        for i in range(48, n):
+            if pd.notna(values[i]) and pd.notna(values[i-48]):
+                if abs(values[i] - values[i-48]) > max_24h_cm:
+                    valid[i] = False
     return valid
 
 def tukey_despike(values, window=TUKEY_WINDOW, k=TUKEY_K):
@@ -478,6 +503,25 @@ def main():
     logger.info("=== FINISHED v2.38_pipeline3 ===")
     logger.info(f"Output: {OUTPUT_QC_DIR}")
 
+
+
+
+    # === SPATIAL QC (k=10, elev cap 800 m, 4×MAD) ===
+    try:
+        from shared.spatial_qc import apply_spatial_qc_to_directory
+        n_spatial = apply_spatial_qc_to_directory(
+            OUTPUT_QC_DIR, variable="snow", k=10, elev_cap_m=800.0,
+            min_valid=7, mad_multiplier=4.0, precip_mode=False, logger=logger,
+        )
+        logger.info(f"Spatial QC removed {n_spatial} snow values")
+        from shared.spatial_qc import apply_snow_flatline_neighbour_rule
+        n_flat = apply_snow_flatline_neighbour_rule(
+            OUTPUT_QC_DIR, k=5, elev_cap_m=800.0, min_days=3.0,
+            min_value=2.0, zero_tol=0.5, logger=logger,
+        )
+        logger.info(f"Flatline neighbour rule set {n_flat} snow values to 0")
+    except Exception as e:
+        logger.error(f"Spatial QC failed: {e}")
 
 if __name__ == "__main__":
     main()

@@ -37,7 +37,7 @@ FREQ_MINUTES      = 30
 STEPS_PER_HOUR    = 60 // FREQ_MINUTES
 
 HARD_MIN          = 0.0
-HARD_MAX          = 100.0
+HARD_MAX          = 80.0
 
 SPIKE_THRESHOLD   = 18.0
 STUCK_HOURS       = 72.0
@@ -223,16 +223,13 @@ def apply_wind_qc(df: pd.DataFrame, logger=None, station_name: str = "") -> pd.D
     flagged["stuck"] = int(stuck_mask.sum())
     df.loc[stuck_mask, "value"] = np.nan
 
-    # === STEP 5: Variability / icing-frozen sensor (only >2000 m) ===
-    if hoehe > 2000:
-        rolling_mean = df["value"].rolling(window=12, min_periods=6).mean()
-        min_icing_steps = int(ICING_HOURS * STEPS_PER_HOUR)
-        df["roll_std"] = df["value"].rolling(min_icing_steps, min_periods=min_icing_steps // 2).std()
-        icing_mask = (df["roll_std"] < ICING_STD_MAX) & (rolling_mean < 1.0) & df["value"].notna()
-        flagged["icing"] = int(icing_mask.sum())
-        df.loc[icing_mask, "value"] = np.nan
-    else:
-        flagged["icing"] = 0
+    # === STEP 5: Variability / icing-frozen sensor (all elevations) ===
+    rolling_mean = df["value"].rolling(window=12, min_periods=6).mean()
+    min_icing_steps = int(ICING_HOURS * STEPS_PER_HOUR)
+    df["roll_std"] = df["value"].rolling(min_icing_steps, min_periods=min_icing_steps // 2).std()
+    icing_mask = (df["roll_std"] < ICING_STD_MAX) & (rolling_mean < 1.0) & df["value"].notna()
+    flagged["icing"] = int(icing_mask.sum())
+    df.loc[icing_mask, "value"] = np.nan
 
     # === MICRO-GAP INTERPOLATION (after all QC) ===
     if len(df) > 0:
@@ -318,7 +315,7 @@ def main():
     logger.info("=== WIND SPEED FINAL CLEANER v1.1 (pipeline v3 adapted) START ===")
     logger.info(f"Source: {INPUT_FULL_DIR}  ->  Destination: {OUTPUT_QC_DIR}")
     logger.info(f"Thresholds (UNCHANGED): hard {HARD_MIN}â€“{HARD_MAX} m/s | spike >{SPIKE_THRESHOLD} m/s | "
-                f"stuck â‰¥{STUCK_HOURS}h (tol {STUCK_TOL} m/s) | icing std <{ICING_STD_MAX} (only >2000 m + wind <1 m/s) | "
+                f"stuck â‰¥{STUCK_HOURS}h (tol {STUCK_TOL} m/s) | icing std <{ICING_STD_MAX} (all elevations, wind <1 m/s) | "
                 f"elev bands: {ELEV_BANDS} â†’ soft_max {BAND_SOFT_MAX}")
     logger.info(f"Parallel workers: {mp.cpu_count() - 1}")
 
@@ -360,6 +357,19 @@ def main():
     logger.info(f"Output: {OUTPUT_QC_DIR}")
     logger.info(f"Log: {LOG_FILE}")
 
+
+
+
+    # === SPATIAL QC (k=10, elev cap 800 m, 5×MAD) ===
+    try:
+        from shared.spatial_qc import apply_spatial_qc_to_directory
+        n_spatial = apply_spatial_qc_to_directory(
+            OUTPUT_QC_DIR, variable="wind", k=10, elev_cap_m=800.0,
+            min_valid=7, mad_multiplier=5.0, precip_mode=False, logger=logger,
+        )
+        logger.info(f"Spatial QC removed {n_spatial} wind values")
+    except Exception as e:
+        logger.error(f"Spatial QC failed: {e}")
 
 if __name__ == "__main__":
     main()

@@ -294,12 +294,12 @@ def read_station_json(json_path: Path) -> Optional[pd.DataFrame]:
 
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
 
-        # === LIGHT QC for TEMPERATURE ===
-        unreasonable_mask = (df["value"] < -40) | (df["value"] > 50)
+        # === LIGHT QC for TEMPERATURE (harmonized hard limits; detailed QC in cv1) ===
+        unreasonable_mask = (df["value"] < -50) | (df["value"] > 50)
         n_unreasonable = unreasonable_mask.sum()
         if n_unreasonable > 0:
             df.loc[unreasonable_mask, "value"] = np.nan
-            logger.info(f"QC | {network}/{station_raw} â†’ {n_unreasonable} values set to NaN (outside -40..+50 Â°C)")
+            logger.info(f"QC | {network}/{station_raw} → {n_unreasonable} values set to NaN (outside -50..+50 °C)")
 
         df = ensure_utc(df, network)
 

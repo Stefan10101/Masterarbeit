@@ -61,8 +61,8 @@ function Run-Step($label, $cmd) {
 #}
 
 # RGI
-Run-Step "RGI tune"  "python RGI/tune_rgi.py --time-resolution $res $cap --variables $($vars -join ' ')"
-Run-Step "RGI llocv" "python RGI/llocv_rgi.py --time-resolution $res --variables $($vars -join ' ')"
+#Run-Step "RGI tune"  "python RGI/tune_rgi.py --time-resolution $res $cap --variables $($vars -join ' ')"
+#Run-Step "RGI llocv" "python RGI/llocv_rgi.py --time-resolution $res --variables $($vars -join ' ')"
 # Run-Step "RGI produce" "python RGI/produce_rgi_maps.py --time-resolution $res --variables $($vars -join ' ')"
 
 # SMACNP

@@ -41,7 +41,7 @@ smacnp:
   seed: 42
   device: auto
   search:
-    k_localized: [8, 16, 32, 64]
+    k_localized: [8, 16, 32]
     hidden_size: [256, 512]
 covariates:
   elev: true

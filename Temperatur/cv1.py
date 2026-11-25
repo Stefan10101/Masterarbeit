@@ -44,7 +44,7 @@ STUCK_HOURS       = 24.0
 STUCK_TOL         = 0.1
 
 ELEV_BANDS        = [0, 500, 1000, 1500, 2000, 4000]
-BAND_SOFT_MAX     = {0: 40.0, 1: 37.0, 2: 34.0, 3: 30.0, 4: 25.0, 5: 25.0}
+BAND_SOFT_MAX     = {0: 50.0, 1: 37.0, 2: 34.0, 3: 30.0, 4: 25.0, 5: 25.0}
 BAND_SOFT_MIN     = {0: -25.0, 1: -28.0, 2: -32.0, 3: -38.0, 4: -45.0, 5: -45.0}
 
 # Logging must be set up BEFORE any logger calls (including the coordinate swap loader)
@@ -358,6 +358,19 @@ def main():
     logger.info(f"Output: {OUTPUT_QC_DIR}")
     logger.info(f"Log: {LOG_FILE}")
 
+
+
+
+    # === SPATIAL QC (k=10, elev cap 800 m, 4×MAD) ===
+    try:
+        from shared.spatial_qc import apply_spatial_qc_to_directory
+        n_spatial = apply_spatial_qc_to_directory(
+            OUTPUT_QC_DIR, variable="temp", k=10, elev_cap_m=800.0,
+            min_valid=7, mad_multiplier=4.0, precip_mode=False, logger=logger,
+        )
+        logger.info(f"Spatial QC removed {n_spatial} temperature values")
+    except Exception as e:
+        logger.error(f"Spatial QC failed: {e}")
 
 if __name__ == "__main__":
     main()

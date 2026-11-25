@@ -46,7 +46,7 @@ while PROJECT_ROOT.name != "Daten":
     PROJECT_ROOT = PROJECT_ROOT.parent
 DATA_ROOT = PROJECT_ROOT
 
-SLF_DIR = DATA_ROOT / "slf"
+SLF_DIR = DATA_ROOT / "Network_providers" / "slf"
 CSV_DIR = SLF_DIR / "csv"
 STATIONS_JSON = SLF_DIR / "stations.json"
 
@@ -89,19 +89,21 @@ MAIN_COLS = {
     "VW_30MIN_MEAN": ("wind_speed",        "m/s"),
     "HS":            ("snow_height",       "cm"),
 }
-# Pluvio CSV. Prefer the already-aggregated 30-min sum (RRE = corrected/real).
+# Pluvio CSV. Use only the interval amounts (RR). RRE_* columns are running/cumulative
+# totals that reset and must not be treated as 30-min precipitation.
 # Stations that only have 10-min columns are summed into the same 30-min grid.
-PLUVIO_30 = ["RRE_30MIN_SUM", "RR_30MIN_SUM"]
-PLUVIO_10 = ["RRE_10MIN_SUM", "RR_10MIN_SUM"]
+PLUVIO_30 = ["RR_30MIN_SUM"]
+PLUVIO_10 = ["RR_10MIN_SUM"]
 
 
 def _to_30min_sum(df: pd.DataFrame, col30: str | None, col10: str | None) -> pd.DataFrame:
-    """Return a 30-min precipitation series.
+    """Return a 30-min precipitation series from RR interval amounts only.
 
     Prefer the native 30-min column where it has a value. For timestamps that
     only exist at 10-min resolution, sum the three 10-min values that fall
     into each 30-min bin (:00 and :30). Precipitation is a sum, so this does
-    not lose mass and does not double-count.
+    not lose mass and does not double-count. RRE_* cumulative columns are
+    never passed in.
     """
     parts = []
 
@@ -206,8 +208,9 @@ def process_station(code: str, meta: dict) -> list[tuple[str, int]]:
             log.warning(f"{code} main: {e}")
 
     # --- precipitation (pluvio) ---
-    # Native IMIS resolution is 30 min. Some pluvio files only contain
-    # 10-min sums (RRE_10MIN_SUM). Those are summed into the same :00/:30
+    # Native IMIS resolution is 30 min. Use only RR_* interval sums.
+    # RRE_* are cumulative and are ignored. Some pluvio files only contain
+    # 10-min sums (RR_10MIN_SUM). Those are summed into the same :00/:30
     # grid so the series matches T/RH/wind/snow and the pipeline regrid.
     pluvio_csv = CSV_DIR / f"{code}_pluvio.csv"
     if pluvio_csv.exists():
@@ -219,6 +222,9 @@ def process_station(code: str, meta: dict) -> list[tuple[str, int]]:
             agg = _to_30min_sum(df, col30, col10)
             if not agg.empty:
                 out_path = OUTPUT_PATHS["precipitation"] / name / f"{name}_precipitation_30min.json"
+                # Overwrite: previous extracts used cumulative RRE columns
+                if out_path.exists():
+                    out_path.unlink()
                 n = write_json(out_path, st.get("label", name), hoehe, lon, lat,
                                agg["measure_date"], agg["value"])
                 if n:

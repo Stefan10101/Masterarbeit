@@ -36,8 +36,8 @@ VARIABLE_SUFFIX = "_rh"
 STUCK_HOURS      = 8.0
 SATURATION_HOURS = 36.0
 DRY_HOURS        = 18.0
-SPIKE_THRESHOLD  = 25.0
-STUCK_NEIGHBOUR_KM = 25.0
+SPIKE_THRESHOLD  = 20.0
+STUCK_NEIGHBOUR_K = 5
 STUCK_NEIGHBOUR_TOL = 5.0
 
 _RH_META = None  # DataFrame path,lat,lon,station — set in worker init
@@ -144,7 +144,7 @@ def _init_rh_worker(meta_df):
 
 
 def _neighbour_confirms_rh(df, stuck_mask, long_run_ids) -> pd.Series:
-    """True where a nearby station is within STUCK_NEIGHBOUR_TOL over the same run."""
+    """True where a majority of the 5 nearest stations are within STUCK_NEIGHBOUR_TOL over the same run."""
     keep = pd.Series(False, index=df.index)
     if _RH_META is None or _RH_META.empty or "lat" not in df.columns:
         return keep
@@ -153,9 +153,11 @@ def _neighbour_confirms_rh(df, stuck_mask, long_run_ids) -> pd.Series:
     if pd.isna(lat0) or pd.isna(lon0):
         return keep
     dist = _haversine_km(lat0, lon0, _RH_META["lat"].to_numpy(), _RH_META["lon"].to_numpy())
-    neigh = _RH_META.loc[dist <= STUCK_NEIGHBOUR_KM].copy()
+    meta = _RH_META.copy()
+    meta["dist"] = dist
     self_name = str(df["station"].iloc[0]) if "station" in df.columns else ""
-    neigh = neigh[neigh["station"] != self_name]
+    meta = meta[meta["station"] != self_name]
+    neigh = meta.nsmallest(STUCK_NEIGHBOUR_K, "dist")
     if neigh.empty:
         return keep
     series = []
@@ -178,7 +180,8 @@ def _neighbour_confirms_rh(df, stuck_mask, long_run_ids) -> pd.Series:
         if aligned.dropna(how="all").empty:
             continue
         med_abs = (aligned.sub(own, axis=0)).abs().median()
-        if (med_abs <= STUCK_NEIGHBOUR_TOL).any():
+        n_confirm = int((med_abs <= STUCK_NEIGHBOUR_TOL).sum())
+        if n_confirm > len(med_abs) / 2:
             keep.loc[run_idx] = True
     return keep
 
@@ -369,7 +372,7 @@ def main():
     logger.info(f"Processing {len(files_to_process)} unique stations in parallel...")
 
     meta = _build_rh_meta(files_to_process)
-    logger.info(f"RH neighbour table: {len(meta)} stations, radius={STUCK_NEIGHBOUR_KM} km, tol={STUCK_NEIGHBOUR_TOL} %")
+    logger.info(f"RH neighbour table: {len(meta)} stations, k={STUCK_NEIGHBOUR_K} nearest, tol={STUCK_NEIGHBOUR_TOL} %")
     tasks = [(f, OUTPUT_QC_DIR, "_final_qc") for f in files_to_process]
     with mp.Pool(max(1, mp.cpu_count() - 1), initializer=_init_rh_worker, initargs=(meta,)) as pool:
         results = pool.map(process_one_station, tasks)
@@ -382,6 +385,19 @@ def main():
     logger.info(f"Output: {OUTPUT_QC_DIR}")
     logger.info(f"Log: {LOG_FILE}")
 
+
+
+
+    # === SPATIAL QC (k=10, elev cap 800 m, 4×MAD) ===
+    try:
+        from shared.spatial_qc import apply_spatial_qc_to_directory
+        n_spatial = apply_spatial_qc_to_directory(
+            OUTPUT_QC_DIR, variable="rh", k=10, elev_cap_m=800.0,
+            min_valid=7, mad_multiplier=4.0, precip_mode=False, logger=logger,
+        )
+        logger.info(f"Spatial QC removed {n_spatial} RH values")
+    except Exception as e:
+        logger.error(f"Spatial QC failed: {e}")
 
 if __name__ == "__main__":
     main()

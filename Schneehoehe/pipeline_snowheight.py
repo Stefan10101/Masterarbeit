@@ -313,11 +313,11 @@ def read_station_json(json_path: Path) -> Optional[pd.DataFrame]:
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
 
         # === LIGHT QC for SNOWHEIGHT ===
-        unreasonable_mask = (df["value"] < 0) | (df["value"] > 600)
+        unreasonable_mask = (df["value"] < 0) | (df["value"] > 800)
         n_unreasonable = unreasonable_mask.sum()
         if n_unreasonable > 0:
             df.loc[unreasonable_mask, "value"] = np.nan
-            logger.info(f"QC | {network}/{station_raw} → {n_unreasonable} values set to NaN ( <0 or >600 cm )")
+            logger.info(f"QC | {network}/{station_raw} → {n_unreasonable} values set to NaN ( <0 or >800 cm )")
 
         df = ensure_utc(df, network)
 
