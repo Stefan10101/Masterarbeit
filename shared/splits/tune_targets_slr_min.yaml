@@ -1,0 +1,312 @@
+tune_targets:
+- Bad Ischl
+- Bad Vöslau
+- Bruck an der Mur
+- Chenau
+- Chiematte
+- Col des Mosses
+- Davos Stilli (SLF)
+- Deutschlandsberg
+- Disentis
+- Faschina
+- Feistritz ob Bleiburg
+- Flattnitz
+- Friesach
+- Fürstenfeld
+- Galzig
+- Grenchen
+- Hanengretji
+- Hintere Fundusalm
+- Hintertux
+- Kitzbühel
+- La Dôle
+- La Fuorcla
+- Lac des Vaux
+- Landeck
+- Langen am Arlberg
+- Le Moléson
+- Lienz
+- Lumpegna Süd
+- Mallnitz
+- Marienbergalm
+- Obere Meiel
+- Oron
+- Orzival
+- Plaffeien
+- Rotschalp
+- Salzburg Flughafen
+- Schmidigen-Bidmeren
+- Seewli
+- Sibratsgfäll-Rindberg
+- St.Jakob im Defereggental
+- Steinberg am Rofan
+- Tannheim
+- Vevey / Corseaux
+- Wädenswil
+- Zürich / Fluntern
+donors_during_tune:
+- Aadorf / Tänikon
+- Abtenau
+- Ackernalm
+- Adelboden
+- Aigle
+- Allentsteig
+- Alpbach
+- Alpetta
+- Alpler Tor
+- Alplhütte
+- Altdorf
+- Altenrhein
+- Altmünster
+- Ammerwald
+- Andelsbuch-Niedere
+- Anras
+- Arriach
+- Assling-Compedal
+- Bad Eisenkappel
+- Bad Radkersburg
+- Basel / Binningen
+- Berliner Hütte
+- Bern / Zollikofen
+- Berwang
+- Biasca
+- Bischofshofen
+- Blatten, Lötschental
+- Boden
+- Bortelsee
+- Brandberger Kolmhaus
+- Brandenberg
+- Brenner
+- Bullet / La Frétaz
+- Bärenfall
+- Bärentälli
+- Bärgtälli
+- Cassinello
+- Cham
+- Chasseral
+- Château-d'Oex
+- Chüebodensee
+- Col du Chasseral
+- Combatzeline
+- Conny Alm
+- Dachstein-Schladminger Gletscher
+- Damüls-Herte
+- Davos
+- Dellach
+- Delémont
+- Diedamskopf_automatisch
+- Donin du Jour
+- Dresdner Hütte
+- Döllach
+- Ebnat-Kappel
+- Eisenstadt Nordost
+- Elsige
+- Engelberg
+- Engstligenalp
+- Fahy
+- Ferlach
+- Fieberbrunn-Reckmoos
+- Fisi
+- Fiss
+- Fitteren
+- Flüelapass
+- Fochsen
+- Fontane
+- Forchach
+- Fraxern
+- Freistadt
+- Fresach
+- Freschenhaus
+- Fribourg / Grangeneuve
+- Färmel
+- Gandegg
+- Gaschurn
+- Gatschiefer
+- Gaudeamushütte
+- Genève / Cointrin
+- Gibidum
+- Giltnasen
+- Gleisdorf
+- Gornergratsee
+- Gossenkölle
+- Grand Cor
+- Graz Straßgang
+- Graz Thalerhof Flughafen
+- Gries
+- Gries im Sellrain
+- Grimsel Hospiz
+- Gschletteregg
+- Gschlössboden
+- Guppen
+- Gösgen
+- Hahnenkamm-Reutte
+- Hahnenkamm-Sonnenrast
+- Hinterriß
+- Hochfilzen
+- Holzgau
+- Homad
+- Hörnli
+- Ils Plauns
+- Imst-Obermarkter Alm
+- Innsbruck-Seegrube
+- Irdning-Gumpenstein
+- Itramen
+- Jamtalhütte
+- Jenbach
+- Johannestal
+- Kaisers
+- Kals
+- Kals-Figol
+- Kanzelhöhe
+- Karlsbader Hütte
+- Kaunertal-Vergötschen
+- Kernhof-St. Aegyd am Neuwalde
+- Kirchdorf in Tirol
+- Kloangruebes
+- Koppigen
+- Kornat
+- Kreuzweg
+- Krimml
+- Krumbach
+- Kufstein
+- Köflach
+- Kölnbreinsperre
+- Kötschach-Mauthen
+- La Chaux-de-Fonds
+- Lai Verd
+- Landeggalm
+- Lanersbach
+- Laterns-Gapfohl
+- Laucheren
+- Leibnitz-Wagna
+- Les Charbonnières
+- Les Collines
+- Linz Hörsching Flughafen
+- Loassattel
+- Locarno / Monti
+- Loibl Tunnel
+- Loz
+- Luzern
+- Mariazell/St.Sebastian Flugfeld
+- Marsens
+- Materdell
+- Mattighofen
+- Mayrhofen
+- Mittersill
+- Mooslandl
+- Motta Bianca
+- Murtaröl
+- Mutten
+- Mälliga
+- Mühleberg
+- Napf
+- Nauders
+- Navis-Kerschbaumsiedlung
+- Nenzinger Himmel
+- Neumarkt
+- Neustift/Milders
+- Norderberg Alm
+- Nual
+- Nyon / Changins
+- Oberer Stelligletscher
+- Obergurgl
+- Oberhaus Alm
+- Obertilliach
+- Obervellach
+- Oetz
+- Ortstock Matt
+- Ottere
+- Payerne
+- Pian Grand
+- Piano del Simano
+- Piotta
+- Pitztaler Gletscher
+- Plang Bi
+- Porcaresc
+- Porzehütte
+- Poschiavo / Robbia
+- Preda
+- Predanass
+- Preitenegg
+- Pülschezza
+- Radstadt-Tandalier
+- Raintalquelle
+- Ravaischer Salaas
+- Reichersberg
+- Reutte
+- Ried im Innkreis
+- Rünenberg
+- Saalbach
+- Samedan
+- Schaftäli
+- Schapleralpa
+- Schlivèra
+- Schmirn
+- Schröcken
+- Schwarzau im Freiwald
+- Schwechat Flughafen
+- Schöckl
+- Schönbüel
+- Schönenbach
+- Schüpfheim
+- Scuol
+- Seckau
+- See im Paznaun
+- Seetal
+- Seiser_Alm_Zallinger
+- Simplon-Dorf
+- Sion
+- Sonnblick
+- Spiss
+- Spittal an der Drau
+- St.Michael im Lungau
+- St.Pölten Landhaus
+- St.Veit an der Glan
+- Stabio
+- Sölden
+- Söll
+- Telfes im Stubai
+- Tracuit
+- Triftchumme
+- Trigl
+- Trubelboden
+- Trüttlisbergpass
+- Tsanfleuron
+- Tschagguns
+- Tschitta
+- Türliboden
+- Ulrichen
+- Umhausen
+- Unter Surettasee
+- Vairana
+- Val Miez
+- Valetta
+- Villach Stadt
+- Villars-Tiercelin
+- Vorderstocken
+- Völkermarkt-Goldbrunnhof
+- Walmendinger Horn
+- Wanne
+- Warth
+- Wattener Lizum
+- Weitensfeld
+- Wien Donaufeld
+- Wien Hohe Warte
+- Wilde Krimml
+- Wildsee
+- Windischgarsten
+- Ze Seewe
+- Zermatt
+- Zettersfeld
+- Zürich / Affoltern
+- Zürich / Kloten
+- Zürs-Hexenboden
+- Zürs-Madloch
+n_tune_targets: 45
+n_donors_during_tune: 257
+variable: slr_min
+fraction: 0.15
+seed: 43
+n_elev_bins: 4
+spatial_step_deg: 0.75
+note: Fixed 15 % of the pool; held out only during hyperparameter scoring

@@ -54,6 +54,7 @@ from shared.splits.evaluation_sets import (
     stations_inside_domain,
     stations_inside_perimeter,
     OVERVIEW_VARS,
+    COLUMN_VARS,
     QUARTER_SPLITS_PATH,
 )
 
@@ -138,9 +139,19 @@ def main() -> None:
     print(f"stations inside interpolation domain: {len(domain_stations)}")
     print(f"stations strictly inside Alpine Convention perimeter: {len(perimeter_stations)}")
 
-    for var in OVERVIEW_VARS:
-        measuring = stations_measuring(domain_stations, var)
-        measuring_peri = stations_measuring(perimeter_stations, var)
+    # Station sets for the 12 columns come from the monthly aggregate
+    # (stations with at least one non-null value). SLR/SWE differ from snow_mean.
+    agg_path = get_aggregated_data_path("Source", "monthly")
+    if not agg_path.exists():
+        raise FileNotFoundError(f"monthly aggregate not found: {agg_path}")
+    agg = pd.read_parquet(agg_path)
+    for var in COLUMN_VARS:
+        if var not in agg.columns:
+            print(f"\n{var}: column missing in aggregate — skipped")
+            continue
+        have = set(agg.loc[agg[var].notna(), "station_name"].astype(str).str.strip())
+        measuring = domain_stations[domain_stations["station_name"].astype(str).isin(have)].copy()
+        measuring_peri = perimeter_stations[perimeter_stations["station_name"].astype(str).isin(have)].copy()
         print(f"\n{var}: {len(measuring)} in domain, {len(measuring_peri)} inside perimeter")
         if measuring_peri.empty:
             print(f"  skipped (no stations inside perimeter)")
@@ -175,7 +186,7 @@ def main() -> None:
             "n_elev_bins": args.elev_bins,
             "spatial_step_deg": args.spatial_step,
             "domain": "pool = Alpine Convention polygon + 100 km; held-out = strictly inside Alpine Convention perimeter (all polygons / exclave included)",
-            "source": "stations_overview.csv variables column; domain-filtered, hold-out perimeter-filtered",
+            "source": "monthly aggregate non-null stations; domain-filtered, hold-out perimeter-filtered",
         }
         hpath = holdout_path(var)
         write_holdout(held, pool, hold_meta, hpath)

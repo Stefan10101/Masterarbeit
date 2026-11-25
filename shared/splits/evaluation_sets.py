@@ -75,14 +75,21 @@ OVERVIEW_VARS = (
 # Internal code names used by the methods ↔ overview names
 CODE_TO_OVERVIEW = {
     "temp_mean": "temperature",
+    "temp_min": "temperature",
+    "temp_max": "temperature",
     "temperature": "temperature",
     "precip_sum": "precipitation",
     "precipitation": "precipitation",
     "wind_mean": "wind_speed",
+    "wind_max": "wind_speed",
     "wind_speed": "wind_speed",
     "rh_mean": "relative_humidity",
     "relative_humidity": "relative_humidity",
     "snow_mean": "snow_height",
+    "snow_max": "snow_height",
+    "snow_min": "snow_height",
+    "slr": "snow_height",
+    "swe": "snow_height",
     "snow_height": "snow_height",
 }
 
@@ -397,10 +404,26 @@ def quarter_of(ts) -> str:
 # ---------------------------------------------------------------------------
 # I/O
 # ---------------------------------------------------------------------------
+# Column names that get their own hold-out / tune-target files.
+# Children and derived products are not assumed to share the parent station set.
+COLUMN_VARS = (
+    "precip_sum",
+    "temp_mean", "temp_min", "temp_max",
+    "wind_mean", "wind_max",
+    "rh_mean",
+    "snow_mean", "snow_max", "snow_min",
+    "slr", "slr_min", "slr_max",
+    "swe", "swe_min", "swe_max",
+)
+
 def holdout_path(variable: Optional[str] = None) -> Path:
-    """Path of the hold-out YAML. None → legacy global file."""
+    """Path of the hold-out YAML. None → legacy global file.
+    Column names in COLUMN_VARS use their own file; others fall back to overview name.
+    """
     if variable is None:
         return HOLDOUT_PATH
+    if variable in COLUMN_VARS:
+        return _HERE / f"holdout_stations_{variable}.yaml"
     name = CODE_TO_OVERVIEW.get(variable, variable)
     return _HERE / f"holdout_stations_{name}.yaml"
 
@@ -409,6 +432,8 @@ def tune_targets_path(variable: Optional[str] = None) -> Path:
     """Path of the tune-targets YAML. None → legacy global file."""
     if variable is None:
         return TUNE_TARGETS_PATH
+    if variable in COLUMN_VARS:
+        return _HERE / f"tune_targets_{variable}.yaml"
     name = CODE_TO_OVERVIEW.get(variable, variable)
     return _HERE / f"tune_targets_{name}.yaml"
 

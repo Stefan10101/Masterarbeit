@@ -1,473 +1,294 @@
-tune_targets:
-- AIX EN PROVENCE
-- ANTRAIGUES SA
-- ARVIEUX
-- AVIGNON-INRAE
-- Aadorf / Tänikon
+held_out:
+- AIGLETON-NIVOSE
+- AIGUILLE DU MIDI
+- Abtei_Piz_Pisciadù
 - Achenkirch
-- "AjdovÅ¡Ä\x8Dina - Dolenje"
-- Alpbach Wiedersberger Horn
-- Altenrhein
-- Altomünster-Maisbrunn Bayern
-- Andau
-- Arino
-- Arino di Dolo
-- Auer
-- Augsburg Bayern
-- BELLECOTE-NIVOSE
-- BELLEY
-- BONNEVILLE
-- BOURG ST MAURICE
-- Bad Gleichenberg
-- Bad Ragaz
-- Bagaglione
-- Bartiges Bödele
-- Basel / Binningen
-- Basso Isonzo "Arakè"
-- Battaglia Terme Località Chiodare
-- Belalp
-- Belvedere
+- Aigle
+- Alp Piänetsch
+- Antholz_Obertal
+- Arapè (Le Valli)
+- Bassano del Grappa
 - Binn
-- Bischofshofen
-- Breganze
-- Breiter Grieskogel Schneestation
-- Breiter Grieskogel Windstation
-- Brixen - Albeins
-- Brunnenkogel
-- Bunköpfl
-- Bärenfall
-- Bärnkopf
-- CASSIS
-- Camporovere
-- Castellanza Centro
-- Castion Val dei Bati
-- Ceola
-- 'Cerlongo '
-- Chiarano
-- Cologne
-- Copreno
-- Corio Canavese
-- Cornalita
-- Crap Masegn
-- Creppon Blanc
-- DORANS
-- Dachstein-Schladminger Gletscher
-- Dannelspitz - Punta di Dan
-- Davos
-- Dawinalpe
-- Deutschnofen_Obereggen
-- Diamantina
-- Dosson
-- Due Carrare
-- EPENOY
-- Egolzwil
-- Eissee
+- Bodmerchumma
+- Burligo di Palazzago
+- Bänzlauistock
+- CADENET
+- CHAPELLE SAINT-MAURICE_SAPC
+- Campill_Kreuzkofeljoch
+- Canale d'agordo -  Sofraide
+- Castellamonte
+- Chieming Bayern
+- Cima del Simano
+- Col Visentin
+- Colms da Parsonz
+- Corne de Sorebois
+- DOUVAINE SA
+- Dachstein-Hunerkogel
+- Donin du Jour
 - Elsige
-- Enns
-- Evionnaz
-- FLAINE_SAPC
-- Falkenberg,Kr.Rottal-Inn Bayern
-- Ferrara Est Cocomaro di Cona
-- Ferrara zona Aeroporto
-- Fisi
-- Franz-Senn-Hütte Kl Horntal
-- Fraz. San Marco
-- Frazione Costa
-- Frutigen
+- Fitteren
+- Franz-Senn-Hütte Horntaler Spitzl
+- Frasdorf-Greimelberg Bayern
+- Friesach
 - GALIBIER-NIVOSE
-- GAP
-- GRENOBLE-ST GEOIRS
-- Gaggiano (Centro)
-- Gallspach
-- Gars am Kamp
-- Gazzaniga
-- Graz Thalerhof Flughafen
-- Grimsel Hospiz
-- Grono
-- Großarltal
-- Gumpoldskirchen
-- Gänserndorf Stadt
+- Gampberg Windstation
+- Gehrenspitze
+- Gersau
+- Golling
+- Gonda Cotschna
 - Gärsthorn
-- Göschenen
-- Güssing
-- HRASTNIK
-- Hahnenkamm Windstation
-- Hanengretji
-- Hirschenkogel
-- Hochfilzen
-- Hochgasser Schneestation
-- Hohe Munde Windstation
-- Hornstein
-- Jeronim
-- Jostsee
+- Hochebenkofel - Cima Piatta Alta
+- Innsbruck Flughafen
 - Kalwang
-- Kappl Kapplerkopf
-- Kappl Sinsenergampen
-- Kappl Spidur Alpe
-- Katschberg
-- Korensko sedlo
-- Krimml
-- Kössen
-- LE LUC
-- La Cassorte
-- La Para
-- La Plagne
+- Klagenfurt Flughafen
+- Kloangruebes
+- Kornat
+- Kreuzweg
+- LA BASTIDE DES JOURDANS
+- LARAGNE MONTEGLIN
+- LE PLENEY
 - Laas_Eyrs
-- Ladurns
-- Lago Di Santa Croce
+- Lac des Vaux
+- Landeck
+- Langen am Arlberg
 - Laucheren
-- 'Lavis  '
-- Le Portalet
-- Leibstadt
-- Leiser Berge
-- Lenzkirch-Ruhbühl Baden-Württemberg
-- Les Marécottes
-- Lissone
-- Ljubljana BeÅ¾igrad
-- "Ljubljana KleÄ\x8De"
-- Loc. Ascensione
-- Lumpegna Nord
-- Lunz am See
-- Luzern
-- Lägern
-- MAICHE
-- MIMET
-- Madrisa
-- Malga Picotera
-- Marghera centro
-- Maribor Vrbanski plato
-- Marini
-- Mattighofen
-- Mayrhofen
-- Medrigkopf
-- MeÅ¾ica
-- MiklavÅ¾ (Gorjanci)
-- Monzon
-- Moruzzo
+- Lauenehore
+- Leffe
+- Locarno / Monti
+- Loferer Alm
+- Lumpegna Süd
+- MILLEFONTS-NIVOSE
+- Maragnole
+- Materdell
+- Mattersburg
+- Montana
+- Monte Generoso
 - Motto Crostel
-- Mussolente centro
-- NICE
-- Nauders
-- Neuchâtel
-- Noventa Vicentina
+- Nanos
 - Oberstdorf Bayern
-- PEAUGRES RAD
-- PEIRA CAVA
-- Parco Cimolai
-- Parco della Rocca Borromeo
-- 'Pavia di Udine '
-- Pfelders_Rauhjoch
-- Pfullendorf Baden-Württemberg
-- Pian Cansiglio - Agriturismo Malga Filippon
-- Pila
+- PEILLE
+- Pfelders
+- Piotta
+- Pitztaler Gletscher
 - Piz Corvatsch
+- Piz Gannaretsch
 - Piz Martegnas
 - Piz Pian Grand
-- Plaffeien
-- Platt_in_Passeier
-- Podenzano
-- Pointe de Toules
-- Pozzolo Formigaro
-- Pray
-- Preda
-- Predel
-- Preitenegg
-- Quartiere S. Bertilla
-- Ramsau am Dachstein
-- Rauris
-- Reckmoos
-- Reichenau am Mühlkreis
-- Reichenau an der Rax
-- Rein_in_Taufers
-- Rendl Riffel 1
-- Rifugio Bec De Roces
-- Rifugio Vodala
-- Robièi
+- Piz Val Müra
+- Prada
+- Prettau
+- Proveis_Samerberg
+- REGUSSE
+- REVIANO
+- ROSANS
+- Ratschings_Wasserfaller_Alm
+- Reutte
 - Rohrspitz
 - Rotschalp
-- Rotwandwiesen - Prati di Croda Rossa
-- Roveredo in Piano
-- Ruchi
-- Rustega
-- SALON DE PROVENCE
-- SALON-DE-PROVENCE-INRAE
-- ST-MARCEL-LES-V-INRAE
-- ST-NAZAIRE-LE-D
-- San Bartolomeo in Bosco
-- 'San Biagio di Callalta - Via Molino Soligon '
-- San Felice sul Panaro
-- San Giacomo Vercellese
-- San Giacomo di Veglia
-- Sand_i.T._Mühlen
-- Santa Maria Maddalena
-- Saone
-- Sarmazza
-- Schartlkopf
-- Scorcola
-- Seefeld
-- Seiser_Alm_Zallinger
-- Semonzo
-- Seriate
-- Siegsdorf-Höll Bayern
-- Simbach/Inn Bayern
-- Solbiate
+- Rovereto
+- ST CHRISTOL
+- Sabbioni
+- Sarnthein
+- Saviner di Calloneghe
+- Schiers
+- Schwarze Schneid
+- Semmering
+- Silberspitze Windstation
+- Solco
 - Solighetto
-- Sondrio
-- Sordello
-- St.Johann im Pongau
-- Staranzano
-- Sulden_Madritsch
-- TRBOVLJE
-- Trenzanesio
-- Trieste - Zona Industriale Est
+- Sonntagsköpfl Windstation
+- Soverzene - Parco comunale
+- Stafelalp
+- Thurntaler Windstation
 - Trubelboden
-- VIA GARIBALDI 40/A
-- VINON SUR VERDON
-- Val Miez
-- Val Saisera
-- Varignano
-- Vedrijan
-- Vergnasco
-- Via Del Fort
-- Vicolungo (Borgo di Zuxiana)
-- Vigasio
-- Vigliano Biellese
-- Villanova d'Asti
-- Villingen-Schwenningen Baden-Württemberg
-- Warth
+- Trüttlisbergpass
+- VILLAR ST PANCRACE
+- Valetta
+- Weitensfeld
 - Westliches Gamshorn
-- Wien Donaufeld
-- Wolkenstein
-- Wolkersdorf
-- Zelenica
-- borgnano
-- cascina Barisona
-- ovest
-- prato di correggio
-- scuola media statale Torquato Tasso
-donors_during_tune:
-- ' Vanza'
-- AIGLETON-NIVOSE
-- ALBERTVILLE
+- Zell am See
+- Zugspitze Bayern
+- contrada castello
+- dolina Campomolon
+- località Sciessere
+pool:
+- AIGUILLES ROUGES-NIVOSE
 - ALBON
 - ALLANT-NIVOSE
 - ALPE-D'HUEZ
 - AMBERIEU
+- ANTIBES-GAROUPE
 - APT
-- ARBENT
 - ARLES
 - ASCROS
 - AUBAGNE
 - AVIGNON
+- Aadorf / Tänikon
 - Abano Terme - Quartiere S. Lorenzo
 - Abbadia Lariana
-- Abtei_Piz_La_Ila
-- Abtei_Piz_Pisciadù
-- Abtenau
 - Acquarossa / Comprovasco
-- Adamsberg
 - Adelboden
-- Aflenz
-- Agrate Brianza via Gramsci
-- Agriturismo Le Code - Pian Cansiglio
-- Aguscello
-- Aigle
+- Agetwoad
+- Aigen im Ennstal
 - Ala
-- Alberone / via Cacciatora
-- Alberschwende
 - Albinea
 - Albosaggia, via moia
-- Aldersbach-Kramersepp Bayern
+- Albristhorn
 - Allentsteig
 - Almenno San Salvatore
-- Alp Calasa
 - Alpbach
-- Alpe di Röd
+- Alpbach Wiedersberger Horn
 - Alpetta
 - Alpler Tor
 - Altdorf
-- 'Altedo '
-- Altheim, Kreis Biberach Baden-Württemberg
-- Alzate Brianza
-- Am Adamsberg (Hauptstation)
-- Amerang-Pfaffing Bayern
+- Altenrhein
+- Altmünster
 - Amstetten
-- Andeer
+- Andalo
+- Andau
 - Andermatt
 - Annone Veneto
 - Arcella - Curiel
+- Arco
 - Arcore
+- Arino di Dolo
 - Arosa
 - Arriach
 - Arzignano
-- Asiago
 - Aspach
-- Aspang
-- Attenkam Bayern
-- Avio
-- Avoriaz
+- Assling Compedal Windstation
+- Augsburg Bayern
 - Axams Hoadlsattel
 - Azzano Mella
-- BALAN_AERO
 - BALE-MULHOUSE
-- BARCELONNETTE
 - BARNAS RAD
-- BELLEGARDE
+- BEC DE L AIGLE
+- BELLECOTE-NIVOSE
+- BELLEY
 - BERZEME RAD
-- BESANCON
-- BESIGNAN
 - BONNEVAL-NIVOSE
-- BORMES LES MIMOSAS
+- BONNEVILLE
 - BOURGOIN
 - BRINDAS
-- Babno Polje
-- Bad Aussee
-- Bad Bleiberg
 - Bad Deutsch-Altenburg
-- Bad Eisenkappel
 - Bad Gastein
-- Bad Goisern
-- Bad Ischl
-- Bad Mitterndorf
 - Bad Radkersburg
+- Bad Ragaz
 - Bad Tatzmannsdorf
-- Bad Vöslau
 - Bad Zell
+- Bagaglione
 - Bagnoli di Sopra
 - Balingen-Bronnhaupten Baden-Württemberg
 - Ballino
 - Barbian_Kollmann
+- Barzio
 - Basaldella
+- Basel / Binningen
 - Bassa di Nara
-- Bassano del Grappa
 - Bassano del Grappa W
+- Basso Isonzo "Arakè"
+- Battaglia Terme Località Chiodare
 - Bavaroi
+- Belalp
+- Belvedere
 - Berbenno centro
-- Bergün / Latsch
 - Bern / Zollikofen
-- Bernate Ticino
+- Bernstein
 - Bertiolo
-- Bertipaglia
 - Besenello
-- Beznau
 - Biadene
 - Biasca
-- Birgitzköpfl
+- Bilje
+- Bischofshofen
 - Bischofszell / Sitterdorf
+- Bivio
 - Bière
 - Blatten, Lötschental
-- BlegoÅ¡
 - Bludenz
-- "Bohinjska Ä\x8CeÅ¡njica"
 - Bolognano
 - Boltigen
-- Bombögn Wind
 - Borgata Casavecchia
-- Borgnana
-- 'Borgnano piazza della Repubblica '
-- Borgo Pianon
 - Borgo San Giovanni
 - Borgo San Sergio
 - Borgo Valsugana
-- Borgochiesanuova
 - Bortelsee
-- BorÅ¡t pri Gorenji Vasi
-- Bosco Mesola
+- Bosco
 - Bouveret
-- "Bovec - letaliÅ¡Ä\x8De"
 - Bovisio Masciago
 - Bovolone
 - Bozen
-- Brand
-- Brenner
+- Branzoll
+- Bregenz
+- Breiter Grieskogel Windstation
+- Brienz
+- Brienzer Rothorn
 - Brignano Gera d'Adda
-- Brixen_-_Vahrn
 - Broni - zona collinare
 - Bruckneudorf
 - Brugine
-- Bruneck
 - Brunn am Gebirge
+- Brunnenkogel
 - Bréona
 - Buccinasco
 - Buchberg
-- Buchenbach Baden-Württemberg
-- Buchs / Aarau
 - Buffalora
 - Bullet / La Frétaz
+- Bunköpfl
 - Burana
 - Burgbach Brechgrad
-- Burligo di Palazzago
-- 'Busalla '
-- Bänzlauistock
 - Bärentälli
 - Bärgtälli
+- Bärnkopf
 - CABRIERES D'AVIGNON
-- CADENET
 - CANNES
+- CAP CAMARAT
+- CAP CEPET
+- CAP COURONNE
 - CARPENTRAS
 - CARSPACH
-- CELLIEU
+- CASSIS
+- CAUSSOLS
 - CESSY
 - CHAMBERY-AIX
-- CHAMPAGNOLE
 - CHAMROUSSE
 - CHAPELLE-EN-VERCORS_SAPC
 - CHATEAUNEUF GRASSE
-- CHATEL NIVO
-- CHAUX-DES-PRES-INRAE
 - COL AGNEL-NIVOSE
-- COL DE PORTE-NIVOSE
-- COL DE ROSSATIERE
 - COL-DES-SAISIES
 - COLOMBIER JEUNE RAD
-- COMBOVIN
 - COMPS-SUR-ARTUBY
 - CONTARINA
 - COUBLEVIE
 - COULANS
 - CROIX MILLET
-- CTL3
 - CUERS
 - Cagnano
 - Calliano
 - Calvenzano
 - Camin - Wigwam Presidio
 - Campea
-- Campedello
-- Campill_Kreuzkofeljoch
 - Campo Carlo Magno
 - Camporosso in Valcanale
-- Canale d'agordo -  Sofraide
+- Camporovere
 - Candelo
 - Canonica
 - Cartigliano
-- Casale Monferrato
 - Casale di Rivalta - RE
 - Casalpusterlengo
 - Casarsa della Delizia
-- 'Cascina Barbàn '
-- 'Casera "Le Rotte" - Pian Cansiglio '
-- Casera Pian dei Grassi - Col Visentin
 - Casletto di Rogeno
-- Cassinello
 - Castagneto Po
-- Castano Primo
 - Castelferro
-- Castelfranco Veneto
 - Castelgomberto
-- Castellamonte
 - Castelli Calepio
 - Castellina
 - Castronno
-- Cavazzale
 - Celje Medlog
 - Cencenighe via Roma
 - Ceneselli
 - Centro
-- Centro Paese
-- Centro paese
+- Ceola
 - "Cerklje - letaliÅ¡Ä\x8De"
-- CerkniÅ¡ko jezero
 - Cerlongo
 - Cesano Boscone
 - Cesano Maderno
@@ -477,368 +298,318 @@ donors_during_tune:
 - Chaumont
 - Chenau
 - Chesselhorn
-- Chiadino
+- Chiarano
 - Chiematte
-- Chieming Bayern
 - Chilchalphorn
-- Chli Mittaghorn
 - Cho d'Valetta
 - Chrachenhorn
-- Château-d'Oex
+- Chummehorn
+- Chur
+- Chörblispitz
 - Chüebodensee
-- Cibara
 - Cima Costalta
-- Cima del Simano
+- Cima Grappa
 - Cimetta
 - Codogno
-- Col Lonc
-- Col Visentin
 - Col des Mosses
 - Col du Chasseral
 - Col du Grand St-Bernard
 - Colbertaldo
-- 'Colere '
-- Colle Umberto
-- Colms da Parsonz
+- Collina - Runch
+- Cologne
+- Combai
 - Combatzeline
-- Comeglians
 - Concenedo
-- Conegliano - via Antoniazzi
 - Connyalm Windstation
 - Contane
+- Contrada Coltrini - Stazione di Fabio
 - Contrada Mangano
 - Copparo
-- Corne de Sorebois
+- Corio Canavese
 - Cornuda
-- Correzzana
-- Cortandone (AT)
 - Corte Centrale
-- Cortina d'Ampezzo
-- Corvara
+- Costa
+- Costalunga
 - Costozza
 - Courtelary
+- Crap Masegn
+- Creppon Blanc
 - Cressier
 - Crispalt
 - Crêta Besse
 - Culmatsch
 - Culogne
+- DAUPHIN
 - DIGNE LES BAINS
-- Dachsberg-Wolpadingen Baden-Württemberg
-- Daiano
+- DORANS
 - Dalfazkamm
+- Dannelspitz - Punta di Dan
 - Dardago
+- Davos
 - Davos Stilli (SLF)
-- "DavÄ\x8Da"
-- Delémont
-- Deutschlandsberg
+- Dawinkopf
 - Deutschnofen
-- Dias
-- Dillingen/Donau-Fristingen Bayern
-- Disentis
-- Donauwörth-Osterweiler Bayern
-- Donin du Jour
+- Diamantina
+- Dogern Baden-Württemberg
+- Donaueschingen (Landeplatz) Baden-Württemberg
 - Dormelletto
 - Dorno Via Canevari
 - Dosso
 - Dosso Bianco (Mezzogoro)
-- Ducentola
-- Döllach
+- Dosson
+- Due Carrare
 - EMBRUN
 - ENTRECASTEAUX
+- EPENOY
 - ETOILE
 - EVIAN SA
 - EYRAGUES
-- Ebersberg-Halbing Bayern
-- Ebnat-Kappel
 - Efra
 - Eggishorn
-- Ehrwald
-- Eichstätt-Landershofen Bayern
-- Einsiedeln
 - Eisenstadt Nordost
-- Elferspitze Schneestation
+- Eissee
+- Elferspitze - Cima Undici
 - Elferspitze Windstation
 - Elm
-- Elsendorf-Horneck Bayern
 - Elsighorn
+- Engelberg
 - Engstligenalp
+- Enns
 - Erba
 - Erbezzo
-- Erfurter Hütte
-- Eselrücken
 - Esine
 - Est
 - Etang de Trente Pas
+- Evionnaz
+- Evolène / Villa
 - F.ne al Piano
 - FREJUS
 - FREJUS MONT VINAIGRE
 - Fadner Alm - Malga Fadner
 - Fahy
-- Falzè di Piave
 - Favaro Veneto
 - Feistritz ob Bleiburg
-- Feldbach
 - Feldberg/Schwarzwald Baden-Württemberg
 - Feldkirch
-- Feldkirchen
 - Feletto Umberto
-- Felino
-- Ferlach
 - Ferrara Est (C. di Focomorto)
+- Ferrara Est Cocomaro di Cona
 - Festisei
 - Festkogel
 - Feuerkogel
 - Final di Rero
 - Finestron
-- Fiss Schneestation
-- Fiss Urgtal Schneestation
+- Fischbach
 - Fiss Windstation
 - Flattnitz
 - Flesch
-- Fochsen
+- Flüelapass
+- Flühli, LU
+- Fontane
 - Fonte
-- Fonte Alto Centro
 - Fonzaso
-- Franz-Senn-Hütte Horntaler Spitzl
+- Forchiade SR 203
 - Franzensfeste_Grasstein
 - Frauentobel
-- Fraveggio
-- Fraxern
-- Fraz. Bredazzane
-- Fraz. Frassenei
-- Frazione Celarda
+- Fraz. San Marco
 - Frazione Oriano
-- Frazione Pezzè
-- Freistadt
-- Fresach
 - Fribourg / Grangeneuve
-- Friedrichshafen-Unterraderach Baden-Württemberg
-- Friesach
-- Frohnleiten
+- Friedrichshafen Baden-Württemberg
+- Frutigen
+- Funivia Seceda
 - Färmel
 - Fürstenfeld
 - Fürstenzell Bayern
+- GAP
+- GIEZ
 - GLUIRAS RAD
 - GRANDE PAREI-NIVOSE
-- GRENOBLE - LVD
-- GRENOBLE-CEA-RADOME
+- GRENOBLE-ST GEOIRS
+- Gaggiano (Centro)
 - Gai
 - Gaibanella
+- Gailingen Baden-Württemberg
 - Galliate
 - Gallio
-- Gallreideschrofen
+- Gallspach
 - Galtür
 - Galzig
 - Gambolò
 - Gambulaga
-- Gamoarbach
-- Gampberg Schneestation
-- Gampberg Windstation
 - Gandegg
 - Ganotzkogel
 - Gardolo via Sant'Anna
 - Gardolo via dei Carpenedi
 - Gargazon
 - Garmisch-Partenkirchen Bayern
+- Gars am Kamp
 - Gaschurn
-- "GaÄ\x8Dnik"
-- Gehrenspitze
-- Geisingen Baden-Württemberg
+- Gazzaniga
 - Genève / Cointrin
-- Gibidum
-- Giggijoch
+- Ghiacciaio Belvedere
 - Giltnasen
 - Gisbenti
-- Giswil
-- Giussano
-- Glacier de l'Evole
 - Glarus
-- Gleisdorf
-- Gmünd
 - Godnje
-- Goldried Kessel
-- Gonda Cotschna
-- Gonzaga
 - Gornergrat
 - Gornergratsee
-- Gornji Grad
 - Gottfrieding Bayern
 - Grand Chavalard
 - Grand Cor
-- Graz Lendplatz
-- Graz Straßgang
+- Grawand - Croda delle Cornacchie
+- Graz Lendplatz Feuerwehrturm
+- Graz Thalerhof Flughafen
 - Graz Universität
 - Graz Universität/Heinrichstraße
 - Grenchen
 - Grieskopf
+- Grimsel Hospiz
+- Grono
 - Gross Schijen
 - Gross Windgällen
 - Groß-Enzersdorf
-- Grubigstein Schneestation
 - Grubigstein Windstation
-- Grächen
-- Gröbming
-- Grünboden - Prati di Plan
-- Gschletteregg
 - Gsies_Pfinnalm
 - Gsies_Regelspitze
 - Gualdo
 - Gulderstock
-- Guppen
+- Gumpoldskirchen
 - Gutenstein Mariahilfberg
+- Gänserndorf Stadt
+- Göschenen
 - Gösgen
 - Günzburg Bayern
+- Güssing
+- Gütsch
 - Gütsch, Andermatt
 - Güttingen
 - HYERES
 - Hafelekar
+- Hahnenkamm Windstation
 - Hahnenkamm-Ehrenbachhöhe
 - Haiming
-- Hall bei Admont
+- Halblech-Bayerniederhofen Bayern
 - Hallau
 - Hameau Voix, 1
-- Hartberg
-- Hechingen Baden-Württemberg
+- Hanengretji
 - Hendar Furggu
-- Hermagor
-- Hermaringen-Allewind Baden-Württemberg
 - Hintermartell
 - Hinterrugg
-- Hintertux
-- Hochebenkofel - Cima Piatta Alta
+- Hirschenkogel
+- Hochfilzen
 - Hochgasser Windstation
-- Hochhörndl
+- Hochkar
+- Hohe Munde Gipfel
+- Hohe Munde Windstation
 - Hohe Wand/Hochkogelhaus
 - Hohenau
 - Hohenpeißenberg Bayern
-- Holzgau
-- Holzkirchen Bayern
+- Homad
 - Horn Wasserwerk
-- "HoÄ\x8Dko Pohorje"
+- Hornstein
 - Hörnli
 - ILE DU LEVANT
 - ISTRES
 - IU4APB (Forese Nord)
-- Idrija
-- Ilanz
 - Ilirska Bistrica - Koseze
 - Ils Plauns
-- Imst
-- Innsbruck Flughafen
 - Innsbruck Universität
 - Interlaken
 - Irdning-Gumpenstein
 - Ischgl-Idalpe
 - Italba
+- Itramen
 - Jalmicco
-- Jamtalhütte Schneestation
 - Jauerling
 - Jaufenkamm
+- Jaufenkamm - Cresta del Giovo
 - Jenbach
-- Jenesien
 - Jerago
-- Jeruzalem
 - Jesolo
-- Jesolo Paese "By Meteoclari"
-- Jezersko
 - Jolanda di Savoia
+- Jostsee
 - Jovencan
+- Jumelles
 - Jungfraujoch
 - Jöchelspitze Windstation
 - Kalkwand
 - Kals
-- Kals am Großglockner-Figol
+- Kals Adlersruhe (Erzherzog-Johann-Hütte)
 - Kaltern_Oberplanitzing
-- KamniÅ¡ka Bistrica
-- Kanin
+- Kandern-Gupf Baden-Württemberg
 - Kanzelhöhe
-- Kapfenberg Flugfeld
 - Kappl Großgfallkopf
+- Kappl Kapplerkopf
 - Karerpass
+- Katschberg
 - Kaufbeuren-Oberbeuren Bayern
+- Kempten Bayern
 - Kernhof-St. Aegyd am Neuwalde
-- Kiefersfelden-Gach Bayern
 - Kirchdorf in Tirol
 - Kitzbühel
-- Kitzbüheler Horn Schneestation
+- Kitzbühel Hornköpfl
 - Klagenfurt/HTL1-Lastenstraße
 - Klausen-Leopoldsdorf
 - Kleinzicken
 - Klippeneck Baden-Württemberg
-- Kloangruebes
 - Kollerschlag
-- Kolm-Saigurn
 - Kolomansberg
 - Konstanz Baden-Württemberg
 - Koper
 - Koper Kapitanija
 - Koper Luka
 - Koppigen
-- Kornat
-- "KoÄ\x8Devje"
-- Kranj
+- Kredarica
 - Krems
 - Kremsmünster
 - Kreuth Bayern
 - Kreuzspitze
-- Kreuzweg
-- Krn
 - Kroisegg
-- Krumbach
-- Kubed
+- Krvavec
+- Kufstein
 - Kum
-- Köflach
 - Kölnbreinsperre
-- Kösching Bayern
-- Kötschach-Mauthen
 - Kühtai Hochalter
 - L'Ecreuleuse
-- LA BASTIDE DES JOURDANS
 - LA BOISSAUDE ROCHEJEAN
 - LA MASSE
-- LA MOTTE DU CAIRE
+- LA MEIJE-NIVOSE
 - LA MURE- RADOME
-- LA MURE-ARGENS
 - LA PESSE
 - LANAS SYN
 - LE CASTELLET-AERO
 - LE CHEVRIL-NIVOSE
-- LE GUA-NIVOSE
+- LE DRAMONT
+- LE GRAND-BORNAND
+- LE LUC
 - LE MAS
-- LE PLENEY
-- LES CARROZ KEDEUSAZ
+- LE TOUR
 - LES ECRINS-NIVOSE
 - LES ROCHILLES-NIVOSE
 - LES SAUVAGES
-- LES VANS-SA
 - LEVENS
-- LIERGUES_SAPC
-- LIVRON
 - LONS LE SAUNIER
 - LOREO
 - LUS L CROIX HTE
 - LYON-BRON
 - LYON-ST EXUPERY
 - La Brévine
+- La Cassorte
 - La Chaux-de-Fonds
 - La Cà
 - La Dôle
 - La Fuorcla
 - La Muota
-- La Rocca
-- La Rosiere
+- La Para
 - Laa an der Thaya Kläranlage
-- Lac des Vaux
-- Lachen / Galgenen
 - Lagalb
+- Lago Di Santa Croce
 - Lagrev
 - Lai Verd
-- Lamon
-- Lampsenspitze Schneestation
 - Lampsenspitze Windstation
 - Langenlebarn
 - Langenlois
-- Langnau i.E.
+- Langquaid-Oberschneidhart Bayern
 - Langtaufers_Grub
 - Laterns-Gapfohl
 - Lattejoch
@@ -846,47 +617,33 @@ donors_during_tune:
 - Laßnitzhöhe
 - Le Luisin
 - Le Moléson
+- Le Portalet
 - Le Prade
 - Legnago
-- Legnaro
-- Leibnitz-Wagna
+- Leibstadt
+- Leiser Berge
 - Lendava - Terme
-- Lendinara
 - Lengspitze - Picco Lungo
 - Leoben
 - Les Attelas
 - Les Charbonnières
 - Les Collines
 - Les Diablerets
-- Les Menuires
-- Lesmo - via Po
+- Les Fontanesses
+- Les Marécottes
+- "Lesce letaliÅ¡Ä\x8De"
 - "LetaliÅ¡Ä\x8De JoÅ¾eta PuÄ\x8Dnika Ljubljana"
 - Leutkirch-Herlazhofen Baden-Württemberg
 - Levico Terme
-- Liariis-Ovaro
-- Liebenau-Gugu
-- Lienz
 - Lilienfeld-Tarschberg
+- Lindau (SWN) Bayern
 - Linz Hörsching Flughafen
-- Linz Stadt
-- Lipomo
 - Lisca
-- Litija
-- Litschau
-- "Ljubljana ViÄ\x8D"
-- 'Loc. Corlo  '
-- 'Loc.Famea '
+- Lissone
+- Ljubljana BeÅ¾igrad
 - Località Acquamorta
-- 'Località Baracconi '
-- Località Casali Rui
-- Località San Benedetto
 - Località San Pietro
 - Località San Rocco
-- Lofer Ort
-- Loferer Alm
-- Logarska Dolina
-- Logatec
-- Lognan
 - Loibl Tunnel
 - Lomazzo
 - Loz
@@ -894,72 +651,62 @@ donors_during_tune:
 - Lucinico
 - Lugano
 - Luksch Alp
-- Lumpegna Süd
+- Lumpegna Nord
 - Lutzmannsburg
-- Lämmerbichlalm
+- Luzern
+- Lägern
 - Löita
 - MACON
+- MAICHE
 - MANDELIEU LA NAPOULE_SAPC
 - MARIGNANE
 - MARSEILLE
 - MAZAN ABBAYE RAD
 - MENTON
 - MEYTHET
-- MILLEFONTS-NIVOSE
-- MOLLANS-S-OUVEZ
+- MIMET
 - MONT ARBOIS
 - MONT CENIS
-- MONTBOUCHER-S-J
+- MONT DU CHAT
 - MONTELIMAR
 - MONTMELIAN
-- MONTSEGUR-S-LAU
 - MULHOUSE
 - MURS
+- Madleinkopf
+- Madrisa
 - Madritsch - Madriccio
 - Magadino / Cadenazzo
 - Magnago - Farè Spagarino
-- Maisach-Galgen Bayern
-- Malborghetto di Boara
 - Malga Campo
-- Malga Col dei S'cios
 - Malga Nardis
+- Malga Picotera
 - Malkovec
-- Mallersdorf-Pfaffenberg-Oberlindhart Bayern
 - Mallnitz
-- Maragnole
 - Maranutto
-- Marcita
+- Marchkofel
+- Marghera centro
 - Margone
+- Mariapfarr
 - Mariazell/St.Sebastian Flugfeld
 - "Maribor - letaliÅ¡Ä\x8De"
-- Marienberg
-- "MarinÄ\x8Da vas"
-- Marostica via Morello
+- Maribor Vrbanski plato
+- Marini
 - Marsens
 - Martignacco
 - Martschenspitz
 - Massa Fiscaglia
 - Mathod
 - Matro
-- Mattersburg
+- Mattighofen
 - Mattsee
 - Mattstock
-- Meano
-- Meda
-- Medelana
-- Medrig-Zeinis
-- Meiringen
+- Medrigkopf
 - Melag_Pratznerberg
 - Melk
 - Memmingen Bayern
-- Merbalm - Malga Merbe
-- Meribel Mottaret
 - Mestre
 - Mestre Palazzo Nettuno (Piazza Barche)
 - Mestrino
-- Metlika
-- Metten Bayern
-- 'Mezzogoro '
 - Mezzomonte
 - Meßstetten-Appental Baden-Württemberg
 - Micheldorf
@@ -970,39 +717,34 @@ donors_during_tune:
 - Minerbio
 - Miola
 - Mistelbach
-- Mittelberg
+- Mittenwald/Obb. Bayern
 - Mittersill
 - Mittler Blistock
 - Mogliano Veneto
 - Monasterolo T.se
 - Mondsee
 - Montagnier, Bagnes
-- Montana
-- Montano Lucino
 - Monte Altissimo, Rifugio "D. Chiesa"
 - Monte Cesen
-- Monte Generoso
 - Monte Marenzo
+- Monte Verlaldo
 - Montecchio Maggiore
 - Montirone
-- Montorso Vicentino
 - Monza
-- Monza Parco
+- Monzon
 - Moracchino
 - Morbegno
 - Morgano
+- Moruzzo
 - Mosen
-- Mosesgipfel Schneestation
 - Mosesgipfel Windstation
 - Motta Bianca
 - Motta di Sotto
 - Mottec
 - Muot
-- Murau
-- Muro
 - Murska Sobota
 - Murtaröl
-- Muttekopfhütte
+- Mussolente centro
 - Mutten
 - Mälliga
 - Mällige
@@ -1010,37 +752,30 @@ donors_during_tune:
 - Möhlin
 - Mönichkirchen
 - Mühldorf Bayern
-- Mühleberg
-- Mühlwald
-- Müllheim Baden-Württemberg
 - München-Flughafen Bayern
 - München-Stadt Bayern
 - Münsingen-Apfelstetten Baden-Württemberg
-- Mürzzuschlag
+- NICE
 - NICE-RIMIEZ
-- NYONS P182
-- Nachtweide
-- Nanos
+- Naluns / Schlivera
 - Napf
 - Naresso
-- Nassereither Alm
+- Nassereith Wannig
 - Naturns
-- Nauders Ganderbild
+- Nauders
 - Nave
-- Neuburg/Kammel-Langenhaslach Bayern
+- Netro
+- Neuchâtel
+- Neudorf bei Landsee
 - Neumarkt
 - Neusiedl am See
 - Neustift/Milders
 - Niardo - Via 1° Maggio
 - Nichelino
 - Niviano
-- Nockwand Wind
 - Nole
 - Nova Gorica
-- Nova vas (Bloke)
-- 'Novara '
-- Novara(sant'antonio)
-- Novelle di Sellero
+- Noventa Vicentina
 - Novi di Modena
 - Novo mesto
 - Nual
@@ -1052,29 +787,24 @@ donors_during_tune:
 - Obere Meiel
 - Oberer Stelligletscher
 - Obergurgl
-- Oberhaching-Laufzorn Bayern
 - Oberndorf an der Melk
 - Oberriet / Kriessern
 - Obertauern
 - Obervellach
-- Obervintl
-- Oberwölz
+- Oberägeri
 - Oron
-- Ortstock Matt
-- Oseacco di Resia
-- Osilnica
-- 'Ospedale '
+- Orzival
 - Ospitalmonacale
 - Osservatorio Astronomico G.Toaldo
-- Osservatorio Astronomico di Piadera
 - Osservatorio Cavanis Venezia
 - Ostellato
 - Ostermiething
+- Osthangbahn Young
 - Ottere
-- Oy-Mittelberg-Petersthal Bayern
 - PARPAILLON-NIVOSE
+- PEAUGRES RAD
 - PEGOMAS
-- PEILLE
+- PEIRA CAVA
 - PEONE
 - PEYROLLES EN PROVENCE
 - PILAT GRAIX
@@ -1082,45 +812,32 @@ donors_during_tune:
 - PONTARLIER
 - PORQUEROLLES
 - PUYMERAS
-- Pabneukirchen
 - Padergnone
 - Paderno Dugnano
 - Padova - Montà
 - Paladina
 - Palestro - Montecengio
 - Palinkopf
-- Parella
+- Pasja ravan
 - Passo del Bernina
+- Patscherkofel
 - Paveto
 - Pavia Centro
-- "PavliÄ\x8Devo sedlo"
 - Payerne
 - Pecetto Torinese
 - Pecetto di Valenza
-- Pens
-- Pens_Tramintal
+- Perilla
 - Peschiera del Garda
-- Pfelders
-- Pfitsch_St._Jakob
-- Pfunders
-- Pfunders_Stutzenalm
+- Pfelders_Rauhjoch
 - Pfäffikon, ZH
 - Pian Grand
 - Pian dei Pradi
-- Pian di Valmenera - Pian Cansiglio
-- Pianezze
 - Piano d'Arta
 - Piano del Simano
-- Piasco
-- Piding Bayern
 - Pierres Fendues
-- Pietra175
 - Pietra200
+- Pila
 - Pilatus
-- Piotta
-- Piovà Massaia
-- Pischgraben
-- Pitztaler Gletscher
 - Piz Alpetta
 - Piz Aul
 - Piz Bardella
@@ -1128,101 +845,85 @@ donors_during_tune:
 - Piz Salteras
 - Piz San Jon Dadaint
 - Piz Tumpiv
-- Piz Val Müra
-- Piz la Ila - Piz la Ila
+- Plaffeien
 - Plang Bi
-- Planina pod Golico
 - Planskopf
+- Platt_in_Passeier
 - Platthorn
-- Plojen
-- Plose
 - Pocenia
+- Podenzano
 - Podersdorf Strandbad
-- "PodÄ\x8Detrtek"
+- Podnanos
 - Poggio Renatico
 - Pointe de Boveire
+- Pointe de Toules
 - Pointe des Mossettes
 - Ponte Alto
 - Ponte Maodino
 - Ponte San Nicolò
 - Ponte San Pellegrino
 - Ponte dell'Olio
-- Pontenure
 - Porcaresc
 - Porcellengo
 - Pordenone, quartiere S. Gregorio
 - Porta d'Es-cha
 - Portello (Dipartimento ICEA)
-- 'Portogruaro- Rione San Nicolò '
 - "PortoroÅ¾ - letaliÅ¡Ä\x8De"
 - Poschiavo / Robbia
 - Postojna
 - Pottschach
 - Poysdorf-Ost
 - Pozzo Strada
+- Pozzolo Formigaro
 - Prabernasca
-- Prada
+- Prags_Rossalm
 - Prati
-- Predanass
-- Predigberg Schneestation
 - Predigberg Windstation
+- Preitenegg
 - Preonzo
-- Prettau
 - Primelod
-- Proveis_Samerberg
-- Prutz
+- Präbichl
 - Ptuj
 - Puchberg am Schneeberg
-- Puitegg
 - Pully
-- Pörtschach
+- Puoz Bass
 - Pülschezza
-- Quartesana
+- Quartiere S. Bertilla
+- Quinten
 - RESTEFOND-NIVOSE
 - REVENTIN
 - RISTOLAS
-- ROSANS
 - ROVELETO LANDI
 - Raabs an der Thaya
 - Radein
-- Ramon
+- Ramsau am Dachstein
 - Ranshofen Braunau
+- Rastkogel Windstation
 - Ratitovec
-- Ratschings_Wasserfaller_Alm
-- Raucheggen Schneestation
-- Raucheggen Windstation
 - Ravaischer Salaas
 - Ravne na KoroÅ¡kem
 - Rax Seilbahnbergstation
 - Rechnitz
+- Reckmoos
+- Reichenau am Mühlkreis
+- Reichenau an der Rax
 - Reichersberg
-- Reimlingen Bayern
-- Reit im Winkl-Groißenbach Bayern
-- Rettenbachferner
 - Retz
-- Reutte
 - Revello
-- Rheinfelden Baden-Württemberg
-- Ridnaun
-- Ried im Innkreis
 - Rientallücke
-- Rif. Città di Vittorio Veneto - Monte Pizzoc
 - Rifflsee Muttenkopf
-- Rifflsee Talstation Grubenkopf
+- Rifugio Bec De Roces
 - Rifugio Campogrosso
-- Rifugio Dolomieu al Dolada
 - Rifugio Longoni - CAI Seregno
 - Rifugio Nasego
-- Rifugio Semenza - Teleferica CAI
+- Rifugio Vodala
 - Rinn
 - Ritten_Siffian
 - Rittnerhorn - Corno del Renon
-- Riva del Garda - Varone
 - Rivalta di Torino
-- 'Rivalta sul Mincio '
 - Rivoltella
 - Robbio
-- RogaÅ¡ka Slatina
+- Robièi
 - Rogla
 - Rohrbach
 - Rohrbach an der Lafnitz/Eichberg
@@ -1231,26 +932,27 @@ donors_during_tune:
 - Rombone
 - Ronchi dei Leg.
 - Rondona
-- Rosenheim Bayern
 - Rosolina
+- Rossbänke - Pian dei Cavalli
 - Rosshütte Windstation
-- Rosskar
 - Rotadl
+- Roter Schrofen
 - Rottenmann
-- Rottweil Baden-Württemberg
-- Rovereto
+- Rotthalmünster Bayern
+- Roveredo in Piano
 - Rubizzano
-- Rudno polje (Pokljuka)
+- Ruchi
 - Rudolfshütte
-- Ruoggis, Unter Stafel
+- Rupperslaui
 - Russisprung
+- Rustega
 - Rünenberg
 - S. Antonio
 - S. Bernardino
-- S. Vito
+- S.Pietro di Barbozza
 - S.Vito
-- SABLIERES OARA
 - SAINT-ETIENNE
+- SALON DE PROVENCE
 - SANCEY-LE-GRAND
 - SEILLANS
 - SISTERON
@@ -1258,202 +960,158 @@ donors_during_tune:
 - ST AUBAN
 - ST CANNAT
 - ST CEZAIRE SUR SIAGNE
-- ST CHRISTOL
+- ST CREPIN
 - ST ETIENNE-BOUTHEON
-- ST HILAIRE-NIVOSE
 - ST JEAN-ST-NICOLAS
-- ST JULIEN - SA
 - ST MAXIMIN LA STE BAUME
 - ST ROMAN-DIOIS
 - ST-AGREVE RAD
 - ST-ANTHEME
+- ST-AUBAN-SUR-OUVEZE
 - ST-CHAMOND-P
-- ST-GEORGES-REN
 - ST-PIERRE-LES EGAUX
-- ST-SORLIN-EN-VAL_DOUBLE
-- STE MARIE CUINES
 - SUTRIEU
-- Saalbach
 - Sacca di Esine
 - Sacile
 - Sacile Campagnola
+- Sackhorn
 - Sacro Monte Calvario, Torre Mattarella.
 - Saint-Pierre
-- Salassa
 - Salcedo
-- Saldenburg-Entschenreuth Bayern
 - Salen-Reutenen
 - Salurn
 - Salzboden
 - Salzburg Flughafen
-- Salzburg Freisaal
+- Samedan
+- Samerberg - Alpe di Brez
+- San Bartolomeo in Bosco
 - San Bernardo
-- San Canzian d'Isonzo
 - San Daniele
 - San Daniele del Friuli Via Sopracastello
-- San Donà di Piave
 - San Francesco al Campo
-- San Giacomo di Veglia - Via Isonzo - Bortolot
-- San Giovanni
+- San Giacomo Vercellese
 - San Martino
 - San Michele
-- San Michele di Piave
-- San Nicolo' Trebbia
-- San Paolo Solbrito
 - San Possidonio
 - San Rocco di Villabalzana
-- San Vendemiano
-- San Vigilio
 - San Vito
+- Sand_i.T._Mühlen
 - Sandolo
-- Sandrigo
 - Sangiano
 - Sant Jaggem
 - Sant'Andrea
+- Santa Fosca
 - Santa Maria Codifiume
+- Santa Maria Maddalena
 - Santa Maria di Negrar
 - Santa Maria di Sala
 - Santa Trinità
 - Sarcedo - Madonnetta
+- Sarmazza
 - Sarsura Pitschen
 - Sattel, SZ
 - Saupanzen
 - Savatronda
-- Saviner di Calloneghe
 - Schaffhausen
 - Schaftäli
 - Schapleralpa
+- Schartlkopf
 - Schaufeljoch
 - Schibe
-- Schiiterböden
 - Schilthorn
 - Schio  VI  - Quartiere Santa Croce -  JN55QR
 - Schlanders
-- Schlicker Alm
 - Schlivèra
+- Schmerikon
 - Schmidigen-Bidmeren
 - Schmittenhöhe
-- Schnals_Finail
-- Schnals_Teufelsegg
-- Schnals_Vernagt
 - Schneefernerhaus Bayern
-- Schröcken
 - Schwarzau im Freiwald
-- Schwarze Schneid
 - Schwarzhorn
 - Schwarzmönch
 - Schwechat Flughafen
-- Schwäbisch Gmünd-Weiler Baden-Württemberg
 - Schärding
 - Schöckl
-- Schönau am Königssee Bayern
 - Schönbüel
-- Schöneben - Belpiano
 - Schöngrabern
+- Schöntaufspitze - Cima Beltovo
 - Schüpfheim
+- Scorcola
 - Scuol
 - Scuole Medie
 - Seckau
-- Seegrube
+- Seefeld
+- Seetal
 - Seewli
 - Segl-Maria
 - Seibersdorf
 - Seirlöcher Kogel
-- Semmering
+- Seiser_Alm_Zallinger
 - Semonte
+- Semonzo
 - Sennjoch
 - Seregno Centro
-- Serfaus Masner
 - Serfaus Masnerkopf
-- Serravalle
+- Seriate
 - Settepolesini
-- Sevno (Å martno pri Litiji)
-- Sexten
 - Sidelhorn
-- Sigmaringen-Laiz Baden-Württemberg
-- Sigmarszell-Zeisertsweiler Bayern
 - Signalgipfel_Wilder_Freiger
 - Signoressa
-- 'Signoressa '
-- Silberspitze Schneemessung
-- Silberspitze Windstation
-- Sillian
 - Simplon-Dorf
-- Singen Baden-Württemberg
-- Siror
+- Sion
+- Sipplingen (SWN) Baden-Württemberg
 - Slavnik
-- Slovenske Konjice
-- Sonnbergalm
+- Solbiate
+- Sondrio
 - Sonnblick
-- Sonntagsköpfl Windstation
 - Soriso
 - Sotinski breg
-- Sottocroda
-- Soverzene - Parco comunale
-- Spinadesco
-- Spinazzino
+- Speicherteich Axamer Lizum
 - Spinea
-- Spittal an der Drau
 - Spitz
 - St Veit Speikboden
-- St Veit Zischke
+- St-Prex
 - St. Gallen
-- St. Veit im Pongau
 - St.Anton am Arlberg
-- St.Jakob im Defereggental
-- St.Leonhard im Pitztal
 - St.Michael im Lungau
 - St.Pölten Landhaus
 - St.Radegund
 - St.Veit an der Glan
+- St._Magdalena_in_Gsies
 - St._Martin_in_Passeier
-- St._Martin_in_Thurn
-- St._Veit_in_Prags
+- St._Valentin_a.d._Haide
 - St._Walburg
 - Sta. Maria, Val Müstair
-- Stabio
-- Stafelalp
-- 'Stazzano '
+- Staranzano
+- Steckborn
 - Steinach am Brenner
 - Sterzing
-- Stift Zwettl
 - Stockerau
 - Stolzalpe
 - Stra
 - Straubing Bayern
 - Stretti
-- Sulden
+- Sulden_Madritsch
 - Sulzberg
-- Sveti Trije Kralji (Pohorje)
 - "SviÅ¡Ä\x8Daki"
 - Säntis
 - Sölden Kreuzspitze
-- Söll
 - TALLARD
-- THONON-INRAE
-- TIGNES_SAPC
 - TOULON
 - TRETS
 - Taglio di Donada
-- Tannheim
 - Tarmassia
-- Tatre
 - Taufers_i.M.
 - Terenten
 - Teststation Albula
-- Thurntaler Windstation
-- Tignes
+- Thun
 - Timmelsalm
+- Titlis
 - Titlisboden
 - Toblach
 - Tombolo
-- Tonezza del Cimone
-- Topol pri Medvodah
-- Torino - Madonna di Campagna (ITTS Carlo Grassi)
 - Tracuit
-- Tradate
 - Trafoi_Zaufenkofel
-- Trebnje
 - Trecate
 - Trecate S. Maria
 - Treibach-Althofen
@@ -1464,24 +1122,18 @@ donors_during_tune:
 - Treviglio
 - Treviso
 - Trieste
+- Trieste - Zona Industriale Est
 - Triftchumme
 - Trigl
-- Tristecken Griesneralm Windstation
 - Trojane - Limovce
-- Trostberg Bayern
-- Trüttlisbergpass
 - Tsanfleuron
-- Tscheppa
 - Tscheyegg
-- Tuxerjoch Schneestation
+- Tschitta
 - Tuxerjoch Windstation
 - Türliboden
 - USINENS SA
 - Ulm-Mähringen Baden-Württemberg
-- Ulrichen
-- Ulten_Weißbrunn
 - Ulten_Weißbrunnspitz
-- Umhausen
 - Unter Surettasee
 - Unterach am Attersee
 - UrÅ¡lja gora
@@ -1490,88 +1142,79 @@ donors_during_tune:
 - VALENSOLE
 - VARENNES-ST-SA
 - VAUVENARGUES
-- VAUXRENARD
+- VIA GARIBALDI 40/A
 - VIDAUBAN
 - VILLAGGIO ERIDANIA
-- VILLAR ST PANCRACE
+- VILLAR D'ARENE
+- VILLARD-DE-LANS
+- VINON SUR VERDON
 - VISAN
 - Vaduz
 - Vairana
-- Val Lastaro
+- Val Miez
 - Val d’Algone - Vallon
 - Valbella
-- Valetta
-- Vallascia
 - Vallenoncello
 - Vallo Torinese
-- Valmorel
-- Valrovina
+- Valluga
 - Vanil des Artses
-- Varese 1 km da centro
 - Vaud
 - Vedano al Lambro
-- Velenje
 - "Velike LaÅ¡Ä\x8De"
 - Verano
+- Vergnasco
 - Verona Golosine
 - Verona centro - Piazza Brà
-- 'Vetrerie '
 - Vevey / Corseaux
 - Via Capitello
-- Via Cascina Foppa 25
 - Via Cavour 10
 - Via Como
 - Via Della Robbia
 - Via Fanzaghe
 - Via Monticello
-- 'Via Rabagnolo, Tarcento '
-- 'Via SANAVALLE 3 B '
 - Via San Martino
-- Via Sgambati
 - Via Staffora
 - Via Vitali
 - Via al Forte
 - Viale Aldo Moro
-- Viale Europa
 - Viale Fusinato
+- Vicolungo (Borgo di Zuxiana)
 - Vicosoprano
 - Vigano San Martino
-- 'Vigevano centro '
-- Vigo
+- Vigasio
+- Vigliano Biellese
 - Villach Stadt
-- Villaggio montegrappa
+- Villacher Alpe
 - Villamiroglio
+- Villanova d'Asti
 - Villars-Tiercelin
 - Villnöss
 - Villotta
 - Visp
 - Vittorio Veneto Ceneda
-- Vorderegg
+- Vogel
+- Vogtareuth (Kläranlage) Bayern
+- Volpino
 - Vorderer Maldonkopf
 - Vorderstocken
 - Vrhnika
-- "VrÅ¡iÄ\x8D"
 - Vöcklabruck
-- Völkermarkt-Goldbrunnhof
 - Wachtberg bei Steyr
-- Waidhofen an der Ybbs
+- Waging am See-Schnöbling Bayern
 - Waizenkirchen
-- Wandspitze Schneestation
+- Waldsee, Bad-Reute Baden-Württemberg
 - Wandspitze Windstation
 - Wanne
 - Wasserbergfirst
 - Weihenstephan-Dürnast Bayern
+- Weilheim-Bierbronnen Baden-Württemberg
 - Weingarten, Kr. Ravensburg Baden-Württemberg
 - Weissfluhjoch
-- Weisssee LWD
-- Weitensfeld
 - Weitra
-- Weißensee-Gatschach
 - Wels-Schleißheim
-- Welsberg
-- Welschnofen
 - Wenghorn
-- Weyer
+- Wielenbach (Demollstr.) Bayern
+- Wien Donaufeld
 - Wien Hohe Warte
 - Wien Innere Stadt
 - Wien Jubiläumswarte
@@ -1582,67 +1225,52 @@ donors_during_tune:
 - Wieselburg
 - Wiggis
 - Wildsee
-- Windischgarsten
+- Wildseehorn
 - Wolfsegg
-- Wutöschingen-Ofteringen Baden-Württemberg
+- Wolkersdorf
 - Wynau
 - Wädenswil
 - Wörterberg
-- Würenlingen / PSI
-- ZAGORJE
-- Zadlog
 - Zané
 - Ze Seewe
-- Zell am See
+- Zeltweg
 - Zermatt
 - Zgornja Kapla
-- Zgornja Radovna
-- Zgornja Sorica
 - Zinasco Vecchio
 - Zirkitzen
 - Zirmkogel Windstation
 - Zoppola
-- Zugspitze Bayern
 - Zwerndorf
 - Zwölferkogel
 - Zürich / Affoltern
 - Zürich / Fluntern
 - Zürich / Kloten
+- borgnano
+- cascina Barisona
 - castelminio
 - centro
-- cippo degli arditi
 - collina
-- contrada castello
-- dolina Campomolon
 - dolina Toraro
-- eraclea paese
 - fraz. Urbiano
 - lago di cavedine
-- loc. San Salvatore
-- localita' Prelo
-- località Sciessere
 - osservatorio
-- periferia
-- stazione Fnm
+- ovest
+- prato di correggio
+- rifugio Campolongo
 - strada dei Santi 4 fraz Assizzi
 - tezze arzignano
 - via Ludovico Ariosto
 - via Malogno, 2
-- via Palmanova
 - via caltana ovest
-- via piave
-- via roma
 - zona industriale
-- Äußere Rendlalpe
-- "Ä\x8Crnomelj - DobliÄ\x8De"
-- Å ebreljski vrh
-- "Å kocjan (DivaÄ\x8Da)"
 - Å martno pri Slovenj Gradcu
-n_tune_targets: 246
-n_donors_during_tune: 1392
-variable: relative_humidity
+n_held_out: 112
+n_pool: 1152
+variable: wind_max
 fraction: 0.15
-seed: 43
+seed: 42
 n_elev_bins: 4
 spatial_step_deg: 0.75
-note: Fixed 15 % of the pool; held out only during hyperparameter scoring
+domain: pool = Alpine Convention polygon + 100 km; held-out = strictly inside Alpine
+  Convention perimeter (all polygons / exclave included)
+source: monthly aggregate non-null stations; domain-filtered, hold-out perimeter-filtered

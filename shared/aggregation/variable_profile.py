@@ -63,7 +63,7 @@ HOLDOUT_FOR = {
     "wind_mean": "wind_speed", "wind_max": "wind_speed",
     "rh_mean": "relative_humidity",
     "snow_mean": "snow_height", "snow_max": "snow_height", "snow_min": "snow_height",
-    "slr": "snow_height", "swe": "snow_height", "snow_density": "snow_height",
+    "slr": "slr", "slr_min": "slr", "slr_max": "slr", "swe": "swe", "swe_min": "swe", "swe_max": "swe", "snow_density": "snow_height",
 }
 TERRAIN_COLS = (
     "elev", "slope", "tpi", "northness",

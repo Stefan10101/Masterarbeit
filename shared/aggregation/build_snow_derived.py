@@ -2,11 +2,14 @@
 """Compute slr / swe / snow_density and merge into Source/aggregated parquet.
 
 SLR: rolling 6 h net HS change / P on QC 30-min masters. Event iff
-HN>=2 cm and P>=1 mm. Daily = mean of valid 6 h events that day.
-hh = 6 h window ending at the timestamp. No weekly SLR.
+HN>=2 cm and P>=1 mm. Every resolution gets slr / slr_min / slr_max.
+6 h and half-hourly: the 6 h value (min = max = mean).
+Daily / weekly / monthly: mean / min / max of the 6 h events in the period.
 
 SWE/density: ΔSNOW on daily snow_mean (cm), Alpine nixmass parameters.
-Weekly = mean of daily. hh = daily value held onto the timestamp.
+Every resolution gets swe / swe_min / swe_max.
+Daily and finer: the daily value (min = max = mean).
+Weekly / monthly: mean / min / max of the daily values.
 
 Does not rebuild the rest of the aggregated files. Existing columns stay.
 Run from CODE/:
@@ -38,7 +41,7 @@ from shared.snowpack.deltasnow import deltasnow_daily_cm  # noqa: E402
 from shared.snowpack.slr import daily_slr_mean, slr_from_half_hourly  # noqa: E402
 from shared.time_res import TIME_RESOLUTIONS  # noqa: E402
 
-DERIVED_COLS = ("slr", "swe", "snow_density")
+DERIVED_COLS = ("slr", "slr_min", "slr_max", "swe", "swe_min", "swe_max", "snow_density")
 HS_COL = "snow_height"
 P_COL = "precipitation"
 
@@ -56,7 +59,9 @@ def _slr_one(task: tuple) -> tuple[str, pd.DataFrame, pd.DataFrame]:
         hh, day = slr_for_station(df)
         if not hh.empty:
             hh = hh.rename(columns={"time": "timestamp"})
-            hh["station_name"] = name
+            hh = hh.dropna(subset=["slr"])          # events only
+            if not hh.empty:
+                hh["station_name"] = name
         if not day.empty:
             day["station_name"] = name
         return name, hh, day
@@ -70,8 +75,8 @@ def parse_args():
     p.add_argument(
         "--time-resolution",
         nargs="*",
-        default=["daily", "weekly", "six_hourly", "half_hourly"],
-        choices=[r for r in TIME_RESOLUTIONS if r != "monthly"],
+        default=["monthly", "weekly", "daily", "six_hourly", "half_hourly"],
+        choices=list(TIME_RESOLUTIONS),
     )
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--max-stations", type=int, default=None)
@@ -168,8 +173,25 @@ def match_timestamp(series, template: pd.Series) -> pd.Series:
 
 
 def week_key(dates) -> pd.Series:
-    t = pd.to_datetime(dates, errors="coerce")
+    t = pd.to_datetime(dates, utc=True, errors="coerce")
+    # Drop tz so strftime uses the UTC calendar day, matching the aggregate.
+    t = t.dt.tz_convert("UTC").dt.tz_localize(None)
     return t.dt.strftime("%Y-W%W")
+
+
+def month_key(dates) -> pd.Series:
+    t = pd.to_datetime(dates, errors="coerce")
+    return t.dt.strftime("%Y-%m")
+
+
+def _agg_mmm(df: pd.DataFrame, group_cols: list[str], value_col: str, prefix: str) -> pd.DataFrame:
+    """Mean / min / max of value_col. Single source value → all three equal."""
+    if df.empty or value_col not in df.columns:
+        return pd.DataFrame(columns=group_cols + [prefix, f"{prefix}_min", f"{prefix}_max"])
+    g = df.groupby(group_cols, as_index=False)[value_col]
+    out = g.agg(mean="mean", min="min", max="max")
+    out = out.rename(columns={"mean": prefix, "min": f"{prefix}_min", "max": f"{prefix}_max"})
+    return out
 
 
 def merge_columns(base: pd.DataFrame, extra: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
@@ -189,6 +211,48 @@ def write_parquet(path: Path, df: pd.DataFrame, dry: bool):
     df.to_parquet(tmp, index=False, compression="zstd")
     tmp.replace(path)
     print(f"  wrote {path} rows={len(df):,}", flush=True)
+
+
+
+def _precompute_tables(slr_hh: pd.DataFrame, swe_day: pd.DataFrame) -> dict:
+    """Build mean/min/max tables once. Fine scales paste the source value."""
+    tables = {}
+    # SLR event table (6 h timestamps)
+    if not slr_hh.empty:
+        ev = slr_hh.dropna(subset=["slr"]).copy()
+        ev["slr_min"] = ev["slr"]
+        ev["slr_max"] = ev["slr"]
+        ev["date"] = pd.to_datetime(ev["timestamp"], utc=True).dt.strftime("%Y-%m-%d")
+        ev["year_week"] = week_key(ev["timestamp"])
+        ev["year_month"] = month_key(ev["timestamp"])
+        tables["slr_event"] = ev[["station_name", "timestamp", "slr", "slr_min", "slr_max"]]
+        tables["slr_daily"] = _agg_mmm(ev, ["station_name", "date"], "slr", "slr")
+        tables["slr_weekly"] = _agg_mmm(ev, ["station_name", "year_week"], "slr", "slr")
+        tables["slr_monthly"] = _agg_mmm(ev, ["station_name", "year_month"], "slr", "slr")
+    else:
+        tables["slr_event"] = pd.DataFrame()
+        tables["slr_daily"] = pd.DataFrame()
+        tables["slr_weekly"] = pd.DataFrame()
+        tables["slr_monthly"] = pd.DataFrame()
+    # SWE daily table; fine scales paste it, coarse scales aggregate
+    if not swe_day.empty:
+        sw = swe_day.copy()
+        sw["swe_min"] = sw["swe"]
+        sw["swe_max"] = sw["swe"]
+        sw["year_week"] = week_key(sw["date"])
+        sw["year_month"] = month_key(sw["date"])
+        tables["swe_daily"] = sw[["station_name", "date", "swe", "swe_min", "swe_max", "snow_density"]]
+        tables["swe_weekly"] = _agg_mmm(sw, ["station_name", "year_week"], "swe", "swe")
+        dens_w = sw.groupby(["station_name", "year_week"], as_index=False)["snow_density"].mean()
+        tables["swe_weekly"] = tables["swe_weekly"].merge(dens_w, on=["station_name", "year_week"], how="left")
+        tables["swe_monthly"] = _agg_mmm(sw, ["station_name", "year_month"], "swe", "swe")
+        dens_m = sw.groupby(["station_name", "year_month"], as_index=False)["snow_density"].mean()
+        tables["swe_monthly"] = tables["swe_monthly"].merge(dens_m, on=["station_name", "year_month"], how="left")
+    else:
+        tables["swe_daily"] = pd.DataFrame()
+        tables["swe_weekly"] = pd.DataFrame()
+        tables["swe_monthly"] = pd.DataFrame()
+    return tables
 
 
 def main():
@@ -270,6 +334,9 @@ def main():
     else:
         print(f"MISSING {daily_path} — SWE skipped", flush=True)
 
+    tables = _precompute_tables(slr_hh, swe_day)
+    print("precomputed resolution tables", flush=True)
+
     for res in args.time_resolution:
         path = get_aggregated_data_path(None, res)
         print(f"\n{res}  {path}", flush=True)
@@ -277,46 +344,45 @@ def main():
             print("  MISSING, skip", flush=True)
             continue
         base = pd.read_parquet(path)
-        extra = pd.DataFrame()
 
         if res == "daily":
-            extra = pd.DataFrame({"station_name": base["station_name"], "date": base["date"].astype(str)})
-            extra = extra.drop_duplicates()
-            if not slr_day.empty:
-                extra = extra.merge(slr_day, on=["station_name", "date"], how="left")
-            if not swe_day.empty:
-                extra = extra.merge(swe_day, on=["station_name", "date"], how="left")
+            extra = pd.DataFrame({"station_name": base["station_name"], "date": base["date"].astype(str)}).drop_duplicates()
+            if not tables["slr_daily"].empty:
+                extra = extra.merge(tables["slr_daily"], on=["station_name", "date"], how="left")
+            if not tables["swe_daily"].empty:
+                extra = extra.merge(tables["swe_daily"], on=["station_name", "date"], how="left")
             out = merge_columns(base, extra, ["station_name", "date"])
 
         elif res == "weekly":
-            extra = pd.DataFrame({
-                "station_name": base["station_name"],
-                "year_week": base["year_week"].astype(str),
-            }).drop_duplicates()
-            if not swe_day.empty:
-                w = swe_day.copy()
-                w["year_week"] = week_key(w["date"])
-                w = w.groupby(["station_name", "year_week"], as_index=False)[["swe", "snow_density"]].mean()
-                extra = extra.merge(w, on=["station_name", "year_week"], how="left")
-            extra["slr"] = np.nan
+            extra = pd.DataFrame({"station_name": base["station_name"], "year_week": base["year_week"].astype(str)}).drop_duplicates()
+            if not tables["slr_weekly"].empty:
+                extra = extra.merge(tables["slr_weekly"], on=["station_name", "year_week"], how="left")
+            if not tables["swe_weekly"].empty:
+                extra = extra.merge(tables["swe_weekly"], on=["station_name", "year_week"], how="left")
             out = merge_columns(base, extra, ["station_name", "year_week"])
+
+        elif res == "monthly":
+            extra = pd.DataFrame({"station_name": base["station_name"], "year_month": base["year_month"].astype(str)}).drop_duplicates()
+            if not tables["slr_monthly"].empty:
+                extra = extra.merge(tables["slr_monthly"], on=["station_name", "year_month"], how="left")
+            if not tables["swe_monthly"].empty:
+                extra = extra.merge(tables["swe_monthly"], on=["station_name", "year_month"], how="left")
+            out = merge_columns(base, extra, ["station_name", "year_month"])
 
         elif res in ("six_hourly", "half_hourly"):
             tcol = "timestamp" if "timestamp" in base.columns else "time"
             extra = base[["station_name", tcol]].drop_duplicates()
             extra[tcol] = match_timestamp(extra[tcol], base[tcol])
-            if not slr_hh.empty:
-                sl = slr_hh.rename(columns={"timestamp": tcol})
-                sl = sl.dropna(subset=["slr"])
+            # SLR: paste the 6 h event value (min = max = mean)
+            if not tables["slr_event"].empty:
+                sl = tables["slr_event"].rename(columns={"timestamp": tcol})
                 sl[tcol] = match_timestamp(sl[tcol], base[tcol])
                 extra = extra.merge(sl, on=["station_name", tcol], how="left")
-            if not swe_day.empty:
+            # SWE: paste the daily value (min = max = mean)
+            if not tables["swe_daily"].empty:
                 extra["_date"] = pd.to_datetime(extra[tcol], utc=True).dt.strftime("%Y-%m-%d")
-                extra = extra.merge(
-                    swe_day.rename(columns={"date": "_date"}),
-                    on=["station_name", "_date"],
-                    how="left",
-                )
+                sw = tables["swe_daily"].rename(columns={"date": "_date"})
+                extra = extra.merge(sw, on=["station_name", "_date"], how="left")
                 extra = extra.drop(columns=["_date"])
             extra[tcol] = match_timestamp(extra[tcol], base[tcol])
             out = merge_columns(base, extra, ["station_name", tcol])

@@ -17,13 +17,21 @@ variables_to_process:
   - snow_max
   - snow_min
   - slr
+  - slr_min
+  - slr_max
   - swe
+  - swe_min
+  - swe_max
 variable_parents:
   temp_min: temp_mean
   temp_max: temp_mean
   wind_max: wind_mean
   snow_max: snow_mean
   snow_min: snow_mean
+  slr_min: slr
+  slr_max: slr
+  swe_min: swe
+  swe_max: swe
 min_stations_per_field: 10
 overwrite_maps: true
 aggregation:
