@@ -74,9 +74,10 @@ def spatial_outlier_mask(
     neighbour_series: list[pd.Series],
     mad_multiplier: float = 4.0,
     min_valid: int = 7,
+    min_mad: float = 0.5,
     precip_mode: bool = False,
-    precip_wet_threshold: float = 1.0,
-    precip_max_wet_neighbours: int = 3,
+    precip_wet_threshold: float = 25.0,
+    precip_max_wet_neighbours: int = 2,
 ) -> pd.Series:
     """Return boolean Series (True = outlier) aligned to own.index. Vectorised."""
     if own.empty or not neighbour_series:
@@ -97,12 +98,17 @@ def spatial_outlier_mask(
         flag = enough & (own_vals > precip_wet_threshold) & (wet < precip_max_wet_neighbours)
         return pd.Series(flag, index=own.index)
 
-    # median and MAD along neighbours
-    with np.errstate(all="ignore"):
-        med = np.nanmedian(vals, axis=1)
-        mad = np.nanmedian(np.abs(vals - med[:, None]), axis=1)
-    mad = np.where((~np.isfinite(mad)) | (mad == 0.0), 1e-6, mad)
-    flag = enough & np.isfinite(own_vals) & (np.abs(own_vals - med) > mad_multiplier * mad)
+    # only compute median/MAD where enough neighbours are valid (avoids All-NaN warnings)
+    med = np.full(len(own_vals), np.nan)
+    mad = np.full(len(own_vals), np.nan)
+    if enough.any():
+        sub = vals[enough]
+        with np.errstate(all="ignore"):
+            med[enough] = np.nanmedian(sub, axis=1)
+            mad[enough] = np.nanmedian(np.abs(sub - med[enough][:, None]), axis=1)
+    # floor so near-identical neighbours do not collapse the test
+    mad = np.where((~np.isfinite(mad)) | (mad < min_mad), min_mad, mad)
+    flag = enough & np.isfinite(own_vals) & np.isfinite(med) & (np.abs(own_vals - med) > mad_multiplier * mad)
     return pd.Series(flag, index=own.index)
 
 
@@ -149,6 +155,16 @@ def apply_spatial_qc_to_directory(
 
     if mad_multiplier is None:
         mad_multiplier = 5.0 if variable.lower() in ("wind", "wind_mean") else 4.0
+    min_mad_by_var = {
+        # high floors: only real outliers (~spatial 99th percentile / sensor failures)
+        # 800 m elev cap, no lapse rate
+        "temp": 5.0, "temperature": 5.0,       # flag only if > 20 °C from median
+        "precip": 5.0, "precipitation": 5.0,   # > 20 mm
+        "snow": 12.0, "snowheight": 12.0,      # > 48 cm
+        "rh": 15.0, "humidity": 15.0,          # > 60 %
+        "wind": 4.0, "wind_mean": 4.0,         # > 20 m/s (5×MAD)
+    }
+    min_mad = min_mad_by_var.get(variable.lower(), 0.5)
 
     total_flagged = 0
     for st in stations:
@@ -163,7 +179,10 @@ def apply_spatial_qc_to_directory(
             neigh_series,
             mad_multiplier=mad_multiplier,
             min_valid=min_valid,
+            min_mad=min_mad,
             precip_mode=precip_mode,
+            precip_wet_threshold=25.0,
+            precip_max_wet_neighbours=2,
         )
         n_flag = int(mask.sum())
         if n_flag == 0:

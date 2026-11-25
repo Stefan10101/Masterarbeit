@@ -38,10 +38,32 @@ from shared.clc import level2_index, N_LEVEL2
 from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, quarter_of
 from shared.time_res import TIME_RESOLUTIONS, add_time_res_arg
 
-VARS = ("temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean")
+VARS = (
+    "temp_mean", "temp_min", "temp_max",
+    "precip_sum",
+    "wind_mean", "wind_max",
+    "rh_mean",
+    "snow_mean", "snow_max", "snow_min",
+    "slr", "swe", "snow_density",
+)
+# wet-fraction trace. None → wet_frac stays NaN (continuous variables).
 TRACE = {
-    "precip_sum": {"half_hourly": 0.05, "daily": 0.1, "weekly": 0.7, "monthly": 1.0},
-    "snow_mean": {"half_hourly": 0.5, "daily": 0.5, "weekly": 1.0, "monthly": 1.0},
+    "precip_sum": {"six_hourly": 0.2, "half_hourly": 0.05, "daily": 0.1, "weekly": 0.7, "monthly": 1.0},
+    "snow_mean": {"six_hourly": 0.5, "half_hourly": 0.5, "daily": 0.5, "weekly": 1.0, "monthly": 1.0},
+    "snow_max": {"six_hourly": 0.5, "half_hourly": 0.5, "daily": 0.5, "weekly": 1.0, "monthly": 1.0},
+    "snow_min": {"six_hourly": 0.5, "half_hourly": 0.5, "daily": 0.5, "weekly": 1.0, "monthly": 1.0},
+    "slr": {"six_hourly": 2.0, "half_hourly": 2.0, "daily": 2.0, "weekly": 2.0, "monthly": 2.0},
+    "swe": {"six_hourly": 1.0, "half_hourly": 1.0, "daily": 1.0, "weekly": 1.0, "monthly": 1.0},
+    "snow_density": {"six_hourly": 50.0, "half_hourly": 50.0, "daily": 50.0, "weekly": 50.0, "monthly": 50.0},
+}
+# holdout YAML is per parent variable, not per statistic
+HOLDOUT_FOR = {
+    "temp_mean": "temperature", "temp_min": "temperature", "temp_max": "temperature",
+    "precip_sum": "precipitation",
+    "wind_mean": "wind_speed", "wind_max": "wind_speed",
+    "rh_mean": "relative_humidity",
+    "snow_mean": "snow_height", "snow_max": "snow_height", "snow_min": "snow_height",
+    "slr": "snow_height", "swe": "snow_height", "snow_density": "snow_height",
 }
 TERRAIN_COLS = (
     "elev", "slope", "tpi", "northness",
@@ -309,6 +331,9 @@ def run_variable(time_res, var, stations, held_set, qmap):
     import fastparquet
     pf = fastparquet.ParquetFile(str(path))
     names = set(pf.columns)
+    if var not in names:
+        print(f"  column absent, skip", flush=True)
+        return []
     tcol = _time_col(names, time_res)
     cols = [c for c in ("station_name", tcol, var) if c in names]
     trace = TRACE.get(var, {}).get(time_res)
@@ -422,7 +447,7 @@ def main():
         for var in args.variables:
             print(f"\n{time_res}  {var}", flush=True)
             try:
-                held, _ = load_holdout(variable=var)
+                held, _ = load_holdout(variable=HOLDOUT_FOR.get(var, var))
                 held_set = set(map(str, held))
                 rows.extend(run_variable(time_res, var, stations, held_set, qmap))
             except Exception as exc:

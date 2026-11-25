@@ -232,6 +232,7 @@ def main() -> None:
         "monthly": "year_month",
         "weekly": "year_week",
         "daily": "date",
+        "six_hourly": "timestamp",
         "half_hourly": "timestamp",
     }
 
@@ -257,7 +258,7 @@ def main() -> None:
         ),
         "times": {},
     }
-    for res in ("monthly", "weekly", "daily", "half_hourly"):
+    for res in ("monthly", "weekly", "daily", "six_hourly", "half_hourly"):
         path = get_aggregated_data_path("Source", res)
         if not path.exists():
             print(f"  early-stop times: skip {res} (no {path.name})")

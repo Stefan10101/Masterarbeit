@@ -13,7 +13,7 @@ import re
 import numpy as np
 import pandas as pd
 
-TIME_RESOLUTIONS = ("monthly", "weekly", "daily", "half_hourly")
+TIME_RESOLUTIONS = ("monthly", "weekly", "daily", "six_hourly", "half_hourly")
 DEFAULT_VARIABLES = (
     "temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean",
 )
@@ -49,6 +49,13 @@ POLICY = {
         "subsample_hours": None,
     },
     "daily": {
+        "purge_days": 0,
+        "tune_months": "seasonal4",
+        "llocv_months": "seasonal4",
+        "maps": "test",
+        "subsample_hours": None,
+    },
+    "six_hourly": {
         "purge_days": 0,
         "tune_months": "seasonal4",
         "llocv_months": "seasonal4",

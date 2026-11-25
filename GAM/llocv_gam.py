@@ -17,6 +17,7 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from gam_data import hyper_source
 from paths import get_gam_tuned_params_path, get_nested_llocv_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_score_split
 from shared.metrics import compute_metrics as eval_metrics, print_eval
@@ -296,7 +297,7 @@ def main():
     print(f"GAM LLOCV | {time_res} | vars={variables} | score will use held-out x requested split", flush=True)
     pack = pack_from_master(cfg, int(cfg.get("gam", {}).get("n_regions", 6)))
     for var in variables:
-        tuned = load_tuned(var, time_res)
+        tuned = load_tuned(hyper_source(cfg, var), time_res)
         tuned["trace"] = precip_trace(cfg, time_res, var)
         if args.rh_t_mode:
             tuned["rh_t_mode"] = args.rh_t_mode

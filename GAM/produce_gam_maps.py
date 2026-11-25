@@ -20,6 +20,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from shared.map_io import save_map_with_partials
+from gam_data import hyper_source
 from paths import get_interpolated_map_path, get_master_grid_path
 from gam_core import GAMInterpolator
 from gam_data import (
@@ -151,7 +152,7 @@ def main():
             # Tag with shared quarter splits so subset_splits can select train/tune/test.
             # Produce keeps all stations (including held-out) as donors; only time is filtered.
             panel, _, _, _ = apply_evaluation_protocol(panel, variable=var)
-            tuned = load_tuned(var, time_res)
+            tuned = load_tuned(hyper_source(cfg, var), time_res)
             tuned["trace"] = precip_trace(cfg, time_res, var)
             if args.rh_t_mode:
                 tuned["rh_t_mode"] = args.rh_t_mode

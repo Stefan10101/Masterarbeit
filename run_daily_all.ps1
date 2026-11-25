@@ -9,7 +9,10 @@ $ErrorActionPreference = "Stop"
 $env:WEEKLY_HOLDOUT_STAMP = Join-Path $PSScriptRoot "Output\_run_stamp\holdout_stamp.json"
 python (Join-Path $PSScriptRoot "shared\splits\stamp_holdout.py")
 if ($LASTEXITCODE -ne 0) { throw "holdout stamp failed" }
-$vars = @("temp_mean","precip_sum","wind_mean","rh_mean","snow_mean")
+# Parents first, then children (so inherited hypers exist).
+$parents = @("precip_sum","temp_mean","wind_mean","rh_mean","snow_mean","slr","swe")
+$children = @("temp_min","temp_max","wind_max","snow_max","snow_min")
+$vars = $parents + $children
 $res  = "daily"
 $cap  = "--max-times 365"
 
@@ -61,8 +64,8 @@ function Run-Step($label, $cmd) {
 #}
 
 # RGI
-#Run-Step "RGI tune"  "python RGI/tune_rgi.py --time-resolution $res $cap --variables $($vars -join ' ')"
-#Run-Step "RGI llocv" "python RGI/llocv_rgi.py --time-resolution $res --variables $($vars -join ' ')"
+Run-Step "RGI tune"  "python RGI/tune_rgi.py --time-resolution $res $cap --variables $($vars -join ' ')"
+Run-Step "RGI llocv" "python RGI/llocv_rgi.py --time-resolution $res --variables $($vars -join ' ')"
 # Run-Step "RGI produce" "python RGI/produce_rgi_maps.py --time-resolution $res --variables $($vars -join ' ')"
 
 # SMACNP

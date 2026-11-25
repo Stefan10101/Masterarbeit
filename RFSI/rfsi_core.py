@@ -12,6 +12,15 @@ Per-field fit is kept only as a helper for the old hyperparameter search.
 
 from __future__ import annotations
 
+def hyper_source(cfg: dict | None, var: str) -> str:
+    """Return the variable whose tuned hypers should be used. Missing map or key → self."""
+    if not cfg:
+        return var
+    parents = cfg.get("variable_parents") or {}
+    return str(parents.get(var, var))
+
+
+
 from typing import Optional
 
 import numpy as np

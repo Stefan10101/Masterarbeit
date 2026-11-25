@@ -20,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import argparse
+import os
 
 import numpy as np
 import pandas as pd
@@ -457,7 +458,7 @@ def build_station_features(stations_method: str = "RFSI",
         x, y = xy
         with rasterio.open(dem_path) as src:
             return sample_dem_window(src, x, y, radius)
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1)) as ex:
         results = list(ex.map(_one, zip(xs, ys)))
     for i, (sm, ce, sl, asp) in enumerate(results):
         smooth[i] = sm

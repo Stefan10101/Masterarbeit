@@ -36,6 +36,7 @@ from cnn_core import (
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from shared.metrics import compute_metrics as eval_metrics, print_eval
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, print_split_metrics, subset_times, attach_temperature, attach_station_tpi
+from cnn_data import hyper_source
 from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned, train_one
 
 try:
@@ -241,7 +242,7 @@ def main():
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         if args.max_times:
             panel = cap_score_split(panel, args.max_times, time_res, seed=int(cfg["cnn"].get("seed", 22)))
-        ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))
+        ccfg = cfg_to_cnn(cfg, load_tuned(hyper_source(cfg, var), time_res))
         subdaily = is_subdaily(panel, time_res)
         trace = precip_trace(cfg, time_res, var)
         rows = []

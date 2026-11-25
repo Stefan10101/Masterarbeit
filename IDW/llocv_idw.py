@@ -26,7 +26,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from idw_core import interpolate_idw
-from idw_data import load_config, load_global_params, load_panel, print_metrics
+from idw_data import load_config, load_global_params, load_panel, print_metrics, hyper_source
 from paths import get_llocv_path
 from shared.splits.evaluation_sets import (
     apply_evaluation_protocol,
@@ -101,7 +101,8 @@ def main():
         if args.max_times:
             tagged = cap_score_split(tagged, args.max_times, time_res)
 
-        params = load_global_params(time_res, var)
+        src = hyper_source(cfg, var)
+        params = load_global_params(time_res, src)
         times = sorted(tagged.loc[tagged["quarter"].isin(test_quarters), "time"].unique())
         n_jobs = int(args.jobs) if args.jobs is not None else max(1, (os.cpu_count() or 1) // 2)
         print(f"\n----- {var}  {len(times)} test timestamps  jobs={n_jobs} -----")

@@ -297,6 +297,7 @@ def get_aggregated_data_path(method: str, time_resolution: str) -> Path:
         "weekly": "weekly_station_data.parquet",
         "daily": "daily_station_data.parquet",
         "monthly": "monthly_station_data.parquet",
+        "six_hourly": "six_hourly_station_data.parquet",
         "half_hourly": "half_hourly_station_data.parquet",
     }
     filename = filename_map.get(time_resolution, f"{time_resolution}_station_data.parquet")

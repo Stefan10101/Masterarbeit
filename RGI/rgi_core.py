@@ -103,7 +103,8 @@ class ResidualGNN(nn.Module):
         a = self.alpha
         for layer in self.layers:
             mix = layer(h, edge_index, edge_attr)
-            mix = F.relu(mix)
+            # No ReLU: a non-negative residual update prevented the head from
+            # learning negative temperatures (predictions floored at 0).
             mix = F.dropout(mix, p=self.dropout, training=self.training)
             h = a * h0 + (1.0 - a) * mix
         return self.head(h).squeeze(-1)

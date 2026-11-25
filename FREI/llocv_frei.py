@@ -19,6 +19,7 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from frei_data import hyper_source
 from paths import get_frei_tuned_params_path, get_master_grid_path, get_nested_llocv_path
 from shared.splits.evaluation_sets import apply_evaluation_protocol
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_score_split
@@ -267,7 +268,8 @@ def main():
         n_folds = args.folds or 2
         months = months or "seasonal4"
     for var in variables:
-        tuned = load_tuned(var, time_res)
+        src = hyper_source(cfg, var)
+        tuned = load_tuned(src, time_res)
         tuned["trace"] = precip_trace(cfg, time_res, var)
         tuned.update(load_idw_residual_params(time_res, var))
         fcfg = cfg_to_frei(cfg, tuned)

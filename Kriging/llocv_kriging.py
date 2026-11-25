@@ -29,6 +29,7 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from kriging_data import hyper_source
 from paths import get_kriging_tuned_params_path, get_nested_llocv_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_score_split
 from shared.metrics import compute_metrics as eval_metrics, print_eval
@@ -129,7 +130,8 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
     # Single evaluation group (the held-out set)
     folds = [names]
 
-    tuned = load_tuned(var, cfg["time_resolution"])
+    src = hyper_source(cfg, var)
+    tuned = load_tuned(src, cfg["time_resolution"])
     if trend_override:
         tuned = {**tuned, "trend": trend_override}
     if rh_t_mode:

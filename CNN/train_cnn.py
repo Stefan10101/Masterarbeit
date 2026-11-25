@@ -20,6 +20,7 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from cnn_data import hyper_source
 from paths import get_cnn_model_path, get_cnn_tuned_params_path, get_master_grid_path
 from cnn_core import (
     idw_fz_raster, idw_fz_points,
@@ -754,10 +755,27 @@ def train_one(panel, var, ccfg: CNNConfig, elev, clc, gx, gy, slope=None, sinasp
         model.in_std = float(max(logv.std(), 1e-3))
         model.log_residual = True
     else:
-        model.y_mean = float(vals.mean())
-        model.y_std = float(vals.std() + 1e-6)
-        model.in_mean = model.y_mean
-        model.in_std = model.y_std
+        if ccfg.residual_idw:
+            # Residual-std normalisation: scale the residual target (and the
+            # residual input) by the residual distribution, not the raw values.
+            # Prevents an unconstrained residual head from emitting large
+            # offsets on RH and snow.
+            resids = []
+            for f in train_fr:
+                r = np.asarray(f["obs"], dtype=np.float64) - np.asarray(f["pts"], dtype=np.float64)
+                resids.append(r)
+            resid = np.concatenate(resids) if resids else np.array([0.0])
+            model.y_mean = float(np.nanmean(resid))
+            model.y_std = float(max(np.nanstd(resid), 1e-3))
+            model.in_mean = model.y_mean
+            model.in_std = model.y_std
+            model.log_residual = False
+            print(f"  residual-std norm: mean={model.y_mean:.4f}  std={model.y_std:.4f}", flush=True)
+        else:
+            model.y_mean = float(vals.mean())
+            model.y_std = float(vals.std() + 1e-6)
+            model.in_mean = model.y_mean
+            model.in_std = model.y_std
     model.log_amount = log_amount
     model.z_mean = float(np.nanmean(elev))
     model.z_std = float(np.nanstd(elev) + 1.0)
@@ -1000,7 +1018,7 @@ def main():
         panel, _hours = apply_hour_cut(panel, time_res, args.hours)
         if args.max_times:
             panel = cap_timestamps(panel, args.max_times, time_res, seed=int(cfg["cnn"].get("seed", 22)))
-        ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))
+        ccfg = cfg_to_cnn(cfg, load_tuned(hyper_source(cfg, var), time_res))
         model, dev = train_one(
             panel, var, ccfg, elev, clc, gx, gy,
             slope, sinasp, cosasp, time_res=time_res,

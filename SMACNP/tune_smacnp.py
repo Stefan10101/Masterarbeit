@@ -24,6 +24,7 @@ CODE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE_DIR))
 
 from smacnp_data import (
+    hyper_source,
     load_config,
     load_panel,
     compute_dem_features,
@@ -148,7 +149,7 @@ def run_epoch(model, day_tensors, cfg, device, optimizer=None):
 
 
 @torch.no_grad()
-def val_rmse_original(model, day_tensors, scaler, device) -> float:
+def val_rmse_original(model, day_tensors, scaler, device, use_hard_gate: bool = False) -> float:
     """RMSE in original units on the validation tensors.
 
     The printed loss is beta-NLL on the [0,1] scale and is not comparable
@@ -169,9 +170,12 @@ def val_rmse_original(model, day_tensors, scaler, device) -> float:
             mu_n = pred["amount_mu"].cpu().numpy().reshape(-1)
             var_n = pred["amount_variance"].cpu().numpy().reshape(-1)
             amt = np.maximum(scaler.inverse_mean(mu_n, var_n), 0.0)
-            # Expectation, not the hard gate. The gate turned the largest
-            # precip weeks into exact zeros and those weeks dominated RMSE.
-            y_hat = np.clip(p, 0.0, 1.0) * amt
+            # Soft product by default. Hard gate only when requested (snow).
+            # Hard gate zeroed large precip events and dominated RMSE.
+            p = np.clip(p, 0.0, 1.0)
+            y_soft = p * amt
+            y_hard = np.where(p >= 0.5, amt, 0.0)
+            y_hat = y_hard if use_hard_gate else y_soft
         else:
             mu_n = pred["mu"].cpu().numpy().reshape(-1)
             y_hat = scaler.inverse(mu_n)
@@ -197,7 +201,7 @@ def search_grid(cfg: dict, quick: bool) -> list[dict]:
 
 def train_one(cfg, feat_cols, two_step, device, y_scaler,
               train_days, val_days, df, train_stations, val_tensors,
-              champion_rmse: float | None = None) -> tuple[float, list, dict]:
+              champion_rmse: float | None = None, use_hard_gate: bool = False) -> tuple[float, list, dict]:
     """Train one search cell. Returns (best val RMSE, history, state).
     champion_rmse: abort after 40 % of epochs if still > 20 % above it and flat."""
     model = build_model(cfg, len(feat_cols), two_step).to(device)
@@ -222,7 +226,7 @@ def train_one(cfg, feat_cols, two_step, device, y_scaler,
         tr_loss = run_epoch(model, train_tensors, cfg, device, optimizer)
         with torch.no_grad():
             va_loss = run_epoch(model, val_tensors, cfg, device, None)
-            rmse = val_rmse_original(model, val_tensors, y_scaler, device)
+            rmse = val_rmse_original(model, val_tensors, y_scaler, device, use_hard_gate=use_hard_gate)
         print(f"  epoch {epoch:4d}  train={tr_loss:.4f}  val={va_loss:.4f}  val_rmse={rmse:.3f}")
         history.append({"epoch": epoch, "train": tr_loss, "val": va_loss, "val_rmse": rmse})
         if not np.isfinite(rmse):
@@ -285,6 +289,21 @@ def main():
             subprocess.check_call(cmd)
         return
     var = args.variable
+    src = hyper_source(cfg, var)
+    inherited = None
+    if src != var:
+        from paths import get_smacnp_tuned_params_path
+        import yaml as _yaml
+        parent = get_smacnp_tuned_params_path(src, cfg["time_resolution"])
+        if not parent.exists():
+            print(f"[{var}] parent {src} has no tuned file yet — skipping")
+            return
+        inherited = _yaml.safe_load(parent.read_text(encoding="utf-8")) or {}
+        # apply fixed hypers; drop bookkeeping keys
+        for k, v in inherited.items():
+            if k not in ("variable", "time_resolution", "val_rmse"):
+                cfg["smacnp"][k] = v
+        print(f"[{var}] inherited hypers from {src}: { {k: inherited[k] for k in inherited if k not in ('variable','time_resolution','val_rmse')} }")
     two_step = var in cfg["smacnp"].get("two_step_vars", [])
     set_seed(cfg["smacnp"]["seed"])
     device = get_device(cfg)
@@ -393,7 +412,11 @@ def main():
             "(early-stop timestamp mismatch or empty tune window)"
         )
 
-    grid = search_grid(cfg, args.quick)
+    if inherited:
+        cell = {k: v for k, v in inherited.items() if k not in ("variable", "time_resolution", "val_rmse")}
+        grid = [cell]
+    else:
+        grid = search_grid(cfg, args.quick)
     print(f"search cells={len(grid)}  {[tuple(c.items()) for c in grid]}")
     from paths import get_smacnp_tuned_params_path
     ckpt_path = get_smacnp_model_path(var, cfg["time_resolution"])
@@ -407,10 +430,12 @@ def main():
         for k, v in cell.items():
             cfg["smacnp"][k] = v
         print(f"\ncell {i+1}/{len(grid)}  {cell}")
+        use_hard = bool(cfg.get("smacnp", {}).get("snow_hard_gate", False)) and var == "snow_mean"
         rmse, history, info = train_one(
             cfg, feat_cols, two_step, device, y_scaler,
             train_days, val_days, df, train_stations, val_tensors,
             champion_rmse=champion_rmse,
+            use_hard_gate=use_hard,
         )
         stopped = champion_rmse is not None and rmse > champion_rmse * 1.20
         row = {**cell, "val_rmse": rmse, "epochs": info["epochs"],
@@ -440,6 +465,7 @@ def main():
             "feature_cols": feat_cols,
             "two_step": two_step,
             "variable": var,
+            "snow_hard_gate": bool(cfg.get("smacnp", {}).get("snow_hard_gate", False)),
             "time_resolution": cfg["time_resolution"],
             "cfg": cfg["smacnp"],
             "search_cell": best["cell"],

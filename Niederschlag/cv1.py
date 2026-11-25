@@ -400,7 +400,9 @@ def main():
                     for sid in all_coords}
 
     # Identify suspicious zero months
-    logger.info("Identifying suspicious zero months (my sum==0 but majority of k=5 neighbours have >0)...")
+    NEIGH_MONTH_MIN_MM = 10.0   # neighbour must be meaningfully wet
+    NEIGH_MIN_CONFIRM = 4       # at least 4 of 5
+    logger.info(f"Identifying suspicious zero months (my sum==0 but >={NEIGH_MIN_CONFIRM} of k={NEIGHBOR_K} neighbours have >{NEIGH_MONTH_MIN_MM} mm)...")
     total_bad_months = 0
     stations_with_bad_months = 0
     for station_id, my_monthly in monthly_totals.items():
@@ -411,9 +413,9 @@ def main():
                 continue
             rain_neighs = sum(
                 1 for nid in neighs
-                if monthly_totals.get(nid, {}).get(month_str, 0.0) > 0
+                if monthly_totals.get(nid, {}).get(month_str, 0.0) > NEIGH_MONTH_MIN_MM
             )
-            if neighs and rain_neighs > len(neighs) / 2:
+            if len(neighs) >= NEIGH_MIN_CONFIRM and rain_neighs >= NEIGH_MIN_CONFIRM:
                 bad.add(month_str)
         bad_months_map[station_id] = bad
         if bad:

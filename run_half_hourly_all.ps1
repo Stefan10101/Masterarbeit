@@ -9,7 +9,10 @@ $ErrorActionPreference = "Stop"
 $env:WEEKLY_HOLDOUT_STAMP = Join-Path $PSScriptRoot "Output\_run_stamp\holdout_stamp.json"
 python (Join-Path $PSScriptRoot "shared\splits\stamp_holdout.py")
 if ($LASTEXITCODE -ne 0) { throw "holdout stamp failed" }
-$vars = @("temp_mean","precip_sum","wind_mean","rh_mean","snow_mean")
+# Parents first, then children (so inherited hypers exist).
+$parents = @("precip_sum","temp_mean","wind_mean","rh_mean","snow_mean","slr","swe")
+$children = @("temp_min","temp_max","wind_max","snow_max","snow_min")
+$vars = $parents + $children
 $res  = "half_hourly"
 $cap  = "--max-times 365"
 

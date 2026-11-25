@@ -306,7 +306,11 @@ def main():
                 var_n = pred["amount_variance"].cpu().numpy().squeeze()
                 amt = np.maximum(scaler.inverse_mean(mu_n, var_n), 0.0)
                 p_occ = np.clip(p_occ, 0.0, 1.0)
-                mu_full[r0:r1] = (p_occ * amt).reshape(r1 - r0, nx).astype(np.float32)
+                y_soft = p_occ * amt
+                y_hard = np.where(p_occ >= 0.5, amt, 0.0)
+                use_hard = (var == "snow_mean") and bool(cfg.get("smacnp", {}).get("snow_hard_gate", False))
+                y_field = y_hard if use_hard else y_soft
+                mu_full[r0:r1] = y_field.reshape(r1 - r0, nx).astype(np.float32)
                 var_full[r0:r1] = var_n.reshape(r1 - r0, nx).astype(np.float32)
             else:
                 mu_full[r0:r1] = scaler.inverse(pred["mu"].cpu().numpy().squeeze()).reshape(r1 - r0, nx).astype(np.float32)

@@ -207,8 +207,10 @@ def main():
             amt = np.maximum(scaler.inverse_mean(mu_n, var_n), 0.0)
             p_occ = np.atleast_1d(np.clip(p_occ, 0.0, 1.0))
             amt = np.atleast_1d(amt)
-            y_hat = p_occ * amt
+            y_soft = p_occ * amt
             y_hard = np.where(p_occ >= 0.5, amt, 0.0)
+            use_hard = (var == "snow_mean") and bool(cfg.get("smacnp", {}).get("snow_hard_gate", False))
+            y_hat = y_hard if use_hard else y_soft
             diag = (p_occ, amt, df_tgt["value"].to_numpy(dtype=np.float64) > 1e-6)
         else:
             y_hat = scaler.inverse(pred["mu"].cpu().numpy().squeeze())

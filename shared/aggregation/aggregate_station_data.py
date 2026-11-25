@@ -12,7 +12,9 @@ per-batch parquet files if fastparquet is unavailable.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -32,7 +34,7 @@ BATCH_SIZE = 40
 
 def _expected_columns(targets: dict, time_col: str) -> list[str]:
     """Fixed schema so every batch has the same columns for fastparquet append."""
-    cols = ["station_name", time_col]
+    cols = ["station_id", "station_name", time_col]
     for spec in targets.values():
         cols.extend(spec["output_names"])
     cols.append("inside_domain")
@@ -58,10 +60,28 @@ def _parquet_engine() -> str:
         )
 
 
+
+def _agg_one(task: tuple) -> pd.DataFrame:
+    """Process exactly one station. Returns empty frame on skip/failure."""
+    parquet_path, station_name, station_id, targets, resolution, seasonal_mode = task
+    try:
+        return process_station_parquet(
+            parquet_path=Path(parquet_path),
+            station_name=station_name,
+            station_id=station_id,
+            targets=targets,
+            resolution=resolution,
+            seasonal_mode=seasonal_mode,
+        )
+    except Exception as exc:
+        print(f"  [ERROR] {station_name}: {exc}", flush=True)
+        return pd.DataFrame()
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--resolution", required=True,
-                   choices=["daily", "weekly", "monthly", "half_hourly", "seasonal"])
+                   choices=["daily", "weekly", "monthly", "six_hourly", "half_hourly", "seasonal"])
     p.add_argument("--seasonal_mode", default="across_years",
                    choices=["across_years", "per_year"])
     p.add_argument("--filter", default="all", choices=["all", "day", "night"])
@@ -164,29 +184,38 @@ def main():
         n_rows += len(df)
         print(f"  wrote batch: {len(df):,} rows (total {n_rows:,})", flush=True)
 
+    # One row per physical station. Prefer station_id; fall back to station_name.
+    key = "station_id" if "station_id" in metadata.columns else "station_name"
+    before = len(metadata)
+    metadata = metadata.drop_duplicates(subset=[key], keep="first").reset_index(drop=True)
+    if len(metadata) < before:
+        print(f"deduped overview on {key}: {before} -> {len(metadata)}", flush=True)
+
+    tasks = []
     for _, row in metadata.iterrows():
-        station = row["station_name"]
+        station = str(row["station_name"])
         parquet_path = data_dir / row["parquet"]
         if not parquet_path.exists():
             print(f"  [SKIP] {station} - file not found", flush=True)
             continue
+        sid = str(row["station_id"]) if "station_id" in row and pd.notna(row["station_id"]) else None
+        tasks.append((str(parquet_path), station, sid, targets, resolution, args.seasonal_mode))
 
-        print(f"Processing: {station} ...", end=" ", flush=True)
-        df = process_station_parquet(
-            parquet_path=parquet_path,
-            station_name=station,
-            targets=targets,
-            resolution=resolution,
-            seasonal_mode=args.seasonal_mode,
-        )
-        if df.empty:
-            print("no usable data", flush=True)
-            continue
-        print(f"ok ({len(df)} rows)", flush=True)
-        batch.append(df)
-        n_stations += 1
-        if len(batch) >= batch_size:
-            flush()
+    n_workers = max(1, (os.cpu_count() or 2) - 1)
+    print(f"aggregating {len(tasks)} unique stations with {n_workers} workers", flush=True)
+
+    with ProcessPoolExecutor(max_workers=n_workers) as ex:
+        futures = [ex.submit(_agg_one, task) for task in tasks]
+        for i, fut in enumerate(as_completed(futures), 1):
+            df = fut.result()
+            if df is None or df.empty:
+                continue
+            batch.append(df)
+            n_stations += 1
+            if len(batch) >= batch_size:
+                flush()
+            if i % 100 == 0:
+                print(f"  processed {i}/{len(tasks)}", flush=True)
 
     flush()
 

@@ -147,6 +147,15 @@ def build_field(
     return df
 
 
+
+def hyper_source(cfg: dict | None, var: str) -> str:
+    """Return the variable whose tuned hypers should be used. Missing map or key → self."""
+    if not cfg:
+        return var
+    parents = cfg.get("variable_parents") or {}
+    return str(parents.get(var, var))
+
+
 def global_params_path(time_res: str, var: str) -> Path:
     from paths import get_idw_tuned_params_path
     return get_idw_tuned_params_path(var, time_res)

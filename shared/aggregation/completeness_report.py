@@ -25,30 +25,35 @@ VARS = ("temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean", "slr", "
 MIN_STATIONS = 10
 TRACE = {
     "precip_sum": {
+        "six_hourly": 0.2,
         "half_hourly": 0.05,
         "daily": 0.1,
         "weekly": 0.7,
         "monthly": 1.0,
     },
     "snow_mean": {
+        "six_hourly": 0.5,
         "half_hourly": 0.5,
         "daily": 0.5,
         "weekly": 1.0,
         "monthly": 1.0,
     },
     "slr": {
+        "six_hourly": 2.0,
         "half_hourly": 2.0,
         "daily": 2.0,
         "weekly": 2.0,
         "monthly": 2.0,
     },
     "swe": {
+        "six_hourly": 1.0,
         "half_hourly": 1.0,
         "daily": 1.0,
         "weekly": 1.0,
         "monthly": 1.0,
     },
     "snow_density": {
+        "six_hourly": 50.0,
         "half_hourly": 50.0,
         "daily": 50.0,
         "weekly": 50.0,
@@ -64,6 +69,7 @@ def parse_times(df: pd.DataFrame, time_res: str) -> pd.Series:
         "weekly": "year_week",
         "daily": "date",
         "monthly": "year_month",
+        "six_hourly": "timestamp",
         "half_hourly": "timestamp",
     }.get(time_res)
     if col and col in df.columns:

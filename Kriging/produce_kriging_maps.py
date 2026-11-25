@@ -29,6 +29,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from shared.map_io import save_map_with_partials
+from kriging_data import hyper_source
 from paths import (
     get_interpolated_map_path,
     get_kriging_model_path,
@@ -117,7 +118,8 @@ def main():
 
     for var in variables:
         panel = load_panel(cfg, var)
-        tuned = load_tuned(var, time_res)
+        src = hyper_source(cfg, var)
+        tuned = load_tuned(src, time_res)
         if args.rh_t_mode:
             tuned["rh_t_mode"] = args.rh_t_mode
         kcfg_preview = cfg_to_kriging(cfg, tuned)

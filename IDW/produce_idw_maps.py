@@ -29,7 +29,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from idw_core import get_valid_targets, interpolate_idw
-from idw_data import load_config, load_global_params, load_panel
+from idw_data import load_config, load_global_params, load_panel, hyper_source
 from shared.map_io import save_map_with_partials
 from paths import get_interpolated_map_path, get_master_grid_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_time_res, variables_from_cfg
@@ -106,7 +106,8 @@ def main():
             if args.months and args.months != "all":
                 from idw_data import subset_times
                 panel = subset_times(panel, args.months)
-            params = load_global_params(time_res, var)
+            src = hyper_source(cfg, var)
+            params = load_global_params(time_res, src)
 
             out_file = get_interpolated_map_path(
                 "IDW", domain, var, res,

@@ -29,6 +29,7 @@ import yaml
 from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
+from rfsi_core import hyper_source
 from paths import (
     get_rfsi_tuned_params_path,
     get_aggregated_data_path,
@@ -126,7 +127,8 @@ def run_variable(cfg, var, fit_splits, score_splits, max_stations, checkpoint_ev
                  n_folds=0, months=None, pack=None, max_times: int = 0):
     rfsi_cfg = cfg.get("rfsi", {})
     tuned = {}
-    tpath = get_rfsi_tuned_params_path(var, cfg["time_resolution"])
+    src = hyper_source(cfg, var)
+    tpath = get_rfsi_tuned_params_path(src, cfg["time_resolution"])
     if tpath.exists():
         with open(tpath, "r", encoding="utf-8") as f:
             tuned = yaml.safe_load(f) or {}

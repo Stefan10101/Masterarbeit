@@ -18,7 +18,9 @@ Run from CODE/:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -41,12 +43,34 @@ HS_COL = "snow_height"
 P_COL = "precipitation"
 
 
+
+def _slr_one(task: tuple) -> tuple[str, pd.DataFrame, pd.DataFrame]:
+    """One station. Returns (name, hh, daily). Empty frames if unusable."""
+    path, name = task
+    try:
+        df = load_qc_station(Path(path))
+        if df.empty or HS_COL not in df.columns or P_COL not in df.columns:
+            return name, pd.DataFrame(), pd.DataFrame()
+        if df[HS_COL].notna().sum() == 0 or df[P_COL].notna().sum() == 0:
+            return name, pd.DataFrame(), pd.DataFrame()
+        hh, day = slr_for_station(df)
+        if not hh.empty:
+            hh = hh.rename(columns={"time": "timestamp"})
+            hh["station_name"] = name
+        if not day.empty:
+            day["station_name"] = name
+        return name, hh, day
+    except Exception as exc:
+        print(f"  [ERROR] {name}: {exc}", flush=True)
+        return name, pd.DataFrame(), pd.DataFrame()
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument(
         "--time-resolution",
         nargs="*",
-        default=["daily", "weekly", "half_hourly"],
+        default=["daily", "weekly", "six_hourly", "half_hourly"],
         choices=[r for r in TIME_RESOLUTIONS if r != "monthly"],
     )
     p.add_argument("--dry-run", action="store_true")
@@ -180,31 +204,32 @@ def main():
     if meta_path.exists():
         meta = pd.read_csv(meta_path)
         sid = _station_col(meta)
-        n = 0
+        before = len(meta)
+        meta = meta.drop_duplicates(subset=[sid], keep="first").reset_index(drop=True)
+        if len(meta) < before:
+            print(f"deduped overview on {sid}: {before} -> {len(meta)}", flush=True)
+        tasks = []
         for _, row in meta.iterrows():
-            if args.max_stations is not None and n >= args.max_stations:
-                break
             path = _resolve_parquet(raw_root, row)
             if path is None:
                 continue
-            df = load_qc_station(path)
-            if df.empty or HS_COL not in df.columns or P_COL not in df.columns:
-                continue
-            if df[HS_COL].notna().sum() == 0 or df[P_COL].notna().sum() == 0:
-                continue
-            n += 1
-            n_hs_p += 1
-            hh, day = slr_for_station(df)
-            name = str(row[sid])
-            if not hh.empty:
-                hh = hh.rename(columns={"time": "timestamp"})
-                hh["station_name"] = name
-                slr_hh_parts.append(hh)
-            if not day.empty:
-                day["station_name"] = name
-                slr_day_parts.append(day)
-            if n % 25 == 0:
-                print(f"  slr stations {n}", flush=True)
+            tasks.append((str(path), str(row[sid])))
+        if args.max_stations is not None:
+            tasks = tasks[: args.max_stations]
+        n_workers = max(1, (os.cpu_count() or 2) - 1)
+        print(f"SLR on {len(tasks)} unique stations with {n_workers} workers", flush=True)
+        with ProcessPoolExecutor(max_workers=n_workers) as ex:
+            futures = [ex.submit(_slr_one, task) for task in tasks]
+            for i, fut in enumerate(as_completed(futures), 1):
+                name, hh, day = fut.result()
+                if not hh.empty or not day.empty:
+                    n_hs_p += 1
+                if not hh.empty:
+                    slr_hh_parts.append(hh)
+                if not day.empty:
+                    slr_day_parts.append(day)
+                if i % 100 == 0:
+                    print(f"  slr processed {i}/{len(tasks)}", flush=True)
         print(f"SLR co-located stations={n_hs_p}", flush=True)
     else:
         print("WARNING no stations_overview.csv — SLR skipped, SWE still from daily parquet", flush=True)
@@ -276,7 +301,7 @@ def main():
             extra["slr"] = np.nan
             out = merge_columns(base, extra, ["station_name", "year_week"])
 
-        elif res == "half_hourly":
+        elif res in ("six_hourly", "half_hourly"):
             tcol = "timestamp" if "timestamp" in base.columns else "time"
             extra = base[["station_name", tcol]].drop_duplicates()
             extra[tcol] = match_timestamp(extra[tcol], base[tcol])

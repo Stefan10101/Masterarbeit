@@ -11,6 +11,15 @@ import numpy as np
 import pandas as pd
 import yaml
 
+def hyper_source(cfg: dict | None, var: str) -> str:
+    """Return the variable whose tuned hypers should be used. Missing map or key → self."""
+    if not cfg:
+        return var
+    parents = cfg.get("variable_parents") or {}
+    return str(parents.get(var, var))
+
+
+
 CODE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE_DIR))
 

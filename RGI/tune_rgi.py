@@ -28,6 +28,7 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from rgi_data import hyper_source
 from paths import get_rgi_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_timestamps
 from shared.splits.evaluation_sets import (
@@ -124,6 +125,18 @@ def _write_tuned(var, time_res, payload: dict) -> Path:
 
 
 def run_variable(cfg, var, phase: str):
+    src = hyper_source(cfg, var)
+    if src != var:
+        parent = get_rgi_tuned_params_path(src, cfg["time_resolution"])
+        child = get_rgi_tuned_params_path(var, cfg["time_resolution"])
+        if parent.exists():
+            child.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(parent, child)
+            print(f"[{var}] inherited hypers from {src}")
+        else:
+            print(f"[{var}] parent {src} has no tuned file yet — skipping")
+        return
     # Fresh trial log per variable (was previously accumulating across variables).
     cfg["_trials"] = []
     panel = attach_extras(load_panel(cfg, var), cfg, var)

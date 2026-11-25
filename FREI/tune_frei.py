@@ -25,6 +25,7 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from frei_data import hyper_source
 from paths import get_frei_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, cap_jobs, variables_from_cfg, cap_timestamps
 from shared.splits.evaluation_sets import (
@@ -243,6 +244,18 @@ def main():
     jobs = max(1, int(args.jobs))
 
     for var in variables:
+        src = hyper_source(cfg, var)
+        if src != var:
+            parent = get_frei_tuned_params_path(src, time_res)
+            child = get_frei_tuned_params_path(var, time_res)
+            if parent.exists():
+                child.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(parent, child)
+                print(f"[{var}] inherited hypers from {src}")
+            else:
+                print(f"[{var}] parent {src} has no tuned file yet — skipping")
+            continue
         panel = load_panel(cfg, var)
         from shared.splits.evaluation_sets import apply_evaluation_protocol
         tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)

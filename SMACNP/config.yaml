@@ -5,7 +5,25 @@ time_resolution: monthly
 start_date: "2020-01-01"
 end_date: "2025-12-31"
 resolutions_to_process: [500]
-variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
+variables_to_process:
+  - precip_sum
+  - temp_mean
+  - temp_min
+  - temp_max
+  - wind_mean
+  - wind_max
+  - rh_mean
+  - snow_mean
+  - snow_max
+  - snow_min
+  - slr
+  - swe
+variable_parents:
+  temp_min: temp_mean
+  temp_max: temp_mean
+  wind_max: wind_mean
+  snow_max: snow_mean
+  snow_min: snow_mean
 overwrite_maps: true
 aggregation:
   weekly:
@@ -18,6 +36,7 @@ aggregation:
     time_col: timestamp
 smacnp:
   two_step_vars: ["precip_sum", "snow_mean"]
+  snow_hard_gate: true
   r_dim: 64
   w_dim: 256
   v_dim: 512
@@ -41,7 +60,7 @@ smacnp:
   seed: 42
   device: auto
   search:
-    k_localized: [8, 16, 32]
+    k_localized: [8, 16, 32, 64]
     hidden_size: [256, 512]
 covariates:
   elev: true

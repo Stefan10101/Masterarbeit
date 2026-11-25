@@ -37,6 +37,7 @@ from shared.splits.evaluation_sets import (
     load_early_stop_times, early_stop_kind,
 )
 from kriging_data import (
+    hyper_source,
     attach_pack_terrain,
     attach_temperature,
     compute_block,
@@ -195,6 +196,18 @@ def _eval_grid(panel, var, cfg, n_folds, locked: dict, varying: list[dict], labe
 
 def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
                  rh_t_mode=None, max_times=400, jobs: int = 1):
+    src = hyper_source(cfg, var)
+    if src != var:
+        parent = get_kriging_tuned_params_path(src, cfg["time_resolution"])
+        child = get_kriging_tuned_params_path(var, cfg["time_resolution"])
+        if parent.exists():
+            child.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(parent, child)
+            print(f"[{var}] inherited hypers from {src}")
+        else:
+            print(f"[{var}] parent {src} has no tuned file yet — skipping")
+        return
     panel = load_panel(cfg, var)
     # Per-timestamp: train + tune, drop held-out. Fixed tune-targets used for scoring.
     tagged, _, _, _ = apply_evaluation_protocol(panel, variable=var)

@@ -26,6 +26,7 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from rfsi_core import hyper_source
 from paths import (
     get_aggregated_data_path,
     get_domain_stations_path,
@@ -510,6 +511,18 @@ def main():
     print(f"  variables {wanted}")
     print("=" * 72)
     for var in wanted:
+        src = hyper_source(cfg, var)
+        if src != var:
+            parent = get_rfsi_tuned_params_path(src, cfg["time_resolution"])
+            child = get_rfsi_tuned_params_path(var, cfg["time_resolution"])
+            if parent.exists():
+                child.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(parent, child)
+                print(f"[{var}] inherited hypers from {src}")
+            else:
+                print(f"[{var}] parent {src} has no tuned file yet — skipping")
+            continue
         print(f"\n{'=' * 60}\n{var}")
         n_splits = 2 if args.quick else args.n_splits
         run_variable(cfg, var, args.cluster_method, n_splits, quick=args.quick,

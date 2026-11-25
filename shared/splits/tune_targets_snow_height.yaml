@@ -1,264 +1,267 @@
 tune_targets:
 - AIX EN PROVENCE
-- AYZE
-- Acceglio Collet
-- Achenkirch
-- Ackernalm
-- Adamsberg
-- Aholfing Bayern
-- Altusried-Muthmannshofen Bayern
-- Anger-Stoißberg Bayern
-- Anras
-- Aulendorf-Blönried Baden-Württemberg
-- Aßling Bayern
-- BALE-MULHOUSE
-- BARNAS RAD
-- BEAUFORT-SUR-DORON
-- Babenhausen Bayern
+- ALBERTVILLE
+- ARBENT
+- Alp Calasa
+- Alpe di Röd
+- Altdorf
+- Altshausen Baden-Württemberg
+- BELLECOTE-NIVOSE
+- BOURDEAUX
 - Bardonecchia Pranudin
-- Bessans
-- Bodmerchumma
-- Bonndorf/Schwarzwald Baden-Württemberg
-- Boos Bayern
-- Brandenberg
-- Breitnau Baden-Württemberg
-- Buchenberg-Kreuzthal Bayern
-- Bärentälli
-- CHAPELLE-EN-VALGAUDEMAR
-- COUBLEVIE
-- Caluso
-- Camparient
-- Casera Coltrondo
-- Chasseral
-- Chieming Bayern
+- Bardonecchia-Preric.
+- Bayersoien, Bad Bayern
+- Belalp
+- Biasca
+- Biberbach-Markt Bayern
+- Bischofswiesen-Loipl Bayern
+- Blumberg-Randen Baden-Württemberg
+- Boden
+- Bogen-Pfelling Bayern
+- Boves-Casc.Borelli
+- Brannenburg-Degerndorf Bayern
+- Breiter Grieskogel Schneestation
+- CERVIERES
+- CHARQUEMONT
+- CHISSEY-LES-MACON
+- Campomolon
+- Chenau
 - Chüebodensee
-- Combatzeline
-- DOLE
-- Damüls-Herte
-- Deisenhofen, Kreis München Bayern
-- Diedamskopf_automatisch
-- Donauwörth-Osterweiler Bayern
-- Elsendorf-Horneck Bayern
-- Engelberg
-- Engstligenalp
-- Etang de Trente Pas
-- Fadner Alm - Malga Fadner
-- Falkaunsalpe
-- Flattnitz
-- Forstinning Bayern
-- Franz-Senn-Hütte Kl Horntal
-- Friedrichshafen-Unterraderach Baden-Württemberg
-- GRAND BORNAND
-- Garmisch-Partenkirchen Bayern
-- Geisingen Baden-Württemberg
-- Gerola Alta Pescegallo
-- Gilching Bayern
-- Gornergratsee
-- Gottfrieding Bayern
-- Graz Straßgang
-- Gresse en Vercors
-- Grubigstein Schneestation
-- Görisried Bayern
+- Colle Bercia
+- Courchevel
+- Dietersburg Bayern
+- Disentis
+- EPENOY
+- Ebersberg-Halbing Bayern
+- Eggenfelden Bayern
+- Erbach (Alb-Donau-Kreis) Baden-Württemberg
+- Erdweg Bayern
+- Eselrücken
+- FRAISANS
+- Fahrenzhausen Bayern
+- Fahy
+- Ferlach
+- Fochsen
+- Forno Alpi Graie
+- Färmel
+- Fürstenfeld
+- GETS (LES)
+- GRESSE
+- Gatschiefer
+- Gleisdorf
+- Graglia
+- Graun_Schöneben
+- Grosio Diga Fusino
+- Gschletteregg
+- Gschlössboden
+- Gösgen
+- Haag, Kreis Mühldorf Bayern
+- Haarbach-Wolfakirchen Bayern
+- Hagelstadt Bayern
 - Hall bei Admont
-- Heidenheim-Hechlingen Bayern
-- Hengersberg-Unterfrohnstetten Bayern
-- Hermaringen-Allewind Baden-Württemberg
-- Hochfilzen
-- ISOLA 2000
-- Ils Plauns
+- Hechingen Baden-Württemberg
+- Heubach/Ostalb Baden-Württemberg
+- Hohenstein-Bernloch Baden-Württemberg
+- Hollenbach/Bayern-Schönbach Bayern
+- Immenstadt-Reute Bayern
 - Imst-Obermarkter Alm
-- Irdning-Gumpenstein
-- Irschenberg-Kasthub Bayern
-- Isen-Westach Bayern
-- Karerpass
-- Kaunertal-Vergötschen
-- Kelheim-Thaldorf Bayern
-- Kreuzweg
-- Krün Bayern
-- LA GIETTAZ
-- LABERGEMENT
-- LE CHEVRIL-NIVOSE
-- LE TOUR BALME
-- LYON-BRON
-- Ladurns
-- Landeck
+- Jachenau-Tannern Bayern
+- Kappl Spidur Alpe
+- Kelheim Bayern
+- Kitzbühel
+- Kitzbüheler Horn Schneestation
+- Konstanz Baden-Württemberg
+- Kreuth Bayern
+- Kreuth-Glashütte Bayern
+- Kötschach-Mauthen
+- L Alpe d Huez (SATA)
+- L'Ecreuleuse
+- LA FLEGERE
+- LE TOUR NIVO
+- LES CARROZ KEDEUSAZ
+- LOUBARESSE
+- La Dôle
+- La Rosiere
+- Lai Verd
+- Landeggalm
+- Langenbach Bayern
+- Langenneufnach-Unterrothan Bayern
 - Lans en Vercors
-- Lanzada Campo Moro
-- Larecchio
-- Laterns-Gapfohl
-- Le Corbier
-- Lenzkirch-Ruhbühl Baden-Württemberg
-- Les Gets
-- Lienz
-- Loibl Tunnel
-- Loiching Bayern
-- Luzern
-- MAICHE
-- MAZAN ABBAYE RAD
-- MONTAGNIEU
+- Les 2 ALpes Jandri
+- Leutkirch-Herlazhofen Baden-Württemberg
+- Lottstetten-Nack Baden-Württemberg
+- Löffingen-Dittishausen Baden-Württemberg
+- MILLEFONTS-NIVOSE
+- MONTGENEVRE_NIVO
 - MOUTHE
-- Malga Tramin - Val Sarentino
-- Meribel Mottaret
-- Mering (Bauhof) Bayern
-- Mertingen Bayern
+- MOUTIERS
+- Macugnaga rifugio Zamboni
+- Macugnaga-Pecetto
+- Malga Larici
+- Malga Senta
+- Marienbergalm
+- Melag_Pratznerberg
+- Mengen-Ennetach Baden-Württemberg
 - Mittersill
+- Mondsee
+- Monte Tomba
+- Moos,Kr. Deggendorf-Maxmühle Bayern
 - Motta Bianca
-- Murnau Bayern
-- Nassereither Alm
-- Nauders Ganderbild
-- Oberried/Baden Baden-Württemberg
-- Ottobeuren Bayern
-- PELVOUX
-- PRA LOUP_NIVO
-- PUY ST VINCENT_NIVO
-- Palu'
-- Pfarrkirchen Bayern
-- Piding Bayern
-- Pilsting-Bäckermühle Bayern
-- Plaffeien
-- Porzehütte
+- Müllheim Baden-Württemberg
+- München-Stadt Bayern
+- Nenzinger Himmel
+- Nyon / Changins
+- Oberer Stelligletscher
+- Oberstdorf Bayern
+- Oberstdorf-Rohrmoos Bayern
+- Ochsenhausen Baden-Württemberg
+- Olmet
+- Oron
+- PUY-ST-VINCENT
+- Palling-Lampertsham Bayern
+- Pantano d'Avio
+- Passo Falzarego
+- Pens_Tramintal
+- Pfullendorf Baden-Württemberg
+- Pian Giasset
+- Pian Grand
+- Piz la Ila
+- Pleiskirchen Bayern
+- Plojen
+- Poschiavo / Robbia
 - Prali-Villa
-- Predigberg Schneestation
-- Predoi-Merbalm
-- Priero-Casc.Borgnia
-- Proveis_Samerberg
-- Pörnbach-Puch Bayern
-- Radstadt-Tandalier
-- Ramsau am Dachstein
-- Raubling-Pfraundorf Bayern
-- Ravaischer Salaas
-- Reutte
-- Rifflsee Talstation Grubenkopf
-- Rot an der Rot-Buch Baden-Württemberg
-- Rottweil Baden-Württemberg
-- S.Giacomo Monno
-- SAINT-VERAND
-- SAMOENS
-- SERRE CHE-CHANTEMERLE_NIVO
-- SIMARD
-- ST JEAN D'ARVES_SAPC
-- ST-MARCEL-LES-V-INRAE
-- ST-PIERRE DE SOUCY
+- Preda
+- RESTEFOND-NIVOSE
+- Ramsau-Schwarzeck/Schmuck Bayern
+- Reimlingen Bayern
+- ST-ALBAN DES HURTIERES
+- ST-BARTHELEMY-V_SAPC
+- ST-DIDIER-BEAUJ
+- ST-PIERRE-ST-JEAN
 - Saalbach
-- Salbertrand-Graviere
-- Saulgau, Bad-Bolstern Baden-Württemberg
-- Schlicker Alm
 - Schmidigen-Bidmeren
-- Schussenried, Bad-Olzreute Baden-Württemberg
-- Schwäbisch Gmünd-Weiler Baden-Württemberg
-- Schüpfheim
-- Scuol
-- Seewli
-- Simbach/Inn Bayern
-- Simplon-Dorf
+- Schäftlarn-Kloster Schäftlarn Bayern
+- See im Paznaun
+- Serfaus Masner
+- Sibratsgfäll-Rindberg
 - Solco
-- Sommeiller
+- Solda Camponeve Madricio
 - Sonnblick
 - Sontheim Bayern
+- Speicherteich Panorama
 - St.Anton am Arlberg
-- Stetten-Frohnstetten Baden-Württemberg
-- Tirano Monte Masuccio
-- Titlisboden
-- Trochtelfingen-Hausen an der Lauchert Baden-Württemberg
+- Steinberg am Rofan
+- Steingaden-Lauterbach Bayern
+- Steinkirchen-Hofstarring Bayern
+- Stolzalpe
+- Sölden
+- TENCIN
+- Taufkirchen/Vils-Baum Bayern
+- Tavernole sul Mella Monte Guglie
+- Telfes im Stubai
+- Teststation Albula
+- Titisee-Neustadt-Waldau Baden-Württemberg
+- Todtmoos Baden-Württemberg
+- Trüttlisbergpass
+- USINENS SA
+- Ulmerhütte
+- Unterföhring Bayern
+- Usseglio-Malciausia
 - Utting-Achselschwang Bayern
-- VALLORCINE
-- VALLORCINE_PLAN-DROIT
-- VAUJANY
-- VAULX
-- Val Cenis (La Berche)
-- Val Frejus
+- VACHERESSE AUXI
+- VAUJANY-NIVO
+- VILLAR ST PANCRACE
 - Valdieri-Terme
-- Valle Argentera
-- Veddasca Monte Cadrigna
-- Walchsee-Kaiserwinkl
-- Wasserburg/Inn-Reisach Bayern
-- Weitensfeld
+- Vogt Baden-Württemberg
+- Wangen/Allgäu-Schwaderberg Baden-Württemberg
+- Wielenbach (Demollstr.) Bayern
 - Wilde Krimml
-- Wildsee
 - Wurmannsquick-Egelsberg Bayern
-- Wutöschingen-Ofteringen Baden-Württemberg
-- Wörth/Oberpfalz -Kiefenholz Bayern
-- Zermatt
+- Zwiefalten Baden-Württemberg
+- Zürich / Affoltern
 donors_during_tune:
 - ABRIES_NIVO
 - AGNIERES-EN-DEVOLUY
 - AIGLETON-NIVOSE
 - AIGUILLES ROUGES-NIVOSE
-- ALBERTVILLE
 - ALBIEZ
 - ALLANT-NIVOSE
+- ALLOS_SAPC
+- ALPE-D'HUEZ
 - AMBERIEU
 - ANTIBES-GAROUPE
 - ANTRAIGUES
-- ARBENT
 - ARCHAMPS
 - ARVIEUX
 - ARVIEUX LA CHALP
 - ARVILLARD
 - AUPS
-- AURIS-EN-OISANS
 - AVIGNON
 - AVRIEUX
+- AYZE
 - Aadorf / Tänikon
 - Aalen-Unterrombach Baden-Württemberg
-- Abtei_Piz_La_Ila
 - Abtenau
 - Acceglio
+- Acceglio Collet
 - Achberg-Doberatsweiler Baden-Württemberg
-- Aibling, Bad-Ellmosen Bayern
+- Achenkirch
+- Ackernalm
+- Adelboden
+- Aholfing Bayern
 - Aigle
 - Aitrang Bayern
 - Alagna
 - Alagna-Bocchetta P.
 - Albano Vercellese
-- Alberschwende
 - Aldersbach-Kramersepp Bayern
 - Allentsteig
-- Alp Calasa
 - Alp Piänetsch
-- Alpbach
-- Alpe Cheggio
+- Alpbach Wiedersberger Horn
+- Alpe Devero
 - Alpe Veglia
-- Alpe di Röd
 - Alpetta
 - Alpler Tor
 - Alplhütte
-- Altdorf
 - Altenrhein
 - Altheim, Kreis Biberach Baden-Württemberg
 - Altmünster
 - Alto - Madonna del lago
 - Altomünster-Maisbrunn Bayern
-- Altshausen Baden-Württemberg
 - Altusried-Krugzell Bayern
+- Altusried-Muthmannshofen Bayern
 - Am Adamsberg (Hauptstation)
 - Amerang-Pfaffing Bayern
+- Ammerwald
 - Ampfing Bayern
 - Andechs-Erling Bayern
 - Andelsbuch-Niedere
+- Anger-Stoißberg Bayern
+- Anras
 - Aprica
 - Areches
+- Argentera
+- Arriach
 - Aschau-Innerkoy Bayern
-- Aschau-Stein Bayern
 - Assling-Compedal
 - Asti
 - Attenkam Bayern
 - Augsburg Bayern
-- Avoriaz
+- Aulendorf-Blönried Baden-Württemberg
 - Aying (Brauerei) Bayern
+- Aßling Bayern
+- BALE-MULHOUSE
 - BARCELONNETTE
-- BARREME
+- BARGEMON
+- BARNAS RAD
+- BEAUFORT-SUR-DORON
 - BEC DE L AIGLE
-- BELLECOTE-NIVOSE
 - BESANCON
 - BESSANS-CLIM
-- BEUIL-OBS
 - BONNEVAL-NIVOSE
-- BONNEVILLE
-- BOURDEAUX
 - BOURG ST MAURICE
 - BOZEL
-- Bad Bleiberg
+- Babenhausen Bayern
 - Bad Eisenkappel
 - Bad Ischl
 - Bad Radkersburg
@@ -266,154 +269,154 @@ donors_during_tune:
 - Balderschwang Bayern
 - Balingen-Bronnhaupten Baden-Württemberg
 - Balingen-Heselwangen Baden-Württemberg
+- Balme-Rifug.Gastaldi
 - Barcenisio
-- Bardonecchia Pian del Sole
-- Bardonecchia-Preric.
 - Bartiges Bödele
+- Barzio Piani di Bobbio
 - Basel / Binningen
 - Bassa di Nara
-- Bayersoien, Bad Bayern
-- Belalp
 - Benediktbeuern Bayern
-- Berchtesgaden Bayern
 - Berchtesgaden-Oberau Bayern
+- Berchtesgaden/Jenner Bayern
 - Bern / Zollikofen
 - Bernau-Goldbach Baden-Württemberg
-- Berwang
+- Bernbeuren-Prachtsried Bayern
+- Bessans
 - Beuron-Langenbrunn Baden-Württemberg
-- Biasca
 - Biberach an der Riß-Bergerhausen Baden-Württemberg
-- Biberbach-Markt Bayern
 - Bielmonte
-- Bischofswiesen-Loipl Bayern
-- Bischofswiesen-Winkl Bayern
 - Bissingen (Kläranlage) Bayern
 - Blaubeuren-Wennenden Baden-Württemberg
-- Blumberg-Randen Baden-Württemberg
+- Bobbio Pellice-C.Barant
 - Bobingen Bayern
 - Bockhorn/Oberbayern -Grünbach Bayern
-- Bogen-Pfelling Bayern
+- Bodmerchumma
 - Boll, Bad (Kläranlage) Baden-Württemberg
 - Boll, Bad Baden-Württemberg
 - Bombögn Schnee
+- Bonndorf/Schwarzwald Baden-Württemberg
 - Bonneval sur Arc
+- Boos Bayern
 - Bortelsee
 - Bosio-Cap.Marcarolo
-- Boves-Casc.Borelli
 - Bra-Museo Craveri
 - Brand
 - Brandberger Kolmhaus
-- Brannenburg-Degerndorf Bayern
 - Branzi Caserma Carabinieri
 - Breitenbrunn-Fürbuch Bayern
-- Breiter Grieskogel Schneestation
+- Breitnau Baden-Württemberg
 - Brenner
 - Breno Lago Della Vacca
 - Brentenjoch
 - Bric Castellaro
 - Bruck an der Mur
 - Bréona
+- Brünnsteinhaus Bayern
 - Buchenbach Baden-Württemberg
+- Buchenberg-Kreuzthal Bayern
 - Buchloe Bayern
 - Bullet / La Frétaz
 - Burgau Bayern
 - Burgbach Mauchele
 - Burgkirchen/Alz-Höresham Bayern
 - Burladingen-Hausen Baden-Württemberg
-- Bärgtälli
+- Bärenfall
+- Bärentälli
 - Büchlberg-Tannöd Bayern
 - CAP CAMARAT
 - CARPENTRAS
 - CEILLAC_NIVO
 - CESSY
-- CHAMONIX
+- CHAMBERY-AIX
 - CHAMONIX-OBS
-- CHARQUEMONT
+- CHAMROUSSE
 - CHATEL
 - CHATEL NIVO
-- CHISSEY-LES-MACON
 - CLUNY
 - CLUSAZ (LA)
 - COGNA
 - COL AGNEL-NIVOSE
 - COL DE PORTE-NIVOSE
 - COL DE ROSSATIERE
+- COL DE ROUSSET_SAPC
 - COL-DES-SAISIES
 - COLONNE
 - COMBLOUX
 - CONTAMINE-SUR- ARVE
 - CONTAMINES MJ
+- COUBLEVIE
 - COULANS
 - CRANCOT
 - CROS GEORAND
+- Caluso
+- Camparient
 - Campill_Kreuzkofeljoch
 - Campodolcino Alpe Motta
 - Campogrosso
-- Campomolon
 - Carisole
 - Carona Carisole
+- Carona Lago Fregabolgia
 - Case Pirli Ponte di Legno
+- Casera Coltrondo
 - Casera Doana-Razzo
 - Casera Palantina
 - Cassinello
 - Castelmagno
 - Cavargna
-- Ceresole Villa
 - Cham
 - Chamrousse Niverolles
-- Chateau Beaulard
-- Chenau
+- Chasseral
+- Chiematte
+- Chieming Bayern
 - Chiemsee-Herrenchiemsee Bayern
 - Chiesa in Valmalenco Alpe dell'
-- Chiesa in Valmalenco Funivia Ber
+- Château-d'Oex
 - Col dei Baldi
 - Col des Mosses
 - Col du Chasseral
-- Colle Bercia
 - Colle dell'Agnello
-- Colleretto Cast.-S.Elisabetta
 - Colms da Parsonz
+- Combatzeline
 - Conny Alm
-- Courchevel
+- Costa
 - Culmatsch
 - Cuneo Cascina Vecchia
 - DIVONNE ZA
+- DOLE
 - DORANS
 - Dachsberg-Wolpadingen Baden-Württemberg
 - Dachstein-Schladminger Gletscher
+- Damüls-Herte
 - Dasing Bayern
-- Davos
 - Davos Stilli (SLF)
 - Dawinalpe
 - Deggenhausertal-Azenweiler Baden-Württemberg
 - Deiningen Bayern
+- Deisenhofen, Kreis München Bayern
 - Dellach
 - Delémont
 - Deutschlandsberg
 - Deutschnofen_Obereggen
 - Dias
+- Diedamskopf_automatisch
 - Diedorf/Schwaben-Biburg Bayern
 - Dietenheim Baden-Württemberg
-- Dietersburg Bayern
 - Dießen/Ammersee-Dettenschwang Bayern
-- Diga del Chiotas
 - Dillingen/Donau-Fristingen Bayern
 - Donaueschingen-Wolterdingen Baden-Württemberg
+- Donauwörth-Osterweiler Bayern
+- Donin du Jour
 - Dorfen (Kläranlage) Bayern
-- Dornbirn
 - Dresdner Hütte
 - Döllach
 - EMBRUN
-- EPENOY
 - ESTENC_NIVO
 - EVIAN
 - EVIAN SA
-- Ebersberg-Halbing Bayern
+- Eberfing Bayern
 - Edolo Pantano d`Avio
-- Eggenfelden Bayern
 - Eggenthal-Grub Bayern
 - Eging am See-Rohrbachholz Bayern
-- Egling/Isar-Attenham Bayern
 - Egling/Paar-Heinrichshofen Bayern
 - Ehingen a. Ries (Schaffhäuser Hof) Bayern
 - Ehingen-Kirchen Baden-Württemberg
@@ -421,24 +424,23 @@ donors_during_tune:
 - Eichstätt-Landershofen Bayern
 - Eisenbach Baden-Württemberg
 - Eisenstadt Nordost
-- Eissee
 - Elferspitze - Cima Undici
 - Elferspitze Schneestation
+- Elsendorf-Horneck Bayern
 - Elsige
-- Elva
 - Emmingen-Liptingen Baden-Württemberg
+- Endorf, Bad-Jolling Bayern
+- Engelberg
 - Eppishausen-Haselbach Bayern
-- Erbach (Alb-Donau-Kreis) Baden-Württemberg
-- Erdweg Bayern
-- Eselrücken
 - Essenbach Bayern
+- Etang de Trente Pas
 - Ettal-Graswang Bayern
+- Ettal-Linderhof Bayern
 - Eurasburg-Freienried Bayern
 - Eurasburg/Obb.-Beuerberg Bayern
 - FLAINE_SAPC
-- FRAISANS
-- Fahrenzhausen Bayern
-- Fahy
+- Fadner Alm - Malga Fadner
+- Falkaunsalpe
 - Falkenberg,Kr.Rottal-Inn Bayern
 - Faschina
 - Faverghera
@@ -451,189 +453,193 @@ donors_during_tune:
 - Finningen (Brunnenmühle) Bayern
 - Finsing Bayern
 - Fisi
+- Fiss
 - Fiss Schneestation
-- Fiss Urgtal Schneestation
-- Fitteren
 - Flaine
+- Flattnitz
+- Flesch
 - Flintsbach/Inn-Asten Bayern
-- Flüelapass
-- Fochsen
 - Fontane
 - Forchach
 - Formazza-P.Camosci
 - Formazza-Ponte
-- Forno Alpi Graie
+- Forstinning Bayern
+- Franz-Senn-Hütte Kl Horntal
 - Frauenneuharting Bayern
 - Frauentobel
 - Fraxern
 - Freilassing Bayern
 - Freistadt
 - Fresach
+- Freschenhaus
 - Fribourg / Grangeneuve
+- Friedrichshafen-Unterraderach Baden-Württemberg
 - Friesach
-- Färmel
-- Fürstenfeld
 - Fürstenzell Bayern
-- GAILLARD
+- GALIBIER-NIVOSE
+- GAP BAYARD_NIVO
 - GIEZ
 - GILLY SUR ISERE
 - GIRON
 - GLANDAGE_SAPC
+- GRAND BORNAND
 - GRAND'COMBE-CHATELEU_SAPC
 - GRANDE PAREI-NIVOSE
-- GRENOBLE-CEA-RADOME
 - GRENOBLE-ST GEOIRS
 - GROISY_SAPC
 - GUILLAUMES-OBS
 - Gallreideschrofen
+- Galzig
 - Gammertingen Baden-Württemberg
 - Gamoarbach
 - Gampberg Schneestation
 - Gandegg
 - Gangkofen (Kläranlage) Bayern
-- Gardetta
 - Gargellen-Schafberg
-- Garmisch-Partenkirchen (Kanker) Bayern
-- Garmisch-Partenkirchen-Griesen Bayern
+- Garmisch-Partenkirchen Bayern
 - Gaschurn
 - Gaudeamushütte
 - Geiselhöring Bayern
 - Geisenfeld-Engelbrechtsmünster Bayern
+- Geisingen Baden-Württemberg
 - Genève / Cointrin
 - Geretsried (Feuerwehrschule) Bayern
+- Geretsried Bayern
+- Gerola Alta Pescegallo
 - Gerola-Pescegallo
 - Gibidum
-- Giggijoch
+- Gilching Bayern
 - Giltnasen
 - Ginzling
 - Giovo malga Waserfaller
-- Gleisdorf
+- Glacier de l'Evole
 - Goldried Kessel
+- Gornergratsee
 - Gossenkölle
+- Gottfrieding Bayern
 - Gottmadingen Baden-Württemberg
 - Grafenhausen/Hochschwarzwald Baden-Württemberg
 - Grafling Bayern
 - Grainau-Eibsee Bayern
-- Grand Cor
+- Grange Martina
 - Grassau Bayern
-- Graun_Schöneben
+- Graz Straßgang
 - Graz Thalerhof Flughafen
 - Grenchen
+- Gresse en Vercors
+- Gries
 - Gries im Sellrain
+- Griesneralm LWD
 - Grimsel Hospiz
-- Grosio Diga Fusino
-- Gschlössboden
+- Grubigstein Schneestation
+- Grünboden - Prati di Plan
 - Gsies_Pfinnalm
 - Guppen
+- Görisried Bayern
 - Görwihl-Burg Baden-Württemberg
-- Gösgen
 - Günzburg Bayern
 - Gütsch
 - Gütsch, Andermatt
 - HAUTELUCE
-- Haag, Kreis Mühldorf Bayern
-- Haarbach-Wolfakirchen Bayern
-- Hagelstadt Bayern
 - Hahnenkamm-Reutte
 - Hahnenkamm-Sonnenrast
 - Haimhausen-Ottershausen Bayern
 - Halblech-Trauchgau Bayern
-- Hanengretji
 - Hayingen-Anhausen Baden-Württemberg
-- Hechingen Baden-Württemberg
+- Heidenheim-Hechlingen Bayern
 - Heiligenberg/Tübingen Baden-Württemberg
 - Heldenstein-Weidenbach Bayern
 - Hendar Furggu
+- Hengersberg-Unterfrohnstetten Bayern
 - Hermagor
-- Heubach/Ostalb Baden-Württemberg
+- Hermaringen-Allewind Baden-Württemberg
 - Hindelang, Bad-Gailenberg Bayern
 - Hintere Fundusalm
 - Hinterriß
+- Hintertux
 - Hochgasser Schneestation
 - Hochhörndl
 - Hohe Munde Gipfel
 - Hohenpeißenberg Bayern
-- Hohenstein-Bernloch Baden-Württemberg
 - Hohenthann Bayern
-- Hollenbach/Bayern-Schönbach Bayern
 - Holzgau
 - Holzkirchen Bayern
 - Homad
 - Hörnli
 - Hüfingen-Fürstenberg Baden-Württemberg
+- ISOLA 2000
 - ISSANLAS
-- Immenstadt-Reute Bayern
+- Ils Plauns
+- Immenstadt Bayern
 - Ingolstadt (Flussmeisterstelle) Bayern
-- Innsbruck-Seegrube
 - Inzell Bayern
-- Inzinger Alm-Kaserboden
+- Irdning-Gumpenstein
+- Irschenberg-Kasthub Bayern
+- Isen-Westach Bayern
+- Itramen
 - JARRIER
 - JAUSIERS-ST ANNE
 - JONCHEREY
 - Jachenau-Obernach Bayern
-- Jachenau/Tölzer Land Bayern
 - Jamtalhütte
 - Jamtalhütte Schneestation
 - Jenbach
 - Jettenbach Bayern
 - Johannestal
+- Jostsee
 - Jöchlspitze
 - KIFFIS
 - Kals
-- Kals-Figol
+- Kals am Großglockner-Figol
 - Kanzelhöhe
 - Kappl Sinsenergampen
-- Kappl Spidur Alpe
+- Karerpass
 - Karlsbader Hütte
 - Karlshuld Bayern
 - Kaufbeuren-Oberbeuren Bayern
-- Kelheim Bayern
+- Kaunertal-Vergötschen
+- Kelheim-Thaldorf Bayern
 - Kempten Bayern
 - Kernhof-St. Aegyd am Neuwalde
 - Kiefersfelden-Gach Bayern
 - Kirchberg in Tirol
-- Kirchdorf in Tirol
-- Kitzbüheler Horn Schneestation
 - Kißlegg Baden-Württemberg
 - Kißlegg, Kr. Ravensburg Baden-Württemberg
 - Klagenfurt Flughafen
 - Klippeneck Baden-Württemberg
-- Kohlgrub, Bad (Rosshof) Bayern
-- Konstanz Baden-Württemberg
+- Kloangruebes
 - Koppigen
 - Kornat
 - Kraftisried Bayern
 - Krailling Bayern
-- Kreuth Bayern
-- Kreuth-Glashütte Bayern
+- Kreuzweg
 - Krimml
 - Kronburg Bayern
 - Krumbach
+- Krün Bayern
 - Kufstein
 - Köflach
 - Kölnbreinsperre
 - Kösching Bayern
 - Kössen
-- L Alpe d Huez (SATA)
 - L Alpe d Huez 2350
 - L Alpe du Grand Serre
-- L'Ecreuleuse
 - LA BALME SUR CERDON_SAPC
 - LA BOISSAUDE ROCHEJEAN
-- LA CLUSAZ
-- LA FLEGERE
+- LA FOUX D ALLOS_NIVO
+- LA GIETTAZ
 - LA GRAVE 3200 M
 - LA LECHERE_SAPC
 - LA MEIJE-NIVOSE
 - LA MOTTE SERVOLEX NOIRAY
 - LA MURE- RADOME
-- LA MURE-ARGENS
 - LA NORMA_SAPC
 - LA PESSE
 - LA PLAGNE_SAPC
 - LA SOUCHE
-- LAVALDENS
+- LABERGEMENT
 - LE BOUCHET_SAPC
+- LE CHEVRIL-NIVOSE
 - LE DRAMONT
 - LE FRASNOIS
 - LE GUA-NIVOSE
@@ -641,62 +647,58 @@ donors_during_tune:
 - LE PLENEY
 - LE RUSSEY
 - LE TOUR
-- LE TOUR NIVO
+- LE TOUR BALME
 - LES CARROZ
-- LES CARROZ KEDEUSAZ
 - LES CONTAMINES MONTJOIE
 - LES ECRINS-NIVOSE
 - LES FOURGS
 - LES ORRES
 - LES ORRES_NIVO
 - LES ROCHILLES-NIVOSE
+- LESCHERAINES
 - LEVIER_SAPC
-- LOUBARESSE
 - LUS L CROIX HTE
 - LYON TETE D'OR
+- LYON-BRON
 - LYON-ST EXUPERY
 - La Berarde
 - La Chaux-de-Fonds
 - La Colletta
-- La Dôle
 - La Fuorcla
 - La Plagne
-- La Rosiere
+- La Vallaccia 1
 - Lac des Vaux
-- Ladis-Neuegg
-- Lago Agnel
+- Ladurns
 - Lago Truzzo S. Giacomo Filippo
-- Lago del Pesce
-- Lago dietro la torre
-- Lai Verd
-- Landeggalm
+- Lampsenspitze Schneestation
+- Landeck
 - Lanersbach
 - Langen am Arlberg
-- Langenbach Bayern
 - Langenenslingen-Ittenhausen Baden-Württemberg
-- Langenneufnach-Unterrothan Bayern
 - Langquaid Bayern
+- Lanzada Campo Moro
 - Lanzada Palu00f9
 - Lanzada Passo Marinelli
+- Laucheren
 - Laufen/Obb.-Lebenau Bayern
 - Le Collet d Allevard
-- Le Grand Bornand
+- Le Corbier
 - Le Moléson
 - Leckfeldalm
 - Leibnitz-Wagna
 - Lenggries (Sylvenstein) Bayern
 - Lenggries Bayern
 - Lenggries-Vorderriss Bayern
-- Les 2 ALpes Jandri
-- Les 2 Alpes (Toura NE)
+- Lenzkirch-Ruhbühl Baden-Württemberg
 - Les Arcs
 - Les Charbonnières
+- Les Collines
 - Les Fontanesses
+- Les Gets
 - Les Karellis
 - Les Menuires
 - Les Saisies
 - Leutasch-Kirchplatzl
-- Leutkirch-Herlazhofen Baden-Württemberg
 - Limone Pancani
 - Lindau (Bodensee) Bayern
 - Linz Hörsching Flughafen
@@ -704,42 +706,44 @@ donors_during_tune:
 - Livigno La Vallaccia
 - Loassattel
 - Locarno / Monti
+- Lofer Ort
 - Lognan
-- Lottstetten-Nack Baden-Württemberg
+- Loibl Tunnel
+- Loiching Bayern
 - Loz
-- Lumpegna Nord
+- Luksch Alp
 - Lumpegna Süd
+- Luzern
 - Lämmerbichlalm
-- Löffingen-Dittishausen Baden-Württemberg
 - MACON
-- MALJASSET_NIVO
+- MAICHE
 - MARIGNANE
 - MARLIEUX
 - MAYRES
+- MAZAN ABBAYE RAD
 - MEAILLES_SAPC
 - MEDIERE
+- MEGEVE
+- MEYTHET
 - MIJOUX
-- MILLEFONTS-NIVOSE
 - MIMET
 - MIRABEL-AUX-BAR
 - MOGNARD
 - MOLINES EN QUEYRAS_NIVO
 - MONS
+- MONTAGNIEU
 - MONTCLAR_SAPC
 - MONTE CHERZ
 - MONTELIMAR
-- MONTGENEVRE_NIVO
-- MONTMELIAN
+- MOTTE-MOLINES
 - MOULINET
-- MOUTIERS
-- Macugnaga rifugio Zamboni
 - Macugnaga-Passo Moro
-- Macugnaga-Pecetto
 - Madrisa
+- Madritsch - Madriccio
 - Magadino / Cadenazzo
 - Maisach-Galgen Bayern
-- Malga Losch
 - Malga Pfinn - Casies
+- Malga Tramin - Val Sarentino
 - Mallersdorf-Pfaffenberg-Oberlindhart Bayern
 - Mallnitz
 - Malsburg-Marzell Baden-Württemberg
@@ -752,37 +756,36 @@ donors_during_tune:
 - Marsens
 - Mattighofen
 - Mayrhofen
-- Medrig-Zeinis
 - Mehring, Kr. Altötting-Niederholz Bayern
-- Melag_Pratznerberg
 - Memmingen Bayern
-- Mengen-Ennetach Baden-Württemberg
 - Mengkofen-Hofdorf Bayern
 - Merbalm - Malga Merbe
+- Meribel Mottaret
+- Mering (Bauhof) Bayern
+- Mertingen Bayern
 - Metten Bayern
 - Meßstetten-Appental Baden-Württemberg
 - Miesbach (Kläranlage) Bayern
 - Mindelheim Bayern
 - Mittelberg
+- Mittenwald-Buckelwiesen Bayern
 - Mittenwald/Isartal Bayern
-- Mondsee
+- Monno
 - Monte Baldo
 - Monte Grappa
-- Monte Tomba
+- Monte Piana
 - Moorenweis-Grunertshofen Bayern
-- Moos,Kr. Deggendorf-Maxmühle Bayern
 - Mooslandl
 - Mosesgipfel Schneestation
+- Murnau Bayern
 - Murtaröl
-- Muttekopfhütte
+- Mutten
 - Mälliga
 - Mällige
 - Mühldorf Bayern
 - Mühleberg
-- Müllheim Baden-Württemberg
 - München-Flughafen Bayern
 - München-Kirchtrudering Bayern
-- München-Stadt Bayern
 - Münsingen-Apfelstetten Baden-Württemberg
 - Münstertal Baden-Württemberg
 - NICE
@@ -792,11 +795,10 @@ donors_during_tune:
 - Nandlstadt Bayern
 - Napf
 - Nassenfels Bayern
+- Nassereither Alm
 - Nauders
-- Navis-Kerschbaumsiedlung
-- Nenzinger Himmel
+- Nauders Ganderbild
 - Nersingen-Oberfahlheim Bayern
-- Nesselwang Bayern
 - Neu-Ulm-Hausen Bayern
 - Neuburg/Kammel-Langenhaslach Bayern
 - Neufahrn Bayern
@@ -806,11 +808,9 @@ donors_during_tune:
 - Neustift/Milders
 - Niederstotzingen Baden-Württemberg
 - Norderberg Alm
-- Nual
-- Nyon / Changins
 - ORANGE
 - ORCIERES-NIVOSE
-- Oberammergau Bayern
+- ORNON
 - Oberbergkirchen-Schörging Bayern
 - Obere Firstalm/Schlierseer Berge Bayern
 - Obere Meiel
@@ -818,86 +818,82 @@ donors_during_tune:
 - Oberhaching-Laufzorn Bayern
 - Oberhaus Alm
 - Oberpframmern Bayern
+- Oberreute Bayern
+- Oberried/Baden Baden-Württemberg
 - Oberschleißheim Bayern
-- Oberstaufen-Thalkirchdorf Bayern
-- Oberstdorf Bayern
-- Oberstdorf-Birgsau Bayern
-- Oberstdorf-Rohrmoos Bayern
 - Obersöchering-Reinthal Bayern
 - Obervellach
 - Obing-Ilzham Bayern
-- Ochsenhausen Baden-Württemberg
 - Oetz
 - Oga-S.Colombano
-- Olmet
 - Oltre il Colle UNKNOWN
 - Opfenbach Bayern
-- Orelle
 - Ornella
-- Oron
 - Ortenburg Bayern
 - Ortstock Matt
 - Orzival
 - Osterhofen-Thundorf Bayern
+- Osterzell Bayern
 - Ottere
+- Ottobeuren Bayern
 - Owingen Baden-Württemberg
 - Oy-Mittelberg-Petersthal Bayern
 - Oy-Mittelberg/Grüntensee Bayern
 - PARPAILLON-NIVOSE
 - PEIRA CAVA
-- PELLAFOL-CHANEAUX
+- PELVOUX
 - PELVOUX ST ANTOINE_NIVO
 - PEONE
+- PERS JUSSY
 - PEYROLLES EN PROVENCE
 - PILAT GRAIX
 - PLAN AIGUILLE TMB
 - PONTARLIER
+- PRA LOUP_NIVO
 - PRALOGNAN LA VANOISE
 - PRAPOUTEL
-- PUY-ST-VINCENT
+- PUY ST VINCENT_NIVO
 - Paesana-Bric-Barsaia
-- Pantano d'Avio
+- Palanfre'
 - Passau-Maierhof Bayern
 - Payerne
-- Pens_Tramintal
 - Pentling-Matting Bayern
+- Pfarrkirchen Bayern
 - Pfronten-Rehbichel Bayern
-- Pfullendorf Baden-Württemberg
 - Pfunders_Stutzenalm
 - Pförring-Ettling Bayern
-- Pian Giasset
-- Pian Grand
 - Piani di Carrega
 - Piano del Simano
+- Piding Bayern
 - Piedicavallo
 - Pierres Fendues
+- Pilsting-Bäckermühle Bayern
 - Piotta
 - Pischgraben
 - Pitztaler Gletscher
-- Piz la Ila
 - Piz la Ila - Piz la Ila
-- Plang Bi
-- Pleiskirchen Bayern
-- Plojen
+- Plaffeien
 - Pocking Bayern
-- Pointe de Toules
 - Ponte di Legno Case Pirli
 - Ponte in Valtellina Lago Reguzzo
 - Pontechianale
 - Ponzone-Bric Berton
 - Porcaresc
 - Porta d'Es-cha
-- Poschiavo / Robbia
 - Pradazzo
+- Pragelato
 - Pragelato Tramp. Valle
-- Prags_Rossalm
+- Prati di Croda Rossa
 - Prati di Plan
-- Preda
 - Predanass
+- Predigberg Schneestation
 - Preitenegg
+- Priero-Casc.Borgnia
 - Primelod Hang
+- Proveis_Samerberg
 - Puitegg
 - Puoz Bass
+- Pörnbach-Puch Bayern
 - Pöttmes-Schnellmannskreuth Bayern
 - Pülschezza
 - REALLON _NIVO
@@ -909,68 +905,71 @@ donors_during_tune:
 - Rain am Lech Bayern
 - Rain am Lech-Wallerdorf Bayern
 - Raintalquelle
-- Ramsau-Schwarzeck/Schmuck Bayern
+- Ramsau am Dachstein
 - Ratschings_Wasserfaller_Alm
+- Raubling-Pfraundorf Bayern
 - Raucheggen Schneestation
 - Rauthhütte
+- Ravaischer Salaas
 - Regensburg-Burgweinting Bayern
 - Reichersberg
-- Reimlingen Bayern
 - Reit im Winkl (Kaiserweg) Bayern
-- Reit im Winkl-Groißenbach Bayern
 - Rendl Riffel 1
 - Rettenbachferner
 - Rettenberg-Kranzegg Bayern
+- Reutte
 - Rheinfelden Baden-Württemberg
 - Ried im Innkreis
 - Riedenburg Bayern
 - Rientallücke
 - Rif.Havis De Giorgio
+- Rifflsee Talstation Grubenkopf
 - Rifugio Vaccarone
 - Rohrbach
 - Rosenheim Bayern
 - Rosone
 - Rossbänke - Pian dei Cavalli
-- Rosskar
-- Rotschalp
+- Rot an der Rot-Buch Baden-Württemberg
 - Rottenburg/Niederbayern-Niedereulenbach Bayern
 - Rotthalmünster Bayern
+- Rottweil Baden-Württemberg
 - Rotwandwiesen - Prati di Croda Rossa
-- Ruhpolding (Kläranlage) Bayern
 - Ruhpolding-Seehaus Bayern
-- Ruoggis, Unter Stafel
 - Rupperslaui
-- Russisprung
 - Rünenberg
 - SAINT-ETIENNE
+- SAINT-VERAND
+- SALLANCHES
+- SAMOENS
 - SANCEY-LE-GRAND
+- SANNES
 - SEDERON
+- SERRE CHE-LE MONETIER_NIVO
 - SERVOZ
-- ST AUBAN
+- SIMARD
+- ST CHRISTOL
 - ST CHRISTOPHE EN OISANS_SAPC
 - ST ETIENNE-BOUTHEON
 - ST FIRMIN
 - ST FRANCOIS LONG
 - ST HILAIRE-NIVOSE
-- ST JEAN-ST-NICOLAS
+- ST JEAN D'ARVES_SAPC
 - ST ROMAN-DIOIS
 - ST SATURNIN LES APT
 - ST SIGISMOND
-- ST VERAN RM
+- ST SORLIN D'ARVES
 - ST-AGREVE RAD
-- ST-ALBAN DES HURTIERES
 - ST-ANTHEME
-- ST-BARTHELEMY-V_SAPC
-- ST-BAUDILLE
 - ST-CHAMOND-P
 - ST-CHRISTOPHE LA-GROTTE
-- ST-DIDIER-BEAUJ
 - ST-ETIENNE LUGDARES
+- ST-MARCEL-LES-V-INRAE
 - ST-MARTIN DE BELLEVILLE
 - ST-MARTIN DE LA PORTE
+- ST-MARTIN-DE-VESUBIE-OBS
 - ST-MICHEL DE MAURIENNE LE THYL
+- ST-PIERRE DE SOUCY
 - ST-PIERRE-D'ENTREMONT
-- ST-PIERRE-ST-JEAN
 - ST-PIERREVILLE
 - ST-SORLIN-EN-VA
 - ST-SORLIN-EN-VAL_DOUBLE
@@ -979,6 +978,8 @@ donors_during_tune:
 - STE MARIE CUINES
 - SUPER DEVOLUY_NIVO2
 - SUTRIEU
+- Sabbioni
+- Salbertrand-Graviere
 - Salbertrand-Le Selle
 - Saldenburg-Entschenreuth Bayern
 - Salzburg Flughafen
@@ -988,28 +989,30 @@ donors_during_tune:
 - Sampeyre-P.Baracche
 - San Giacomo Filippo Lago Truzzo
 - San Sicario
-- San Siro Alpe Rescascu00eca
 - Sankt Blasien-Menzenschwand Baden-Württemberg
+- Saulgau, Bad-Bolstern Baden-Württemberg
 - Saulgau,Bad Baden-Württemberg
+- Sauze d'Oulx-L.Pilone
 - Schaftäli
 - Schapleralpa
 - Scheyern Bayern
+- Schibe
 - Schiiterböden
 - Schlehdorf Bayern
-- Schlivèra
+- Schlicker Alm
 - Schmirn
 - Schnals_Finail
+- Schnals_Teufelsegg
 - Schopfheim-Eichen Baden-Württemberg
 - Schoppernau
 - Schrobenhausen Bayern
-- Schröcken
+- Schussenried, Bad-Olzreute Baden-Württemberg
 - Schwabmünchen Bayern
-- Schwangau-Horn (LfW) Bayern
 - Schwarzau im Freiwald
 - Schwechat Flughafen
 - Schwendi-Kleinschafhausen Baden-Württemberg
 - Schwenningen, Kreis Sigmaringen Baden-Württemberg
-- Schäftlarn-Kloster Schäftlarn Bayern
+- Schwäbisch Gmünd-Weiler Baden-Württemberg
 - Schöckbichl
 - Schöckl
 - Schöllnach-Taiding Bayern
@@ -1018,129 +1021,119 @@ donors_during_tune:
 - Schönbüel
 - Schöneben - Belpiano
 - Schönenbach
+- Schüpfheim
+- Scuol
 - Seckau
-- See im Paznaun
 - Seefeld
 - Seeg (Kläranlage) Bayern
 - Seegrube
 - Seetal
 - Seiser_Alm_Zallinger
-- Serfaus Masner
 - Sestriere Banchetta
 - Sestriere-Colle Ses.
 - Seythenex
-- Sibratsgfäll-Rindberg
 - Siegenburg Bayern
 - Siegsdorf-Höll Bayern
-- Siegsdorf-Maria Eck Bayern
 - Sigmaringen-Laiz Baden-Württemberg
 - Sigmarszell-Zeisertsweiler Bayern
 - Silberspitze Schneemessung
 - Simbach am Inn-Grub Bayern
+- Simbach/Inn Bayern
+- Simplon-Dorf
 - Singen Baden-Württemberg
 - Sion
-- Solda Camponeve Madricio
+- Sommeiller
 - Sonnbergalm
 - Sonnenbühl-Genkingen Baden-Württemberg
 - Sonntagsköpfl
+- Sonthofen (Flussmeisterstelle) Bayern
 - Spiss
 - Spittal an der Drau
-- St Christophe
-- St Pierre de Chartreuse
 - St Veit Zischke
 - St.Jakob im Defereggental
 - St.Michael im Lungau
 - St.Pölten Landhaus
-- St.Veit an der Glan
-- Stafelalp
+- Stabio
 - Starnberg Bayern
 - Steinach Bayern
-- Steingaden-Lauterbach Bayern
-- Steinkirchen-Hofstarring Bayern
+- Stetten-Frohnstetten Baden-Württemberg
 - Stockach Baden-Württemberg
 - Straubing Bayern
 - Sulden_Madritsch
 - Sulzberg
-- Sölden
 - Söll
 - TALLARD
-- TENCIN
 - TENDE-OBS
 - TERMIGNON-CLIM
 - TIGNES_SAPC
 - TREVIGNIN
 - TURRIERS
+- Tacherting-Spreit Bayern
 - Tannheim
-- Taufkirchen/Vils-Baum Bayern
-- Tavernole sul Mella Monte Guglie
 - Teisendorf Bayern
 - Teisendorf-Babing Bayern
-- Telfes im Stubai
+- Teisendorf-Neukirchen (Wildberg) Bayern
+- Tignes
 - Timmelsalm
-- Titisee-Neustadt-Waldau Baden-Württemberg
+- Tirano Monte Masuccio
 - Tittmoning Bayern
-- Todtmoos Baden-Württemberg
 - Torino Giardini Reali
-- Tracuit
 - Traunreut-Frühling Bayern
 - Traunreut-Stein Bayern
 - Treuchtlingen Bayern
 - Triftchumme
 - Trigl
+- Trochtelfingen-Hausen an der Lauchert Baden-Württemberg
 - Trossingen-Schura Baden-Württemberg
 - Trostberg Bayern
 - Trubelboden
-- Trüttlisbergpass
 - Tsanfleuron
 - Tschagguns
 - Tscheppa
+- Tschitta
 - Tuttlingen-Möhringen-Vorstadt Baden-Württemberg
 - Tuxerjoch Schneestation
 - Türliboden
 - Tüßling Bayern
-- USINENS SA
 - Ulm-Mähringen Baden-Württemberg
-- Ulmerhütte
 - Ulrichen
 - Umhausen
 - Unter Surettasee
-- Unterföhring Bayern
-- Unterjoch Bayern
 - Unterreit-Wagenstatt Bayern
 - Untrasried-Maneberg Bayern
 - Urach, Bad Baden-Württemberg
-- Usseglio-Malciausia
 - Uttenweiler-Ahlen Baden-Württemberg
 - Utzenfeld Baden-Württemberg
 - VACHERESSE
-- VACHERESSE AUXI
 - VAL CASTERINO_NEIGE
 - VAL D'ISERE JOS
 - VAL THORENS_SAPC
 - VALBERG_NIVO
 - VALENSOLE
+- VALLORCINE_PLAN-DROIT
 - VALS-LES-BAINS
-- VAUJANY-NIVO
+- VAUJANY
 - VAUJANY_DOUBLE
+- VAULX
 - VAUVENARGUES
 - VERIZIEU
 - VERNOUX
+- VILLAR D'ARENE
 - VILLAR LOUBIERE
-- VILLAR ST PANCRACE
-- VILLARD-DE-LANS
 - VILLENEUVE-D'AMONT
 - VOCANCE
 - Vairana
+- Val Cenis (La Berche)
 - Val Clarea
 - Val Masino
 - Val Miez
 - Val d Isere Joseray
 - Valbondione
-- Valdafur
 - Valdidentro Cancano
 - Valdisotto Arginone
 - Valdisotto Oga S. Colombano
 - Vallascia
+- Valle Argentera
 - Valloire
 - Valmeinier
 - Valmorel
@@ -1155,47 +1148,54 @@ donors_during_tune:
 - Vilsbiburg Bayern
 - Vilsheim-Münchsdorf Bayern
 - Vinadio-C.Lombarda
-- Vogt Baden-Württemberg
+- Vorderegg
 - Vorderstocken
 - Vöhrenbach Baden-Württemberg
 - Vöhrenbach-Urach Baden-Württemberg
 - Völkermarkt-Goldbrunnhof
 - Waakirchen-Demmelberg Bayern
+- Walchsee-Kaiserwinkl
 - Waldsee, Bad-Dinnenried Baden-Württemberg
 - Wallersdorf Bayern
 - Walmendinger Horn
 - Wandspitze Schneestation
-- Wangen/Allgäu-Schwaderberg Baden-Württemberg
 - Wanne
+- Warth
 - Wattener Lizum
 - Weihenstephan-Dürnast Bayern
 - Weil am Rhein-Haltingen Baden-Württemberg
 - Weiler-Simmerberg Bayern
 - Weingarten, Kr. Ravensburg Baden-Württemberg
+- Weissfluhjoch
 - Weisssee LWD
+- Weitensfeld
 - Weißenhorn-Oberreichenbach Bayern
 - Wenghorn
+- Wertach-Bichel Bayern
 - Wertingen Bayern
 - Wessobrunn-Puitl Bayern
 - Westendorf, Kreis Ostallgäu Bayern
 - Wien Donaufeld
 - Wien Hohe Warte
+- Wildsee
 - Windischgarsten
 - Windorf-Otterskirchen Bayern
 - Wolfegg (Neckenfurt) Baden-Württemberg
 - Wurzach, Bad-Oberschwarzach Baden-Württemberg
+- Wutöschingen-Ofteringen Baden-Württemberg
 - Wädenswil
 - Wörishofen, Bad-Kirchdorf Bayern
+- Wörth/Oberpfalz -Kiefenholz Bayern
 - Ze Seewe
 - Zeilarn-Gumpersdorf Bayern
+- Zermatt
 - Zettersfeld
 - Zugspitze Bayern
 - Zusmarshausen Bayern
-- Zwiefalten Baden-Württemberg
-- Zürich / Affoltern
 - Zürich / Fluntern
 - Zürich / Kloten
 - Zürs
+- Zürs-Hexenboden
 - Zürs-Madloch
 - Äußere Rendlalpe
 - Ühlingen-Birkendorf Baden-Württemberg

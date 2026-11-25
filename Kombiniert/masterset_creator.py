@@ -57,6 +57,7 @@ RAW_VARIABLE_FOLDERS = ["Luftfeuchte", "Wind", "Niederschlag", "Schneehoehe", "T
 VALID_PROVIDER_FOLDERS = {
     "DWD", "HydroT", "HydroVO", "LWD", "Meteosuisse", "Suedtirol",
     "zamg", "ZAMG", "ARSO", "MeteoFrance", "SLF", "slf", "Meteohub", "meteohub",
+    "Meteonetwork", "meteonetwork",
 }
 PROVIDER_MAP = {
     "DWD": "DWD",
@@ -73,6 +74,8 @@ PROVIDER_MAP = {
     "slf": "SLF",
     "Meteohub": "Meteohub",
     "meteohub": "Meteohub",
+    "Meteonetwork": "Meteonetwork",
+    "meteonetwork": "Meteonetwork",
 }
 
 # Fallback (old central lists) - kept for compatibility but usually less complete
@@ -393,6 +396,8 @@ def build_master_for_cluster(cluster_df, cluster_info_row):
 
     master = master.sort_values("timestamp").reset_index(drop=True)
 
+    station_id = cluster_info_row.get("station_id", f"S{int(cluster_info_row['cluster_id']):05d}")
+    master["station_id"] = station_id
     master["station_name"] = station_name
     master["lat"] = round(cluster_info_row["lat"], 6)
     master["lon"] = round(cluster_info_row["lon"], 6)
@@ -404,13 +409,14 @@ def build_master_for_cluster(cluster_df, cluster_info_row):
     # Add as constant column for convenience when loading individual station files
     master["network_provider"] = network_provider
 
-    core_cols = ["timestamp", "station_name", "lat", "lon", "hoehe", "network_provider"]
+    core_cols = ["timestamp", "station_id", "station_name", "lat", "lon", "hoehe", "network_provider"]
     var_cols = [v for v in VAR_FOLDERS.keys() if v in master.columns]
     master = master[core_cols + var_cols]
 
     master.to_parquet(out_parquet, compression="snappy", index=False)
 
     json_data = {
+        "station_id": station_id,
         "station_name": station_name,
         "lat": float(cluster_info_row["lat"]),
         "lon": float(cluster_info_row["lon"]),
@@ -427,6 +433,7 @@ def build_master_for_cluster(cluster_df, cluster_info_row):
         json.dump(json_data, f, indent=2, ensure_ascii=False)
 
     return {
+        "station_id": station_id,
         "station_name": station_name,
         "lat": cluster_info_row["lat"],
         "lon": cluster_info_row["lon"],
@@ -459,6 +466,11 @@ def main():
         logger.warning("Raw-data provider lookup empty â€” trying fallback to central Stationen/ lists")
         # (old load_provider_stations code could be re-added here if really needed)
     cluster_info = assign_providers_to_clusters(cluster_info, provider_df, MAX_PROVIDER_MATCH_M)
+
+    # Stable unique station_id: sort by lat, lon so the numbering is deterministic
+    cluster_info = cluster_info.sort_values(["lat", "lon", "cluster_id"]).reset_index(drop=True)
+    cluster_info["station_id"] = [f"S{i:05d}" for i in range(1, len(cluster_info) + 1)]
+    logger.info(f"Assigned stable station_id S00001..S{len(cluster_info):05d}")
 
     summary = []
     for _, cl in cluster_info.iterrows():

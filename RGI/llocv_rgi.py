@@ -24,6 +24,7 @@ CODE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from rgi_data import hyper_source
 from paths import get_nested_llocv_path, get_rgi_tuned_params_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg, cap_score_split
 from shared.metrics import compute_metrics as eval_metrics, print_eval
@@ -104,7 +105,7 @@ def run_variable(cfg, var, fit_splits, score_splits, mode, n_folds, max_stations
     names = sorted(score_df["station_name"].unique())
     folds = [names]
 
-    tuned = load_tuned(var, cfg["time_resolution"])
+    tuned = load_tuned(hyper_source(cfg, var), cfg["time_resolution"])
     tuned["extra_cols"] = extra_cols_for_var(var, cfg)
     tuned["variable"] = var
     rcfg = cfg_to_rgi(cfg, tuned)

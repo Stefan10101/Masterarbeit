@@ -23,6 +23,7 @@ from shared.map_io import save_map_with_partials
 from paths import get_cnn_model_path, get_interpolated_map_path, get_master_grid_path
 from cnn_core import CNNInterpolator, cyclic_time, grid_terrain, idw_fz_raster, idw_raster, station_to_raster, two_step_var
 from cnn_data import clc_group, data_sources, load_cnn_config, load_panel, precip_trace, attach_temperature, attach_station_tpi
+from cnn_data import hyper_source
 from train_cnn import cfg_to_cnn, grid_index, is_subdaily, load_tuned
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 
@@ -111,7 +112,7 @@ def main():
             if args.quick or args.months:
                 from cnn_data import subset_times
                 pred = subset_times(panel, args.months or "seasonal4")
-            ccfg = cfg_to_cnn(cfg, load_tuned(var, time_res))
+            ccfg = cfg_to_cnn(cfg, load_tuned(hyper_source(cfg, var), time_res))
             wpath = get_cnn_model_path(var, time_res)
             print(f"{var} weights={wpath} exists={wpath.exists()}", flush=True)
             if wpath.exists():

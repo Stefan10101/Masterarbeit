@@ -32,6 +32,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from idw_core import clip_var, two_step_var
 from idw_data import (
+    hyper_source,
     build_field,
     compute_metrics,
     load_config,
@@ -205,7 +206,21 @@ def main():
     print(f"  protocol: train+tune quarters, score fixed tune-targets")
     print("=" * 72)
 
+    parents = cfg.get("variable_parents") or {}
     for var in variables:
+        src = hyper_source(cfg, var)
+        if src != var:
+            # child: copy parent's tuned file and skip search
+            parent_path = (SCRIPT_DIR / "Output" / "global_params" / time_res / f"{src}_params.yaml")
+            child_path = (SCRIPT_DIR / "Output" / "global_params" / time_res / f"{var}_params.yaml")
+            if parent_path.exists():
+                child_path.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(parent_path, child_path)
+                print(f"[{var}] inherited hypers from {src} → {child_path.name}")
+            else:
+                print(f"[{var}] parent {src} has no tuned file yet — skipping")
+            continue
         held_out, _pool = load_holdout(variable=var)
         tune_targets, _ = load_tune_targets(variable=var)
         held_set = set(held_out)

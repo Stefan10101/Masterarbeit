@@ -5,7 +5,25 @@ time_resolution: monthly
 start_date: "2020-01-01"
 end_date: "2025-12-31"
 resolutions_to_process: [500]
-variables_to_process: ["temp_mean", "precip_sum", "wind_mean", "rh_mean", "snow_mean"]
+variables_to_process:
+  - precip_sum
+  - temp_mean
+  - temp_min
+  - temp_max
+  - wind_mean
+  - wind_max
+  - rh_mean
+  - snow_mean
+  - snow_max
+  - snow_min
+  - slr
+  - swe
+variable_parents:
+  temp_min: temp_mean
+  temp_max: temp_mean
+  wind_max: wind_mean
+  snow_max: snow_mean
+  snow_min: snow_mean
 min_stations_per_field: 10
 overwrite_maps: false
 aggregation:

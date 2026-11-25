@@ -28,6 +28,7 @@ warnings.filterwarnings("ignore")
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from shared.map_io import save_map_with_partials
+from rfsi_core import hyper_source
 from paths import (
     get_rfsi_tuned_params_path,
     get_aggregated_data_path,
@@ -231,7 +232,8 @@ def main():
         print(f"\n{'=' * 60}\nVARIABLE: {var}")
         n_obs = N_OBS
         var_params = dict(rf_params)
-        tpath = get_rfsi_tuned_params_path(var, TIME_RES)
+        src = hyper_source(cfg, var)
+        tpath = get_rfsi_tuned_params_path(src, TIME_RES)
         if tpath.exists():
             tuned = yaml.safe_load(tpath.read_text(encoding="utf-8")) or {}
             n_obs = int(tuned.get("n_obs", n_obs))

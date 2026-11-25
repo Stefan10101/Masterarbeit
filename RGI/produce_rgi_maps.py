@@ -32,6 +32,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from shared.map_io import save_map_with_partials
+from rgi_data import hyper_source
 from paths import (
     get_interpolated_map_path,
     get_master_grid_path,
@@ -124,7 +125,7 @@ def main():
         month_spec = args.months or cfg.get("_quick_months")
         if month_spec:
             pred = subset_times(panel, month_spec)
-        tuned = load_tuned(var, time_res)
+        tuned = load_tuned(hyper_source(cfg, var), time_res)
         tuned["extra_cols"] = extra_cols_for_var(var, cfg)
         tuned["variable"] = var
         rcfg = cfg_to_rgi(cfg, tuned)

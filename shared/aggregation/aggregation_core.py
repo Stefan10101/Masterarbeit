@@ -30,6 +30,7 @@ def get_time_col_name(resolution: str) -> str:
         "daily": "date",
         "weekly": "year_week",
         "monthly": "year_month",
+        "six_hourly": "timestamp",
         "half_hourly": "timestamp",
         "seasonal": "season"
     }
@@ -59,6 +60,7 @@ def process_station_parquet(
     time_col_name: Optional[str] = None,
     seasonal_mode: str = "across_years",
     min_coverage: float = MIN_PERIOD_COVERAGE,
+    station_id: str | None = None,
 ) -> pd.DataFrame:
 
     if time_col_name is None:
@@ -112,6 +114,7 @@ def process_station_parquet(
 
                 agg_df = grouped.to_frame(name=col_name)
                 agg_df["station_name"] = station_name
+                agg_df["station_id"] = station_id
                 agg_df[time_col_name] = agg_df.index
                 agg_df = agg_df.reset_index(drop=True)
                 rows.append(agg_df)
@@ -128,6 +131,7 @@ def process_station_parquet(
         "daily": "D",
         "weekly": "W",
         "monthly": "ME",
+        "six_hourly": "6h",
         "half_hourly": "30min"
     }.get(resolution)
 
@@ -167,6 +171,7 @@ def process_station_parquet(
 
             agg_df = resampled.to_frame(name=col_name)
             agg_df["station_name"] = station_name
+            agg_df["station_id"] = station_id
 
             if resolution == "daily":
                 agg_df[time_col_name] = agg_df.index.date.astype(str)
@@ -174,7 +179,7 @@ def process_station_parquet(
                 agg_df[time_col_name] = agg_df.index.strftime("%Y-W%W")
             elif resolution == "monthly":
                 agg_df[time_col_name] = agg_df.index.strftime("%Y-%m")
-            elif resolution == "half_hourly":
+            elif resolution in ("six_hourly", "half_hourly"):
                 agg_df[time_col_name] = agg_df.index
 
             agg_df = agg_df.reset_index(drop=True)
@@ -215,7 +220,8 @@ def aggregate_all_stations(
             parquet_path=parquet_path,
             station_name=station,
             targets=targets,
-            resolution=resolution
+            resolution=resolution,
+            station_id=str(row["station_id"]) if "station_id" in row and pd.notna(row["station_id"]) else None,
         )
 
         if df.empty:
@@ -232,7 +238,7 @@ def aggregate_all_stations(
 
     combined = pd.concat(all_data, ignore_index=True)
 
-    id_cols = ["station_name", time_col]
+    id_cols = ["station_id", "station_name", time_col]
     value_cols = [c for c in combined.columns if c not in id_cols]
     combined = combined[id_cols + value_cols]
     combined = combined.sort_values(["station_name", time_col]).reset_index(drop=True)

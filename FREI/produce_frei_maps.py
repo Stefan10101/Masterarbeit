@@ -19,6 +19,7 @@ sys.path.insert(0, str(CODE_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from shared.map_io import save_map_with_partials
+from frei_data import hyper_source
 from paths import get_interpolated_map_path, get_master_grid_path
 from shared.time_res import add_hours_arg, add_time_res_arg, apply_hour_cut, apply_time_res, variables_from_cfg
 from shared.splits.evaluation_sets import apply_evaluation_protocol
@@ -94,7 +95,8 @@ def main():
             # Tag with shared quarter splits so subset_splits can select train/tune/test.
             # Produce keeps all stations (including held-out) as donors; only time is filtered.
             panel, _, _, _ = apply_evaluation_protocol(panel, variable=var)
-            tuned = load_tuned(var, time_res)
+            src = hyper_source(cfg, var)
+            tuned = load_tuned(src, time_res)
             tuned["trace"] = precip_trace(cfg, time_res, var)
             tuned.update(load_idw_residual_params(time_res, var))
             fcfg = cfg_to_frei(cfg, tuned)
