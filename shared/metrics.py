@@ -18,29 +18,80 @@ from __future__ import annotations
 from typing import Dict, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 
 # (time_resolution, variable) -> std of held-out × test observations
 # Source: variable_profile.csv, subset == "test"
 VARIABLE_STD: Dict[Tuple[str, str], float] = {
     # monthly
-    ("monthly", "temp_mean"): 7.080867,
-    ("monthly", "precip_sum"): 80.553442,
-    ("monthly", "wind_mean"): 1.208947,
-    ("monthly", "rh_mean"): 8.861033,
-    ("monthly", "snow_mean"): 37.600007,
+    ("monthly", "precip_sum"): 75.990673,
+    ("monthly", "temp_mean"): 7.564727,
+    ("monthly", "temp_min"): 8.007600,
+    ("monthly", "temp_max"): 8.758920,
+    ("monthly", "wind_mean"): 1.087280,
+    ("monthly", "wind_max"): 4.262432,
+    ("monthly", "rh_mean"): 8.764337,
+    ("monthly", "snow_mean"): 40.387076,
+    ("monthly", "snow_max"): 52.037970,
+    ("monthly", "snow_min"): 33.662175,
+    ("monthly", "slr"): 7.746967,
+    ("monthly", "slr_min"): 5.559926,
+    ("monthly", "slr_max"): 16.334893,
+    ("monthly", "swe"): 122.165629,
+    ("monthly", "swe_min"): 106.784116,
+    ("monthly", "swe_max"): 138.746238,
     # weekly
-    ("weekly", "temp_mean"): 7.461013,
-    ("weekly", "precip_sum"): 30.415063,
-    ("weekly", "wind_mean"): 1.308422,
-    ("weekly", "rh_mean"): 11.936912,
-    ("weekly", "snow_mean"): 35.574195,
+    ("weekly", "precip_sum"): 28.688116,
+    ("weekly", "temp_mean"): 7.922076,
+    ("weekly", "temp_min"): 7.677890,
+    ("weekly", "temp_max"): 8.867708,
+    ("weekly", "wind_mean"): 1.268604,
+    ("weekly", "wind_max"): 3.785795,
+    ("weekly", "rh_mean"): 13.189455,
+    ("weekly", "snow_mean"): 40.839105,
+    ("weekly", "snow_max"): 44.679241,
+    ("weekly", "snow_min"): 37.497221,
+    ("weekly", "slr"): 8.262305,
+    ("weekly", "slr_min"): 5.844622,
+    ("weekly", "slr_max"): 15.238005,
+    ("weekly", "swe"): 122.601491,
+    ("weekly", "swe_min"): 118.987323,
+    ("weekly", "swe_max"): 126.129536,
     # daily
-    ("daily", "temp_mean"): 7.700932,
-    ("daily", "precip_sum"): 8.773573,
-    ("daily", "wind_mean"): 1.573367,
-    ("daily", "rh_mean"): 15.856649,
-    ("daily", "snow_mean"): 34.718104,
-    # half_hourly
+    ("daily", "precip_sum"): 8.155106,
+    ("daily", "temp_mean"): 8.204560,
+    ("daily", "temp_min"): 7.454815,
+    ("daily", "temp_max"): 9.355584,
+    ("daily", "wind_mean"): 1.717758,
+    ("daily", "wind_max"): 3.048067,
+    ("daily", "rh_mean"): 17.956040,
+    ("daily", "snow_mean"): 40.600591,
+    ("daily", "snow_max"): 41.456558,
+    ("daily", "snow_min"): 39.736769,
+    ("daily", "slr"): 8.778677,
+    ("daily", "slr_min"): 7.178798,
+    ("daily", "slr_max"): 13.711065,
+    ("daily", "swe"): 122.319153,
+    ("daily", "swe_min"): 122.319153,
+    ("daily", "swe_max"): 122.319153,
+    # six_hourly
+    ("six_hourly", "precip_sum"): 2.985654,
+    ("six_hourly", "temp_mean"): 8.604733,
+    ("six_hourly", "temp_min"): 8.151051,
+    ("six_hourly", "temp_max"): 9.072619,
+    ("six_hourly", "wind_mean"): 2.013221,
+    ("six_hourly", "wind_max"): 2.688238,
+    ("six_hourly", "rh_mean"): 21.040521,
+    ("six_hourly", "snow_mean"): 40.112581,
+    ("six_hourly", "snow_max"): 40.442554,
+    ("six_hourly", "snow_min"): 39.780267,
+    ("six_hourly", "slr"): 10.116055,
+    ("six_hourly", "slr_min"): 10.116055,
+    ("six_hourly", "slr_max"): 10.116055,
+    ("six_hourly", "swe"): 122.319153,
+    ("six_hourly", "swe_min"): 122.319153,
+    ("six_hourly", "swe_max"): 122.319153,
+    # half_hourly (not in current profile; kept from previous table)
     ("half_hourly", "temp_mean"): 8.351703,
     ("half_hourly", "precip_sum"): 0.407750,
     ("half_hourly", "wind_mean"): 2.028267,
@@ -71,15 +122,45 @@ def _canon(variable: str) -> str:
     return _VAR_ALIAS.get(v, v)
 
 
-def get_std(variable: str, time_resolution: str) -> float:
-    """Held-out × test standard deviation for a variable and timescale."""
+
+def _load_profile_std() -> Dict[Tuple[str, str], float]:
+    """Test-subset std from variable_profile.csv. Empty if the file is absent."""
+    try:
+        from paths import get_source_root
+        path = get_source_root() / "profile" / "variable_profile.csv"
+        if not path.exists():
+            return {}
+        df = pd.read_csv(path)
+        sub = df[df["subset"] == "test"]
+        out = {}
+        for _, row in sub.iterrows():
+            key = (str(row["time_resolution"]), str(row["variable"]))
+            val = row.get("std")
+            if pd.notna(val):
+                out[key] = float(val)
+        return out
+    except Exception:
+        return {}
+
+
+_PROFILE_STD = _load_profile_std()
+
+
+def get_std(variable: str, time_resolution: str, obs=None) -> float:
+    """Held-out × test standard deviation for a variable and timescale.
+    Falls back to the std of the supplied observations when the table has no entry.
+    """
     key = (time_resolution, _canon(variable))
-    if key not in VARIABLE_STD:
-        raise KeyError(
-            f"no evaluation std for {variable!r} / {time_resolution!r}. "
-            f"Known: {sorted(VARIABLE_STD)}"
-        )
-    return VARIABLE_STD[key]
+    if key in _PROFILE_STD:
+        return _PROFILE_STD[key]
+    if key in VARIABLE_STD:
+        return VARIABLE_STD[key]
+    if obs is not None:
+        o = np.asarray(obs, dtype=float)
+        o = o[np.isfinite(o)]
+        if len(o) > 1:
+            return float(np.std(o, ddof=0))
+    return float("nan")
 
 
 def get_trace(variable: str, time_resolution: str) -> Optional[float]:
@@ -87,12 +168,12 @@ def get_trace(variable: str, time_resolution: str) -> Optional[float]:
     return TRACE.get(_canon(variable), {}).get(time_resolution)
 
 
-def rmse_over_std(rmse: float, variable: str, time_resolution: str) -> float:
+def rmse_over_std(rmse: float, variable: str, time_resolution: str, obs=None) -> float:
     """Normalized RMSE: RMSE / std(held-out × test observations)."""
     if rmse is None or not (rmse == rmse):
         return float("nan")
-    s = get_std(variable, time_resolution)
-    if s <= 0:
+    s = get_std(variable, time_resolution, obs)
+    if s is None or not (s == s) or s <= 0:
         return float("nan")
     return float(rmse) / s
 
@@ -164,7 +245,7 @@ def compute_metrics(
     )
 
     if variable is not None and time_resolution is not None:
-        out["rmse_std"] = rmse_over_std(rmse, variable, time_resolution)
+        out["rmse_std"] = rmse_over_std(rmse, variable, time_resolution, o)
         if trace is None:
             trace = get_trace(variable, time_resolution)
 

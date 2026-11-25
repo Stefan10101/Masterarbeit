@@ -53,7 +53,9 @@ PREFIX_MARGIN = 0.20
 
 
 def _match_times(panel_times: pd.Series, wanted: list, time_res: str) -> set:
-    """Panel timestamps matching the yaml early-stop list."""
+    """Panel timestamps matching the yaml early-stop list.
+    Returns values in the panel's own dtype so isin matches.
+    """
     if not wanted:
         return set()
     import pandas as pd
@@ -67,7 +69,8 @@ def _match_times(panel_times: pd.Series, wanted: list, time_res: str) -> set:
         key = pt.dt.strftime("%Y-%m-%d")
     else:
         key = pt.dt.strftime("%Y-%m-%dT%H:%M:%S")
-    return set(pt[key.isin(want)].unique())
+    mask = key.isin(want).to_numpy()
+    return set(panel_times[mask].unique())
 
 
 

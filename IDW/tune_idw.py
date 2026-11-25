@@ -38,6 +38,7 @@ from idw_data import (
     load_config,
     load_panel,
     save_global_params,
+    global_params_path,
 )
 from shared.splits.evaluation_sets import (
     apply_evaluation_protocol,
@@ -211,8 +212,8 @@ def main():
         src = hyper_source(cfg, var)
         if src != var:
             # child: copy parent's tuned file and skip search
-            parent_path = (SCRIPT_DIR / "Output" / "global_params" / time_res / f"{src}_params.yaml")
-            child_path = (SCRIPT_DIR / "Output" / "global_params" / time_res / f"{var}_params.yaml")
+            parent_path = global_params_path(time_res, src)
+            child_path = global_params_path(time_res, var)
             if parent_path.exists():
                 child_path.parent.mkdir(parents=True, exist_ok=True)
                 import shutil
@@ -242,7 +243,7 @@ def main():
               f"stations={panel['station_name'].nunique()}  "
               f"tune-targets present={panel['is_tune_target'].sum()}")
 
-        out_exists = (SCRIPT_DIR / "Output" / "global_params" / time_res / f"{var}_params.yaml")
+        out_exists = global_params_path(time_res, var)
         if out_exists.exists() and not args.force:
             print(f"[{var}] exists → {out_exists.name}  (use --force)")
             continue

@@ -237,7 +237,8 @@ def run_variable(cfg, var, phase: str, months=None, n_folds=None, pack=None,
         eval_mask = key.isin(want_eval)
         pref_mask = key.isin(want_pref)
         if eval_mask.any():
-            prefix_times = set(pt[pref_mask].unique())
+            # Keep the panel's own time dtype so later isin matches.
+            prefix_times = set(panel.loc[pref_mask, "time"].unique())
             panel = panel.loc[eval_mask].copy()
             print(f"  early-stop eval={panel['time'].nunique()} prefix={len(prefix_times)}")
     elif args_max:

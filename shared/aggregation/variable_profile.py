@@ -39,12 +39,13 @@ from shared.splits.evaluation_sets import load_holdout, load_quarter_splits, qua
 from shared.time_res import TIME_RESOLUTIONS, add_time_res_arg
 
 VARS = (
-    "temp_mean", "temp_min", "temp_max",
     "precip_sum",
+    "temp_mean", "temp_min", "temp_max",
     "wind_mean", "wind_max",
     "rh_mean",
     "snow_mean", "snow_max", "snow_min",
-    "slr", "swe", "snow_density",
+    "slr", "slr_min", "slr_max",
+    "swe", "swe_min", "swe_max",
 )
 # wet-fraction trace. None → wet_frac stays NaN (continuous variables).
 TRACE = {
@@ -57,14 +58,8 @@ TRACE = {
     "snow_density": {"six_hourly": 50.0, "half_hourly": 50.0, "daily": 50.0, "weekly": 50.0, "monthly": 50.0},
 }
 # holdout YAML is per parent variable, not per statistic
-HOLDOUT_FOR = {
-    "temp_mean": "temperature", "temp_min": "temperature", "temp_max": "temperature",
-    "precip_sum": "precipitation",
-    "wind_mean": "wind_speed", "wind_max": "wind_speed",
-    "rh_mean": "relative_humidity",
-    "snow_mean": "snow_height", "snow_max": "snow_height", "snow_min": "snow_height",
-    "slr": "slr", "slr_min": "slr", "slr_max": "slr", "swe": "swe", "swe_min": "swe", "swe_max": "swe", "snow_density": "snow_height",
-}
+# Per-column hold-out files (COLUMN_VARS). Identity for all 16.
+HOLDOUT_FOR = {v: v for v in VARS}
 TERRAIN_COLS = (
     "elev", "slope", "tpi", "northness",
     "dist_to_coast", "signed_dist_to_ridge",
@@ -433,10 +428,15 @@ def run_variable(time_res, var, stations, held_set, qmap):
 
 def main():
     p = argparse.ArgumentParser(description="Variable x timescale profile, full panel")
-    add_time_res_arg(p)
+    p.add_argument("--time-resolution", nargs="*", default=None,
+                   choices=list(TIME_RESOLUTIONS),
+                   help="One or more resolutions. Default: all except half_hourly.")
     p.add_argument("--variables", nargs="*", default=list(VARS))
     args = p.parse_args()
-    wanted = [args.time_resolution] if args.time_resolution else list(TIME_RESOLUTIONS)
+    if args.time_resolution:
+        wanted = list(args.time_resolution)
+    else:
+        wanted = [r for r in TIME_RESOLUTIONS if r != "half_hourly"]
 
     print("loading station and terrain table", flush=True)
     stations = load_station_table()
