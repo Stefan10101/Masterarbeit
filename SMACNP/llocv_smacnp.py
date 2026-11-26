@@ -213,9 +213,9 @@ def main():
             y_hat = y_hard if use_hard else y_soft
             diag = (p_occ, amt, df_tgt["value"].to_numpy(dtype=np.float64) > 1e-6)
         else:
-            y_hat = scaler.inverse(pred["mu"].cpu().numpy().squeeze())
+            y_hat = np.atleast_1d(scaler.inverse(pred["mu"].cpu().numpy().squeeze()))
             diag = None
-        y_true = df_tgt["value"].to_numpy(dtype=np.float64)
+        y_true = np.atleast_1d(df_tgt["value"].to_numpy(dtype=np.float64))
         if ckpt["two_step"]:
             out = [
                 {"time": day, "station_name": name, "obs": float(yt),

@@ -35,8 +35,8 @@ from rasterio.warp import reproject
 CODE_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_DIR))
 
-from paths import DATA_ROOT, get_dem_path, get_metadata_path
-from shared.splits.evaluation_sets import stations_inside_domain
+from paths import DATA_ROOT, get_dem_path, get_metadata_path, get_aggregated_data_path
+from shared.splits.evaluation_sets import stations_inside_domain, holdout_path
 
 # ---------------------------------------------------------------------------
 # Config
@@ -443,6 +443,57 @@ def plot_variables_per_station(stations: pd.DataFrame):
     # Per-variable maps are produced separately (see plot_per_variable_maps)
 
 
+def plot_variables_pie(stations: pd.DataFrame):
+    """Donut: proportion of stations by number of the five overview variables measured.
+    Matches the style of the cold-season overlap pie (center total, outer labels).
+    """
+    df = keep_inside_buffer(stations).copy()
+    if df.empty:
+        return
+    # Count only the five overview variables (ignore anything else in the list)
+    def count_overview(cell) -> int:
+        if pd.isna(cell):
+            return 0
+        parts = {p.strip() for p in str(cell).split(",") if p.strip()}
+        return sum(1 for v in VARIABLES if v in parts)
+    df["n_overview"] = df["variables"].map(count_overview)
+    counts = df["n_overview"].value_counts().sort_index()
+    # Keep only 1..5 (drop zeros)
+    counts = counts.reindex(range(1, 6), fill_value=0)
+    counts = counts[counts > 0]
+    if counts.empty:
+        logger.info("No stations with overview variables — skipping pie")
+        return
+
+    total = int(counts.sum())
+    sizes = counts.values
+    labels = [f"{int(n)} var{'s' if n != 1 else ''}\n({int(c)} stations)"
+              for n, c in zip(counts.index, counts.values)]
+    colors = [PIE_COLORS[(int(n) - 1) % len(PIE_COLORS)] for n in counts.index]
+
+    fig, ax = plt.subplots(figsize=(8.5, 8.5))
+    wedges, texts = ax.pie(
+        sizes,
+        labels=labels,
+        colors=colors,
+        startangle=90,
+        wedgeprops=dict(width=0.45, edgecolor="white", linewidth=2),
+        textprops=dict(fontsize=9),
+    )
+    # Center label
+    ax.text(0, 0.08, f"{total}", ha="center", va="center",
+            fontsize=28, fontweight="bold", color="#1a1a1a")
+    ax.text(0, -0.12, "Unique Stations\n(by location)", ha="center", va="center",
+            fontsize=10, color="#555555")
+    ax.set_title(
+        "Proportion of Stations by Number of Variables Measured\n"
+        "(5 variables: Precip, Snow, RH, Temp, Wind)",
+        fontsize=12, pad=18,
+    )
+    save(fig, PLOT_DIR / "03c_variables_pie.png")
+    logger.info(f"Variable-count pie: {total} stations across {len(counts)} bins")
+
+
 # Overview names used in stations_overview.csv "variables" column
 VARIABLES = [
     "temperature",
@@ -451,14 +502,34 @@ VARIABLES = [
     "relative_humidity",
     "snow_height",
 ]
+# Extra maps whose station set comes from the monthly aggregate (not listed in the overview CSV)
+AGGREGATE_VARS = [
+    "slr",
+    "swe",
+]
 VAR_SHORT = {
     "temperature": "temp",
     "precipitation": "precip",
     "wind_speed": "wind",
     "relative_humidity": "rh",
     "snow_height": "snow",
+    "slr": "slr",
+    "swe": "swe",
+}
+# Parent column name whose hold-out file represents the overview variable
+OVERVIEW_TO_PARENT = {
+    "temperature": "temp_mean",
+    "precipitation": "precip_sum",
+    "wind_speed": "wind_mean",
+    "relative_humidity": "rh_mean",
+    "snow_height": "snow_mean",
+    "slr": "slr",
+    "swe": "swe",
 }
 HOLDOUT_COLOR = "#e67e22"  # solid orange for held-out stations
+
+# Donut colours for the variable-count pie (1..5)
+PIE_COLORS = ["#e74c3c", "#f39c12", "#27ae60", "#2980b9", "#8e44ad"]
 
 
 def _stations_for_variable(stations: pd.DataFrame, overview_name: str) -> pd.DataFrame:
@@ -472,15 +543,20 @@ def _stations_for_variable(stations: pd.DataFrame, overview_name: str) -> pd.Dat
 
 
 def _load_holdout_names(overview_name: str) -> set:
-    """Load held-out station names for the variable; empty set if file missing."""
-    splits_dir = CODE_DIR / "shared" / "splits"
-    path = splits_dir / f"holdout_stations_{overview_name}.yaml"
+    """Load held-out station names for the variable; empty set if file missing.
+    Uses the parent column's hold-out file (temp_mean for temperature, etc.).
+    """
+    code_name = OVERVIEW_TO_PARENT.get(overview_name, overview_name)
+    path = holdout_path(code_name)
     if not path.exists():
-        # Fall back to legacy global file
-        path = splits_dir / "holdout_stations.yaml"
+        # Fall back to overview-named or legacy global file
+        splits_dir = CODE_DIR / "shared" / "splits"
+        path = splits_dir / f"holdout_stations_{overview_name}.yaml"
         if not path.exists():
-            logger.warning(f"No holdout file for {overview_name}")
-            return set()
+            path = splits_dir / "holdout_stations.yaml"
+            if not path.exists():
+                logger.warning(f"No holdout file for {overview_name} (tried {code_name})")
+                return set()
     try:
         with open(path, "r", encoding="utf-8") as f:
             raw = yaml.safe_load(f)
@@ -490,9 +566,83 @@ def _load_holdout_names(overview_name: str) -> set:
         return set()
 
 
+def _stations_for_aggregate_var(stations: pd.DataFrame, code_name: str) -> pd.DataFrame:
+    """Stations with at least one non-null value of code_name in the monthly aggregate."""
+    agg_path = get_aggregated_data_path("Source", "monthly")
+    if not agg_path.exists():
+        logger.warning(f"Monthly aggregate not found: {agg_path} — skipping {code_name}")
+        return stations.iloc[0:0].copy()
+    agg = pd.read_parquet(agg_path, columns=["station_name", code_name])
+    if code_name not in agg.columns:
+        logger.warning(f"Column {code_name} missing in monthly aggregate — skipping")
+        return stations.iloc[0:0].copy()
+    have = set(agg.loc[agg[code_name].notna(), "station_name"].astype(str).str.strip())
+    mask = stations["station_name"].astype(str).str.strip().isin(have)
+    return stations.loc[mask].copy()
+
+
+def _draw_variable_map(sub: pd.DataFrame, overview_name: str, peri, main_extent):
+    """Draw one 03b map for a station subset (hold-outs already flagged)."""
+    if sub.empty:
+        logger.info(f"No stations for {overview_name}")
+        return
+    fig = plt.figure(figsize=(12.0, 8.0))
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0], projection=ccrs.PlateCarree())
+    _base_map(ax, peri, main_extent)
+
+    handles = []
+    # Non-holdout first (background)
+    for name in ("Valley", "Mountain"):
+        m = (sub["elev_class"] == name) & (~sub["is_holdout"])
+        part = sub.loc[m]
+        if part.empty:
+            continue
+        n = len(part)
+        ax.scatter(
+            part["lon"], part["lat"],
+            marker=ELEV_MARKERS[name], s=14, c=MAP_FILL,
+            edgecolors=MAP_EDGE, linewidths=MAP_EDGE_LW,
+            transform=ccrs.PlateCarree(), zorder=6,
+        )
+        label = f"{name} (<{ELEV_CUTOFF} m)" if name == "Valley" else f"{name} (≥{ELEV_CUTOFF} m)"
+        handles.append(plt.Line2D(
+            [0], [0], marker=ELEV_MARKERS[name], color="w",
+            markerfacecolor=MAP_FILL, markeredgecolor=MAP_EDGE, markeredgewidth=MAP_EDGE_LW,
+            markersize=7, label=f"{label} (n={n})",
+        ))
+    # Hold-out on top
+    for name in ("Valley", "Mountain"):
+        m = (sub["elev_class"] == name) & sub["is_holdout"]
+        part = sub.loc[m]
+        if part.empty:
+            continue
+        n = len(part)
+        ax.scatter(
+            part["lon"], part["lat"],
+            marker=ELEV_MARKERS[name], s=16, c=HOLDOUT_COLOR,
+            edgecolors="white", linewidths=0.35,
+            transform=ccrs.PlateCarree(), zorder=7,
+        )
+        label = f"Held-out {name} (n={n})"
+        handles.append(plt.Line2D(
+            [0], [0], marker=ELEV_MARKERS[name], color="w",
+            markerfacecolor=HOLDOUT_COLOR, markeredgecolor="white", markeredgewidth=0.35,
+            markersize=7, label=label,
+        ))
+    ax.legend(handles=handles, loc="lower right", frameon=True, framealpha=0.9,
+              fontsize=8, title=overview_name.replace("_", " ").title(), title_fontsize=8)
+    short = VAR_SHORT[overview_name]
+    save(fig, PLOT_DIR / f"03b_{short}_stations_map.png")
+    logger.info(
+        f"{overview_name}: {len(sub)} stations, {int(sub['is_holdout'].sum())} held out"
+    )
+
+
 def plot_per_variable_maps(stations: pd.DataFrame):
     """One map per variable: stations that measure it, held-out coloured distinctly.
     Markers follow the valley/mountain classification (circle / triangle).
+    Overview variables use the stations_overview.csv list; slr and swe use the
+    monthly aggregate (stations with at least one non-null value).
     """
     peri = load_alpine_perimeter()
     main_extent = FIXED_MAP_EXTENT
@@ -500,62 +650,15 @@ def plot_per_variable_maps(stations: pd.DataFrame):
 
     for overview_name in VARIABLES:
         sub = _stations_for_variable(stations, overview_name)
-        if sub.empty:
-            logger.info(f"No stations for {overview_name}")
-            continue
         holdout = _load_holdout_names(overview_name)
         sub["is_holdout"] = sub["station_name"].isin(holdout)
+        _draw_variable_map(sub, overview_name, peri, main_extent)
 
-        fig = plt.figure(figsize=(12.0, 8.0))
-        ax = fig.add_axes([0.0, 0.0, 1.0, 1.0], projection=ccrs.PlateCarree())
-        _base_map(ax, peri, main_extent)
-
-        handles = []
-        # Non-holdout first (background)
-        for name in ("Valley", "Mountain"):
-            m = (sub["elev_class"] == name) & (~sub["is_holdout"])
-            part = sub.loc[m]
-            if part.empty:
-                continue
-            n = len(part)
-            ax.scatter(
-                part["lon"], part["lat"],
-                marker=ELEV_MARKERS[name], s=14, c=MAP_FILL,
-                edgecolors=MAP_EDGE, linewidths=MAP_EDGE_LW,
-                transform=ccrs.PlateCarree(), zorder=6,
-            )
-            label = f"{name} (<{ELEV_CUTOFF} m)" if name == "Valley" else f"{name} (≥{ELEV_CUTOFF} m)"
-            handles.append(plt.Line2D(
-                [0], [0], marker=ELEV_MARKERS[name], color="w",
-                markerfacecolor=MAP_FILL, markeredgecolor=MAP_EDGE, markeredgewidth=MAP_EDGE_LW,
-                markersize=7, label=f"{label} (n={n})",
-            ))
-        # Hold-out on top
-        for name in ("Valley", "Mountain"):
-            m = (sub["elev_class"] == name) & sub["is_holdout"]
-            part = sub.loc[m]
-            if part.empty:
-                continue
-            n = len(part)
-            ax.scatter(
-                part["lon"], part["lat"],
-                marker=ELEV_MARKERS[name], s=16, c=HOLDOUT_COLOR,
-                edgecolors="white", linewidths=0.35,
-                transform=ccrs.PlateCarree(), zorder=7,
-            )
-            label = f"Held-out {name} (n={n})"
-            handles.append(plt.Line2D(
-                [0], [0], marker=ELEV_MARKERS[name], color="w",
-                markerfacecolor=HOLDOUT_COLOR, markeredgecolor="white", markeredgewidth=0.35,
-                markersize=7, label=label,
-            ))
-        ax.legend(handles=handles, loc="lower right", frameon=True, framealpha=0.9,
-                  fontsize=8, title=overview_name.replace("_", " ").title(), title_fontsize=8)
-        short = VAR_SHORT[overview_name]
-        save(fig, PLOT_DIR / f"03b_{short}_stations_map.png")
-        logger.info(
-            f"{overview_name}: {len(sub)} stations, {int(sub['is_holdout'].sum())} held out"
-        )
+    for code_name in AGGREGATE_VARS:
+        sub = _stations_for_aggregate_var(stations, code_name)
+        holdout = _load_holdout_names(code_name)
+        sub["is_holdout"] = sub["station_name"].isin(holdout)
+        _draw_variable_map(sub, code_name, peri, main_extent)
 
 
 def plot_elevation_hist(stations: pd.DataFrame):
@@ -604,6 +707,95 @@ def plot_elev_diff(stations: pd.DataFrame):
     save(fig, PLOT_DIR / "05_elevation_difference.png")
 
 
+# Columns for the density pairs plot (all parent variables, daily aggregate)
+PAIR_COLS = [
+    ("temp_mean", "Temperature (°C)"),
+    ("rh_mean", "Relative Humidity (%)"),
+    ("precip_sum", "Precipitation (mm)"),
+    ("snow_mean", "Snow Height (cm)"),
+    ("wind_mean", "Wind Speed (m/s)"),
+    ("slr", "SLR (–)"),
+    ("swe", "SWE (mm)"),
+]
+
+
+def plot_pairs(stations: pd.DataFrame, resolution: str = "daily"):
+    """Pairs plot of all parent variables.
+    Diagonal: histogram. Lower: log-scaled hexbin (full data). Upper: Spearman ρ.
+    Log colour scale keeps the dense core visible when a variable is zero-inflated.
+    """
+    from matplotlib.colors import LogNorm
+
+    path = get_aggregated_data_path("Source", resolution)
+    if not path.exists():
+        logger.warning(f"Aggregate not found ({resolution}): {path} — skipping pairs plot")
+        return
+    cols = [c for c, _ in PAIR_COLS]
+    labels = [lab for _, lab in PAIR_COLS]
+    need = ["station_name", *cols]
+    df = pd.read_parquet(path, columns=need)
+    keep = set(stations["station_name"].astype(str).str.strip())
+    df = df[df["station_name"].astype(str).str.strip().isin(keep)]
+    finite = df[cols].notna().sum(axis=1)
+    df = df.loc[finite >= 2, cols]
+    n_obs = len(df)
+    if n_obs == 0:
+        logger.warning("No paired observations — skipping pairs plot")
+        return
+    logger.info(f"Pairs plot: {n_obs:,} observations from {resolution} aggregate")
+
+    # Spearman on pairwise-complete observations (robust to skew and zeros)
+    spearman = df.corr(method="spearman")
+
+    n = len(cols)
+    fig, axes = plt.subplots(n, n, figsize=(13, 13))
+    for i in range(n):
+        for j in range(n):
+            ax = axes[i, j]
+            x = df[cols[j]].to_numpy(dtype=float)
+            if i == j:
+                mask = np.isfinite(x)
+                if mask.any():
+                    ax.hist(x[mask], bins=50, color="#4c78a8", edgecolor="none", density=True)
+                ax.set_yticks([])
+            elif i > j:
+                y = df[cols[i]].to_numpy(dtype=float)
+                mask = np.isfinite(x) & np.isfinite(y)
+                if mask.sum() >= 10:
+                    ax.hexbin(
+                        x[mask], y[mask],
+                        gridsize=35, cmap="Blues", mincnt=1, linewidths=0,
+                        norm=LogNorm(),
+                    )
+            else:
+                rho = spearman.iloc[i, j]
+                ax.axis("off")
+                if np.isfinite(rho):
+                    ax.text(
+                        0.5, 0.5, f"{rho:.2f}",
+                        ha="center", va="center", fontsize=11,
+                        transform=ax.transAxes,
+                        color="#1a1a1a" if abs(rho) >= 0.3 else "#888888",
+                    )
+                continue
+            if i == n - 1:
+                ax.set_xlabel(labels[j], fontsize=8)
+            else:
+                ax.set_xticklabels([])
+            if j == 0 and i != j:
+                ax.set_ylabel(labels[i], fontsize=8)
+            elif j != 0:
+                ax.set_yticklabels([])
+            ax.tick_params(labelsize=6)
+    fig.suptitle(
+        f"Pairs Plot – {n_obs/1e6:.2f} Million Observations (2020–2025)\n"
+        "Lower: log-density hexbin · Diagonal: histogram · Upper: Spearman ρ",
+        fontsize=11, y=0.99,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    save(fig, PLOT_DIR / "06_pairs.png")
+
+
 def main():
     global PAL, PLOT_DIR
     stations = load_all_stations()
@@ -629,10 +821,13 @@ def main():
         plot_station_map(stations)
         plot_network_counts(stations)
         plot_variables_per_station(stations)
+        plot_variables_pie(stations)
         plot_per_variable_maps(stations)
         plot_elevation_hist(stations)
         plot_elev_diff(stations)
         PLOT_DIR = orig
+    # Pairs plot is independent of the palette; write once
+    plot_pairs(stations, resolution="daily")
     logger.info(f"Done. Figures under {PLOT_DIR}")
 
 
